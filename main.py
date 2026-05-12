@@ -47,6 +47,14 @@ PRICE = num_sql("actual_worth")
 METER_PRICE = num_sql("meter_sale_price")
 RENT_VALUE = num_sql("rent_value")
 
+BUILDING_NAME = """
+COALESCE(
+    NULLIF(building_name_en, ''),
+    NULLIF(project_name_en, ''),
+    NULLIF(master_project_en, '')
+)
+"""
+
 
 TEXTS = {
     "ru": {
@@ -68,8 +76,8 @@ TEXTS = {
         "p6": "6 месяцев",
         "p12": "1 год",
         "p36": "3 года",
-        "enter_building": "🏢 Введите название здания.\n\nМожно полностью или частично:\n• Grande\n• Marina\n• Sobha\n• Anantara",
-        "enter_area": "🏙 Введите название района.\n\nНапример:\n• Business Bay\n• Downtown Dubai\n• Dubai Marina",
+        "enter_building": "🏢 Введите название здания.\n\nМожно полностью или частично:\n• Grande\n• Marina\n• Sobha\n• Anantara\n• JVC\n• Downtown",
+        "enter_area": "🏙 Введите название района.\n\nНапример:\n• Business Bay\n• Downtown Dubai\n• Dubai Marina\n• JVC",
         "not_found": "❌ Ничего не найдено. Попробуйте другое название.",
         "choose_building": "🔎 <b>Найдено несколько вариантов.</b>\n\nВыберите нужное здание:",
         "choose_property": "🏠 Выберите тип недвижимости / комнатность:",
@@ -103,8 +111,8 @@ TEXTS = {
         "p6": "6 months",
         "p12": "1 year",
         "p36": "3 years",
-        "enter_building": "🏢 Enter building name.\n\nFull or partial:\n• Grande\n• Marina\n• Sobha\n• Anantara",
-        "enter_area": "🏙 Enter area name.\n\nExample:\n• Business Bay\n• Downtown Dubai\n• Dubai Marina",
+        "enter_building": "🏢 Enter building name.\n\nFull or partial:\n• Grande\n• Marina\n• Sobha\n• Anantara\n• JVC\n• Downtown",
+        "enter_area": "🏙 Enter area name.\n\nExample:\n• Business Bay\n• Downtown Dubai\n• Dubai Marina\n• JVC",
         "not_found": "❌ Nothing found. Try another name.",
         "choose_building": "🔎 <b>Several options found.</b>\n\nChoose building:",
         "choose_property": "🏠 Choose property type / bedrooms:",
@@ -138,8 +146,8 @@ TEXTS = {
         "p6": "6 أشهر",
         "p12": "سنة",
         "p36": "3 سنوات",
-        "enter_building": "🏢 اكتب اسم المبنى.\n\nكامل أو جزئي:\n• Grande\n• Marina\n• Sobha\n• Anantara",
-        "enter_area": "🏙 اكتب اسم المنطقة.\n\nمثال:\n• Business Bay\n• Downtown Dubai\n• Dubai Marina",
+        "enter_building": "🏢 اكتب اسم المبنى.\n\nكامل أو جزئي:\n• Grande\n• Marina\n• Sobha\n• Anantara\n• JVC\n• Downtown",
+        "enter_area": "🏙 اكتب اسم المنطقة.\n\nمثال:\n• Business Bay\n• Downtown Dubai\n• Dubai Marina\n• JVC",
         "not_found": "❌ لا توجد نتائج. جرب اسماً آخر.",
         "choose_building": "🔎 <b>تم العثور على عدة خيارات.</b>\n\nاختر المبنى:",
         "choose_property": "🏠 اختر نوع العقار / الغرف:",
@@ -252,6 +260,46 @@ def format_pct(value):
     return f"{sign}{float(value):.1f}%"
 
 
+def normalize_search_query(query):
+    q = query.strip()
+
+    aliases = {
+        "jvc": "Jumeirah Village Circle",
+        "jlt": "Jumeirah Lakes Towers",
+        "downtown": "Downtown Dubai Burj Khalifa",
+        "dubai downtown": "Downtown Dubai Burj Khalifa",
+        "marina": "Dubai Marina Marsa Dubai",
+        "business bay": "Business Bay",
+        "palm": "Palm Jumeirah",
+        "sobha": "Sobha Hartland",
+        "creek": "Dubai Creek Harbour Creek",
+    }
+
+    return aliases.get(q.lower(), q)
+
+
+def make_search_words(query):
+    q = normalize_search_query(query)
+    words = [w.strip() for w in q.replace("-", " ").replace("_", " ").split() if len(w.strip()) >= 2]
+    return list(dict.fromkeys(words))[:8]
+
+
+def make_or_search_condition(words, columns):
+    conditions = []
+    params = []
+
+    for word in words:
+        like = f"%{word}%"
+        part = "(" + " OR ".join([f"{col} ILIKE %s" for col in columns]) + ")"
+        conditions.append(part)
+        params.extend([like] * len(columns))
+
+    if not conditions:
+        return "AND 1=0", []
+
+    return "AND (" + " OR ".join(conditions) + ")", params
+
+
 def period_condition(period_key):
     if period_key == "3":
         return "AND safe_date >= CURRENT_DATE - INTERVAL '3 months'"
@@ -266,25 +314,13 @@ def period_condition(period_key):
 
 def period_previous_condition(period_key):
     if period_key == "3":
-        return (
-            "AND safe_date < CURRENT_DATE - INTERVAL '3 months' "
-            "AND safe_date >= CURRENT_DATE - INTERVAL '6 months'"
-        )
+        return "AND safe_date < CURRENT_DATE - INTERVAL '3 months' AND safe_date >= CURRENT_DATE - INTERVAL '6 months'"
     if period_key == "6":
-        return (
-            "AND safe_date < CURRENT_DATE - INTERVAL '6 months' "
-            "AND safe_date >= CURRENT_DATE - INTERVAL '12 months'"
-        )
+        return "AND safe_date < CURRENT_DATE - INTERVAL '6 months' AND safe_date >= CURRENT_DATE - INTERVAL '12 months'"
     if period_key == "12":
-        return (
-            "AND safe_date < CURRENT_DATE - INTERVAL '12 months' "
-            "AND safe_date >= CURRENT_DATE - INTERVAL '24 months'"
-        )
+        return "AND safe_date < CURRENT_DATE - INTERVAL '12 months' AND safe_date >= CURRENT_DATE - INTERVAL '24 months'"
     if period_key == "36":
-        return (
-            "AND safe_date < CURRENT_DATE - INTERVAL '36 months' "
-            "AND safe_date >= CURRENT_DATE - INTERVAL '72 months'"
-        )
+        return "AND safe_date < CURRENT_DATE - INTERVAL '36 months' AND safe_date >= CURRENT_DATE - INTERVAL '72 months'"
     return ""
 
 
@@ -359,21 +395,32 @@ def base_from():
 
 
 def find_buildings(query, limit=10):
+    words = make_search_words(query)
+
+    if not words:
+        return []
+
+    search_sql, search_params = make_or_search_condition(
+        words,
+        ["building_name_en", "project_name_en", "master_project_en", "area_name_en"]
+    )
+
+    params = search_params + [limit]
+
     with db() as conn:
         with conn.cursor() as cur:
             cur.execute(f"""
                 SELECT
-                    building_name_en,
+                    {BUILDING_NAME} AS building_name_en,
                     area_name_en,
                     COUNT(*) AS deals
                 {base_from()}
-                  AND building_name_en IS NOT NULL
-                  AND building_name_en <> ''
-                  AND building_name_en ILIKE %s
-                GROUP BY building_name_en, area_name_en
+                  AND {BUILDING_NAME} IS NOT NULL
+                  {search_sql}
+                GROUP BY {BUILDING_NAME}, area_name_en
                 ORDER BY deals DESC
                 LIMIT %s
-            """, (f"%{query}%", limit))
+            """, params)
             return cur.fetchall()
 
 
@@ -383,7 +430,7 @@ def get_dubai_stats():
             cur.execute(f"""
                 SELECT
                     COUNT(*) AS deals,
-                    COUNT(DISTINCT building_name_en) AS buildings,
+                    COUNT(DISTINCT {BUILDING_NAME}) AS buildings,
                     COUNT(DISTINCT area_name_en) AS areas,
                     AVG({PRICE}) AS avg_price,
                     AVG({METER_PRICE}) AS avg_meter
@@ -398,16 +445,15 @@ def get_top_active():
         with conn.cursor() as cur:
             cur.execute(f"""
                 SELECT
-                    building_name_en,
+                    {BUILDING_NAME} AS building_name_en,
                     area_name_en,
                     COUNT(*) AS deals,
                     AVG({PRICE}) AS avg_price,
                     AVG({METER_PRICE}) AS avg_meter
                 {base_from()}
-                  AND building_name_en IS NOT NULL
-                  AND building_name_en <> ''
+                  AND {BUILDING_NAME} IS NOT NULL
                   AND {PRICE} IS NOT NULL
-                GROUP BY building_name_en, area_name_en
+                GROUP BY {BUILDING_NAME}, area_name_en
                 ORDER BY deals DESC
                 LIMIT 10
             """)
@@ -419,16 +465,15 @@ def get_top_price():
         with conn.cursor() as cur:
             cur.execute(f"""
                 SELECT
-                    building_name_en,
+                    {BUILDING_NAME} AS building_name_en,
                     area_name_en,
                     COUNT(*) AS deals,
                     AVG({PRICE}) AS avg_price,
                     AVG({METER_PRICE}) AS avg_meter
                 {base_from()}
-                  AND building_name_en IS NOT NULL
-                  AND building_name_en <> ''
+                  AND {BUILDING_NAME} IS NOT NULL
                   AND {PRICE} IS NOT NULL
-                GROUP BY building_name_en, area_name_en
+                GROUP BY {BUILDING_NAME}, area_name_en
                 HAVING COUNT(*) >= 5
                 ORDER BY avg_price DESC
                 LIMIT 10
@@ -437,24 +482,34 @@ def get_top_price():
 
 
 def get_area_stats(area):
+    words = make_search_words(area)
+
+    if not words:
+        return []
+
+    search_sql, search_params = make_or_search_condition(
+        words,
+        ["area_name_en", "project_name_en", "master_project_en", "building_name_en"]
+    )
+
     with db() as conn:
         with conn.cursor() as cur:
             cur.execute(f"""
                 SELECT
                     area_name_en,
                     COUNT(*) AS deals,
-                    COUNT(DISTINCT building_name_en) AS buildings,
+                    COUNT(DISTINCT {BUILDING_NAME}) AS buildings,
                     AVG({PRICE}) AS avg_price,
                     AVG({METER_PRICE}) AS avg_meter,
                     MIN(safe_date) AS first_deal,
                     MAX(safe_date) AS last_deal
                 {base_from()}
-                  AND area_name_en ILIKE %s
+                  {search_sql}
                   AND {PRICE} IS NOT NULL
                 GROUP BY area_name_en
                 ORDER BY deals DESC
                 LIMIT 10
-            """, (f"%{area}%",))
+            """, search_params)
             return cur.fetchall()
 
 
@@ -468,7 +523,7 @@ def get_building_report(building, prop=None, period=None):
         with conn.cursor() as cur:
             cur.execute(f"""
                 SELECT
-                    building_name_en,
+                    {BUILDING_NAME} AS building_name_en,
                     area_name_en,
                     COUNT(*) AS deals,
                     AVG({PRICE}) AS avg_price,
@@ -482,11 +537,11 @@ def get_building_report(building, prop=None, period=None):
                     STRING_AGG(DISTINCT NULLIF(property_type_en, ''), ', ') AS property_types,
                     STRING_AGG(DISTINCT NULLIF(property_sub_type_en, ''), ', ') AS property_sub_types
                 {base_from()}
-                  AND building_name_en = %s
+                  AND {BUILDING_NAME} = %s
                   AND {PRICE} IS NOT NULL
                   {prop_sql}
                   {p_sql}
-                GROUP BY building_name_en, area_name_en
+                GROUP BY {BUILDING_NAME}, area_name_en
                 LIMIT 1
             """, params)
             return cur.fetchone()
@@ -512,7 +567,7 @@ def get_period_comparison(building, prop=None, period=None):
                     AVG({PRICE}) AS avg_price,
                     AVG({METER_PRICE}) AS avg_meter
                 {base_from()}
-                  AND building_name_en = %s
+                  AND {BUILDING_NAME} = %s
                   AND {PRICE} IS NOT NULL
                   {prop_sql}
                   {current_condition}
@@ -525,7 +580,7 @@ def get_period_comparison(building, prop=None, period=None):
                     AVG({PRICE}) AS avg_price,
                     AVG({METER_PRICE}) AS avg_meter
                 {base_from()}
-                  AND building_name_en = %s
+                  AND {BUILDING_NAME} = %s
                   AND {PRICE} IS NOT NULL
                   {prop_sql}
                   {previous_condition}
@@ -552,10 +607,10 @@ def get_latest_deals(building, prop=None, period=None, limit=5):
                     property_sub_type_en,
                     {PRICE} AS price,
                     {METER_PRICE} AS meter_price,
-                    building_name_en,
+                    {BUILDING_NAME} AS building_name_en,
                     area_name_en
                 {base_from()}
-                  AND building_name_en = %s
+                  AND {BUILDING_NAME} = %s
                   AND {PRICE} IS NOT NULL
                   {prop_sql}
                   {p_sql}
