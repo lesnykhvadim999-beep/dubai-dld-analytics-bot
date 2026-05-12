@@ -20,7 +20,6 @@ bot = Bot(
 )
 
 dp = Dispatcher()
-
 user_languages = {}
 
 conn = sqlite3.connect("dld.db")
@@ -61,9 +60,21 @@ TEXTS = {
         "start": "🏙 <b>Dubai DLD Analytics Bot</b>\n\nВыберите язык:",
         "lang_selected": "✅ Язык выбран: <b>Русский</b>\n\nГлавное меню:",
         "main_menu": "🏠 Главное меню.\n\nВыберите раздел:",
-        "deals": "📊 Выберите тип сделки:",
+        "view_deals": "📊 Смотреть сделки",
+        "area_stats": "🏙 Статистика района",
+        "dubai_stats": "🌆 Статистика по Дубаю",
+        "top_growing": "🚀 Топ растущих районов",
+        "top_roi_btn": "💰 Топ ROI",
+        "building_search": "🏢 Поиск здания",
+        "settings_btn": "⚙️ Настройки",
         "sale": "🏠 Продажа",
         "rent": "🔑 Аренда",
+        "main_button": "🏠 Главное меню",
+        "back_button": "⬅️ Назад",
+        "six_months": "6 месяцев",
+        "one_year": "1 год",
+        "three_years": "3 года",
+        "deals": "📊 Выберите тип сделки:",
         "deal_selected": "Вы выбрали: <b>{deal_type}</b>\n\nТеперь выберите период:",
         "period_selected": "📅 Период выбран: <b>{period}</b>\n\nСледующий шаг: подключим реальные DLD сделки и фильтрацию по району / зданию / юниту.",
         "area_prompt": "🏙 Введите название района.\n\nНапример:\n• Business Bay\n• Downtown Dubai\n• Sobha Hartland",
@@ -73,53 +84,25 @@ TEXTS = {
         "average_growth": "🚀 Средний рост",
         "market_status": "💰 Статус рынка: активный",
         "engine_active": "✅ Аналитика активна",
-        "top_growth": "🚀 <b>Топ растущих зданий</b>\n\n",
-        "top_roi": "💰 <b>Топ ROI зданий</b>\n\n",
+        "top_growth_title": "🚀 <b>Топ растущих зданий</b>\n\n",
+        "top_roi_title": "💰 <b>Топ зданий по ROI</b>\n\n",
         "building_prompt": "🏢 Введите название здания.\n\nМожно полностью или частично:\n• Sobha\n• Bayz\n• Creek\n• Crown",
         "settings": "⚙️ Настройки.\n\nВыберите язык:",
         "not_found": "❌ Ничего не найдено.\n\nПопробуйте:\n• Sobha\n• Business Bay\n• Downtown Dubai\n• Bayz\n• Creek",
         "multiple_found": "🔎 <b>Найдено несколько объектов:</b>\n\n",
         "analytics_loaded": "✅ Аналитика загружена",
         "back": "⬅️ Возвращаю в главное меню.",
-        "main_button": "🏠 Главное меню",
-        "back_button": "⬅️ Назад",
-        "view_deals": "📊 Смотреть сделки",
-        "area_stats": "🏙 Статистика района",
-        "dubai_stats": "🌆 Статистика по Дубаю",
-        "top_growing": "🚀 Топ растущих районов",
-        "top_roi_btn": "💰 Топ ROI",
-        "building_search": "🏢 Поиск здания",
-        "settings_btn": "⚙️ Настройки",
-        "six_months": "6 месяцев",
-        "one_year": "1 год",
-        "three_years": "3 года",
+        "area_label": "📍 Район",
+        "growth_label": "📈 Рост",
+        "avg_price_label": "💰 Средняя цена",
+        "roi_label": "📈 ROI",
+        "sqft_label": "📐 Цена за sqft",
+        "transactions_label": "📊 Сделки"
     },
     "en": {
         "start": "🏙 <b>Dubai DLD Analytics Bot</b>\n\nChoose language:",
         "lang_selected": "✅ Language selected: <b>English</b>\n\nMain menu:",
         "main_menu": "🏠 Main menu.\n\nChoose a section:",
-        "deals": "📊 Choose deal type:",
-        "sale": "🏠 Sale",
-        "rent": "🔑 Rent",
-        "deal_selected": "You selected: <b>{deal_type}</b>\n\nNow choose period:",
-        "period_selected": "📅 Period selected: <b>{period}</b>\n\nNext step: we will connect real DLD transactions and filters by area / building / unit.",
-        "area_prompt": "🏙 Enter area name.\n\nFor example:\n• Business Bay\n• Downtown Dubai\n• Sobha Hartland",
-        "dubai_title": "🌆 <b>Dubai Market Analytics</b>",
-        "buildings_tracked": "🏢 Buildings tracked",
-        "average_roi": "📈 Average ROI",
-        "average_growth": "🚀 Average Growth",
-        "market_status": "💰 Market status: active",
-        "engine_active": "✅ Analytics engine active",
-        "top_growth": "🚀 <b>Top Growing Buildings</b>\n\n",
-        "top_roi": "💰 <b>Top ROI Buildings</b>\n\n",
-        "building_prompt": "🏢 Enter building name.\n\nYou can type full or partial name:\n• Sobha\n• Bayz\n• Creek\n• Crown",
-        "settings": "⚙️ Settings.\n\nChoose language:",
-        "not_found": "❌ Nothing found.\n\nTry:\n• Sobha\n• Business Bay\n• Downtown Dubai\n• Bayz\n• Creek",
-        "multiple_found": "🔎 <b>Several objects found:</b>\n\n",
-        "analytics_loaded": "✅ Analytics loaded",
-        "back": "⬅️ Back to main menu.",
-        "main_button": "🏠 Main menu",
-        "back_button": "⬅️ Back",
         "view_deals": "📊 View deals",
         "area_stats": "🏙 Area statistics",
         "dubai_stats": "🌆 Dubai statistics",
@@ -127,17 +110,57 @@ TEXTS = {
         "top_roi_btn": "💰 Top ROI",
         "building_search": "🏢 Building search",
         "settings_btn": "⚙️ Settings",
+        "sale": "🏠 Sale",
+        "rent": "🔑 Rent",
+        "main_button": "🏠 Main menu",
+        "back_button": "⬅️ Back",
         "six_months": "6 months",
         "one_year": "1 year",
         "three_years": "3 years",
+        "deals": "📊 Choose deal type:",
+        "deal_selected": "You selected: <b>{deal_type}</b>\n\nNow choose period:",
+        "period_selected": "📅 Period selected: <b>{period}</b>\n\nNext step: we will connect real DLD transactions and filters by area / building / unit.",
+        "area_prompt": "🏙 Enter area name.\n\nFor example:\n• Business Bay\n• Downtown Dubai\n• Sobha Hartland",
+        "dubai_title": "🌆 <b>Dubai Market Analytics</b>",
+        "buildings_tracked": "🏢 Buildings tracked",
+        "average_roi": "📈 Average ROI",
+        "average_growth": "🚀 Average growth",
+        "market_status": "💰 Market status: active",
+        "engine_active": "✅ Analytics engine active",
+        "top_growth_title": "🚀 <b>Top Growing Buildings</b>\n\n",
+        "top_roi_title": "💰 <b>Top ROI Buildings</b>\n\n",
+        "building_prompt": "🏢 Enter building name.\n\nYou can type full or partial name:\n• Sobha\n• Bayz\n• Creek\n• Crown",
+        "settings": "⚙️ Settings.\n\nChoose language:",
+        "not_found": "❌ Nothing found.\n\nTry:\n• Sobha\n• Business Bay\n• Downtown Dubai\n• Bayz\n• Creek",
+        "multiple_found": "🔎 <b>Several objects found:</b>\n\n",
+        "analytics_loaded": "✅ Analytics loaded",
+        "back": "⬅️ Back to main menu.",
+        "area_label": "📍 Area",
+        "growth_label": "📈 Growth",
+        "avg_price_label": "💰 Average price",
+        "roi_label": "📈 ROI",
+        "sqft_label": "📐 Price per sqft",
+        "transactions_label": "📊 Transactions"
     },
     "ar": {
         "start": "🏙 <b>Dubai DLD Analytics Bot</b>\n\nاختر اللغة:",
         "lang_selected": "✅ تم اختيار اللغة: <b>العربية</b>\n\nالقائمة الرئيسية:",
         "main_menu": "🏠 القائمة الرئيسية.\n\nاختر القسم:",
-        "deals": "📊 اختر نوع الصفقة:",
+        "view_deals": "📊 عرض الصفقات",
+        "area_stats": "🏙 إحصائيات المنطقة",
+        "dubai_stats": "🌆 إحصائيات دبي",
+        "top_growing": "🚀 المناطق الأسرع نمواً",
+        "top_roi_btn": "💰 أعلى ROI",
+        "building_search": "🏢 بحث عن مبنى",
+        "settings_btn": "⚙️ الإعدادات",
         "sale": "🏠 بيع",
         "rent": "🔑 إيجار",
+        "main_button": "🏠 القائمة الرئيسية",
+        "back_button": "⬅️ رجوع",
+        "six_months": "6 أشهر",
+        "one_year": "سنة واحدة",
+        "three_years": "3 سنوات",
+        "deals": "📊 اختر نوع الصفقة:",
         "deal_selected": "لقد اخترت: <b>{deal_type}</b>\n\nاختر الفترة:",
         "period_selected": "📅 تم اختيار الفترة: <b>{period}</b>\n\nالخطوة التالية: سنقوم بربط صفقات DLD الحقيقية والفلاتر حسب المنطقة / المبنى / الوحدة.",
         "area_prompt": "🏙 اكتب اسم المنطقة.\n\nمثال:\n• Business Bay\n• Downtown Dubai\n• Sobha Hartland",
@@ -147,26 +170,20 @@ TEXTS = {
         "average_growth": "🚀 متوسط النمو",
         "market_status": "💰 حالة السوق: نشط",
         "engine_active": "✅ التحليلات مفعلة",
-        "top_growth": "🚀 <b>أعلى المباني نمواً</b>\n\n",
-        "top_roi": "💰 <b>أعلى المباني من حيث العائد</b>\n\n",
+        "top_growth_title": "🚀 <b>أعلى المباني نمواً</b>\n\n",
+        "top_roi_title": "💰 <b>أعلى المباني من حيث العائد</b>\n\n",
         "building_prompt": "🏢 اكتب اسم المبنى.\n\nيمكنك كتابة الاسم كاملاً أو جزئياً:\n• Sobha\n• Bayz\n• Creek\n• Crown",
         "settings": "⚙️ الإعدادات.\n\nاختر اللغة:",
         "not_found": "❌ لم يتم العثور على نتائج.\n\nجرب:\n• Sobha\n• Business Bay\n• Downtown Dubai\n• Bayz\n• Creek",
         "multiple_found": "🔎 <b>تم العثور على عدة نتائج:</b>\n\n",
         "analytics_loaded": "✅ تم تحميل التحليلات",
         "back": "⬅️ العودة إلى القائمة الرئيسية.",
-        "main_button": "🏠 القائمة الرئيسية",
-        "back_button": "⬅️ رجوع",
-        "view_deals": "📊 عرض الصفقات",
-        "area_stats": "🏙 إحصائيات المنطقة",
-        "dubai_stats": "🌆 إحصائيات دبي",
-        "top_growing": "🚀 المناطق الأسرع نمواً",
-        "top_roi_btn": "💰 أعلى ROI",
-        "building_search": "🏢 بحث عن مبنى",
-        "settings_btn": "⚙️ الإعدادات",
-        "six_months": "6 أشهر",
-        "one_year": "سنة واحدة",
-        "three_years": "3 سنوات",
+        "area_label": "📍 المنطقة",
+        "growth_label": "📈 النمو",
+        "avg_price_label": "💰 متوسط السعر",
+        "roi_label": "📈 العائد",
+        "sqft_label": "📐 السعر لكل قدم مربع",
+        "transactions_label": "📊 الصفقات"
     }
 }
 
@@ -315,13 +332,13 @@ async def main_handler(message: Message):
         LIMIT 5
         """)
 
-        response = t(user_id, "top_growth")
+        response = t(user_id, "top_growth_title")
 
         for name, area, growth in cursor.fetchall():
             response += (
                 f"🏢 <b>{name}</b>\n"
-                f"📍 Area: {area}\n"
-                f"📈 Growth: +{growth}%\n\n"
+                f"{t(user_id, 'area_label')}: {area}\n"
+                f"{t(user_id, 'growth_label')}: +{growth}%\n\n"
             )
 
         await message.answer(response)
@@ -335,13 +352,13 @@ async def main_handler(message: Message):
         LIMIT 5
         """)
 
-        response = t(user_id, "top_roi")
+        response = t(user_id, "top_roi_title")
 
         for name, area, roi in cursor.fetchall():
             response += (
                 f"🏢 <b>{name}</b>\n"
-                f"📍 Area: {area}\n"
-                f"📈 ROI: {roi}%\n\n"
+                f"{t(user_id, 'area_label')}: {area}\n"
+                f"{t(user_id, 'roi_label')}: {roi}%\n\n"
             )
 
         await message.answer(response)
@@ -375,12 +392,12 @@ async def main_handler(message: Message):
 
         await message.answer(
             f"🏢 <b>{name}</b>\n\n"
-            f"📍 Area: {area}\n"
-            f"💰 Average Price: {avg_price}\n"
-            f"📈 ROI: {roi}%\n"
-            f"📐 Price per sqft: {sqft}\n"
-            f"🚀 Growth: +{growth}%\n"
-            f"📊 Transactions: {deals}\n\n"
+            f"{t(user_id, 'area_label')}: {area}\n"
+            f"{t(user_id, 'avg_price_label')}: {avg_price}\n"
+            f"{t(user_id, 'roi_label')}: {roi}%\n"
+            f"{t(user_id, 'sqft_label')}: {sqft}\n"
+            f"{t(user_id, 'growth_label')}: +{growth}%\n"
+            f"{t(user_id, 'transactions_label')}: {deals}\n\n"
             f"{t(user_id, 'analytics_loaded')}"
         )
         return
@@ -390,10 +407,10 @@ async def main_handler(message: Message):
     for name, area, avg_price, roi, sqft, growth, deals in results:
         response += (
             f"🏢 <b>{name}</b>\n"
-            f"📍 Area: {area}\n"
-            f"💰 {avg_price}\n"
-            f"📈 ROI: {roi}%\n"
-            f"🚀 Growth: +{growth}%\n\n"
+            f"{t(user_id, 'area_label')}: {area}\n"
+            f"{t(user_id, 'avg_price_label')}: {avg_price}\n"
+            f"{t(user_id, 'roi_label')}: {roi}%\n"
+            f"{t(user_id, 'growth_label')}: +{growth}%\n\n"
         )
 
     await message.answer(response)
