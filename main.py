@@ -188,18 +188,29 @@ PROPERTY_OPTIONS = [
 
 
 AREA_ALIASES = {
-    "jvc": ["Jumeirah Village Circle"],
-    "jumeirah village circle": ["Jumeirah Village Circle"],
+    # В DLD некоторые привычные названия районов хранятся иначе.
+    # Поэтому здесь делаем контролируемую подмену.
+    "jvc": ["Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"],
+    "jumeirah village circle": ["Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"],
+
     "jlt": ["Jumeirah Lakes Towers"],
-    "downtown": ["Burj Khalifa", "Downtown Dubai"],
-    "downtown dubai": ["Burj Khalifa", "Downtown Dubai"],
-    "dubai marina": ["Marsa Dubai", "Dubai Marina"],
-    "marina": ["Marsa Dubai", "Dubai Marina"],
+    "jumeirah lakes towers": ["Jumeirah Lakes Towers"],
+
+    "downtown": ["Burj Khalifa"],
+    "downtown dubai": ["Burj Khalifa"],
+    "dubai downtown": ["Burj Khalifa"],
+
+    "dubai marina": ["Marsa Dubai"],
+    "marina": ["Marsa Dubai"],
+    "marsa dubai": ["Marsa Dubai"],
+
     "business bay": ["Business Bay"],
     "palm": ["Palm Jumeirah"],
     "palm jumeirah": ["Palm Jumeirah"],
     "creek": ["Dubai Creek Harbour", "Creek"],
+    "dubai creek": ["Dubai Creek Harbour", "Creek"],
     "sobha": ["Sobha Hartland"],
+    "sobha hartland": ["Sobha Hartland"],
 }
 
 
@@ -327,11 +338,29 @@ def area_alias_values(query):
 
 
 def make_area_exact_condition(query):
-    values = area_alias_values(query)
-    params = [f"%{v}%" for v in values if v]
-    if not params:
+    """
+    Строгий поиск района.
+
+    Важно:
+    - JVC не ищем как слово JVC в DLD, потому что в DLD его часто нет.
+    - JVC подменяем на реальные DLD area_name_en:
+      Al Barsha South Fourth / Fifth / Al Hebiah First.
+    - Downtown подменяем на Burj Khalifa.
+    - Marina подменяем на Marsa Dubai.
+    """
+    values = [v for v in area_alias_values(query) if v]
+
+    if not values:
         return "AND 1=0", []
-    return "AND (" + " OR ".join(["area_name_en ILIKE %s" for _ in params]) + ")", params
+
+    params = []
+    parts = []
+
+    for value in values:
+        parts.append("area_name_en ILIKE %s")
+        params.append(f"%{value}%")
+
+    return "AND (" + " OR ".join(parts) + ")", params
 
 
 def make_building_condition(query):
@@ -483,6 +512,12 @@ def find_buildings(query, limit=10):
 
 
 def find_areas(query, limit=10):
+    """
+    Поиск районов. Работает через controlled aliases, чтобы:
+    - JVC не цеплял Palm Jumeirah только из-за слова Jumeirah.
+    - Downtown не цеплял Marina.
+    - Dubai Marina не цеплял всё, где есть Dubai.
+    """
     area_sql, params = make_area_exact_condition(query)
     params.append(limit)
 
