@@ -21,11 +21,6 @@ bot = Bot(
 
 dp = Dispatcher()
 
-
-# =========================
-# DATABASE
-# =========================
-
 conn = sqlite3.connect("dld.db")
 cursor = conn.cursor()
 
@@ -41,33 +36,32 @@ CREATE TABLE IF NOT EXISTS buildings (
     deals INTEGER
 )
 """)
-
 conn.commit()
 
 cursor.execute("SELECT COUNT(*) FROM buildings")
-existing = cursor.fetchone()[0]
-
-if existing == 0:
-    buildings_data = [
+if cursor.fetchone()[0] == 0:
+    cursor.executemany("""
+    INSERT INTO buildings
+    (name, area, avg_price, roi, sqft, growth, deals)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, [
         ("Creek Vista Heights", "Sobha Hartland", "2.4M AED", 7.2, "2,150 AED", 14, 148),
         ("Bayz 101", "Business Bay", "1.9M AED", 8.4, "2,050 AED", 21, 203),
         ("Sobha Hartland Waves", "Sobha Hartland", "1.6M AED", 6.8, "1,950 AED", 11, 97),
         ("Sobha One", "Ras Al Khor", "2.8M AED", 7.9, "2,430 AED", 18, 121),
         ("Burj Crown", "Downtown Dubai", "3.7M AED", 5.9, "3,100 AED", 9, 82)
-    ]
-
-    cursor.executemany("""
-    INSERT INTO buildings
-    (name, area, avg_price, roi, sqft, growth, deals)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, buildings_data)
-
+    ])
     conn.commit()
 
 
-# =========================
-# MENUS
-# =========================
+language_menu = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🇷🇺 Русский")],
+        [KeyboardButton(text="🇬🇧 English")],
+        [KeyboardButton(text="🇦🇪 العربية")]
+    ],
+    resize_keyboard=True
+)
 
 main_menu = ReplyKeyboardMarkup(
     keyboard=[
@@ -104,32 +98,24 @@ period_menu = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-language_menu = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="🇷🇺 Русский"), KeyboardButton(text="🇬🇧 English"), KeyboardButton(text="🇦🇪 العربية")],
-        [KeyboardButton(text="⬅️ Назад"), KeyboardButton(text="🏠 Главное меню")]
-    ],
-    resize_keyboard=True
-)
-
-
-# =========================
-# START
-# =========================
 
 @dp.message(CommandStart())
 async def start_handler(message: Message):
     await message.answer(
         "🏙 <b>Dubai DLD Analytics Bot</b>\n\n"
-        "Система аналитики недвижимости Дубая активна.\n\n"
-        "Введите название здания или выберите раздел:",
-        reply_markup=main_menu
+        "Выберите язык / Choose language / اختر اللغة:",
+        reply_markup=language_menu
     )
 
 
-# =========================
-# NAVIGATION
-# =========================
+@dp.message(lambda message: message.text in ["🇷🇺 Русский", "🇬🇧 English", "🇦🇪 العربية"])
+async def language_handler(message: Message):
+    await message.answer(
+        f"✅ Язык выбран: <b>{message.text}</b>\n\n"
+        "Главное меню:",
+        reply_markup=main_menu
+    )
+
 
 @dp.message(lambda message: message.text == "🏠 Главное меню")
 async def main_menu_handler(message: Message):
@@ -148,10 +134,6 @@ async def back_handler(message: Message):
     )
 
 
-# =========================
-# BUTTONS
-# =========================
-
 @dp.message(lambda message: message.text == "📊 Смотреть сделки")
 async def deals_handler(message: Message):
     await message.answer(
@@ -163,7 +145,6 @@ async def deals_handler(message: Message):
 @dp.message(lambda message: message.text in ["🏠 Продажа", "🔑 Аренда"])
 async def deal_type_handler(message: Message):
     deal_type = "Продажа" if message.text == "🏠 Продажа" else "Аренда"
-
     await message.answer(
         f"Вы выбрали: <b>{deal_type}</b>\n\n"
         "Теперь выберите период:",
@@ -220,10 +201,9 @@ async def growth_handler(message: Message):
     LIMIT 5
     """)
 
-    results = cursor.fetchall()
     response = "🚀 <b>Top Growing Buildings</b>\n\n"
 
-    for name, area, growth in results:
+    for name, area, growth in cursor.fetchall():
         response += (
             f"🏢 <b>{name}</b>\n"
             f"📍 Area: {area}\n"
@@ -242,10 +222,9 @@ async def roi_handler(message: Message):
     LIMIT 5
     """)
 
-    results = cursor.fetchall()
     response = "💰 <b>Top ROI Buildings</b>\n\n"
 
-    for name, area, roi in results:
+    for name, area, roi in cursor.fetchall():
         response += (
             f"🏢 <b>{name}</b>\n"
             f"📍 Area: {area}\n"
@@ -276,19 +255,6 @@ async def settings_handler(message: Message):
     )
 
 
-@dp.message(lambda message: message.text in ["🇷🇺 Русский", "🇬🇧 English", "🇦🇪 العربية"])
-async def language_handler(message: Message):
-    await message.answer(
-        f"✅ Язык выбран: <b>{message.text}</b>\n\n"
-        "Позже мы привяжем этот выбор к профилю пользователя.",
-        reply_markup=main_menu
-    )
-
-
-# =========================
-# SEARCH
-# =========================
-
 @dp.message()
 async def search_handler(message: Message):
     text = message.text.strip().lower()
@@ -316,7 +282,6 @@ async def search_handler(message: Message):
 
     if len(results) == 1:
         name, area, avg_price, roi, sqft, growth, deals = results[0]
-
         await message.answer(
             f"🏢 <b>{name}</b>\n\n"
             f"📍 Area: {area}\n"
@@ -342,10 +307,6 @@ async def search_handler(message: Message):
 
     await message.answer(response)
 
-
-# =========================
-# MAIN
-# =========================
 
 async def main():
     print("Bot started")
