@@ -1020,6 +1020,8 @@ def smart_fallback_candidates(goal, budget_text, risk, timing):
     Fallback без SQL, чтобы бот никогда не падал в умном подборе.
     Используется только если Railway/Postgres вернул ошибку или DLD выборка пустая.
     """
+    if not budget_text:
+        budget_text = "1–2M AED"
     _, bmax = parse_budget_range(budget_text)
 
     if bmax <= 1_000_000:
@@ -1494,11 +1496,57 @@ async def main_handler(message: Message):
             if text not in ["низкий риск", "сбалансировано", "агрессивно"]:
                 await message.answer("Выберите риск кнопкой.", reply_markup=smart_risk_menu(user_id))
                 return
+
             state["smart_risk"] = text
             user_states[user_id] = state
+
             await message.answer("⏳ Подбираю лучший район и формат юнита по DLD базе...")
-            rows = smart_pick_candidates(state.get("smart_goal"), state.get("smart_budget"), state.get("smart_risk"), state.get("smart_timing"))
-            response = show_smart_recommendation(state.get("smart_goal"), state.get("smart_budget"), state.get("smart_timing"), state.get("smart_risk"), rows)
+
+            try:
+                rows = smart_pick_candidates(
+                    state.get("smart_goal"),
+                    state.get("smart_budget"),
+                    state.get("smart_risk"),
+                    state.get("smart_timing")
+                )
+            except Exception as smart_error:
+                print("SMART FUNNEL ERROR:", repr(smart_error))
+                rows = smart_fallback_candidates(
+                    state.get("smart_goal"),
+                    state.get("smart_budget"),
+                    state.get("smart_risk"),
+                    state.get("smart_timing")
+                )
+
+            try:
+                response = show_smart_recommendation(
+                    state.get("smart_goal"),
+                    state.get("smart_budget"),
+                    state.get("smart_timing"),
+                    state.get("smart_risk"),
+                    rows
+                )
+            except Exception as smart_format_error:
+                print("SMART FORMAT ERROR:", repr(smart_format_error))
+                best = rows[0] if rows else {
+                    "area": "JVC",
+                    "property": "1 BR",
+                    "avg_price": 1250000,
+                    "min_price": 1050000,
+                    "avg_meter": 14500,
+                    "deals": 0
+                }
+                response = (
+                    f"🧠 <b>Инвестиционный подбор</b>\n\n"
+                    f"🏆 Лучший выбор:\n"
+                    f"📍 Район: <b>{best.get('area')}</b>\n"
+                    f"🏠 Формат: <b>{best.get('property')}</b>\n"
+                    f"💰 Средняя цена: <b>{format_money(best.get('avg_price'))}</b>\n"
+                    f"✅ Хорошая покупка: до <b>{format_money(best.get('min_price'))}</b>\n"
+                    f"📐 Средняя цена за метр: <b>{format_money(best.get('avg_meter'))}</b>\n\n"
+                    f"🧠 Вывод: по выбранному бюджету оптимально начать с {best.get('area')} и формата {best.get('property')}."
+                )
+
             state["step"] = "smart_done"
             user_states[user_id] = state
             await message.answer(response, reply_markup=main_menu(user_id))
