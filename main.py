@@ -263,10 +263,12 @@ def language_menu():
 
 def main_menu(user_id):
     return kb([
-        [tr(user_id, "view_deals")],
+        ["🧠 Инвестиционный подбор"],
+        [tr(user_id, "building_search")],
         [tr(user_id, "area_stats"), tr(user_id, "dubai_stats")],
+        [tr(user_id, "view_deals"), "📉 Проверить сделку"],
         [tr(user_id, "top_active"), tr(user_id, "top_price")],
-        [tr(user_id, "building_search"), tr(user_id, "settings")]
+        [tr(user_id, "settings")]
     ])
 
 
@@ -303,9 +305,46 @@ def period_menu(user_id):
     ])
 
 
+def smart_goal_menu(user_id):
+    return kb([
+        ["💰 Инвестиция / ROI"],
+        ["🏡 Для жизни", "📈 Перепродажа"],
+        ["🔑 Аренда"],
+        [tr(user_id, "back"), tr(user_id, "main")]
+    ])
+
+
+def smart_budget_menu(user_id):
+    return kb([
+        ["до 1M AED", "1–2M AED"],
+        ["2–3M AED", "3–5M AED"],
+        ["5M+ AED"],
+        [tr(user_id, "back"), tr(user_id, "main")]
+    ])
+
+
+def smart_timing_menu(user_id):
+    return kb([
+        ["сейчас", "до 6 месяцев"],
+        ["до 12 месяцев", tr(user_id, "skip")],
+        [tr(user_id, "back"), tr(user_id, "main")]
+    ])
+
+
+def smart_risk_menu(user_id):
+    return kb([
+        ["низкий риск"],
+        ["сбалансировано"],
+        ["агрессивно"],
+        [tr(user_id, "back"), tr(user_id, "main")]
+    ])
+
+
+
 def report_menu(user_id):
     return kb([
         [tr(user_id, "full_report")],
+        ["💼 Экономическое резюме"],
         [tr(user_id, "period_compare"), tr(user_id, "last_deals")],
         [tr(user_id, "undervalued")],
         [tr(user_id, "back"), tr(user_id, "main")]
@@ -524,6 +563,48 @@ def get_period_key(user_id, text):
     return None
 
 
+
+def looks_like_free_search(text):
+    if not text or len(text.strip()) < 2:
+        return False
+    if text.startswith("/"):
+        return False
+    if re.fullmatch(r"[0-9\s,\.]+", text):
+        return False
+    return True
+
+
+def is_navigation_text(user_id, text):
+    items = {
+        tr(user_id, "main"),
+        tr(user_id, "back"),
+        tr(user_id, "settings"),
+        tr(user_id, "building_search"),
+        tr(user_id, "area_stats"),
+        tr(user_id, "dubai_stats"),
+        tr(user_id, "view_deals"),
+        tr(user_id, "top_active"),
+        tr(user_id, "top_price"),
+        tr(user_id, "full_report"),
+        tr(user_id, "period_compare"),
+        tr(user_id, "last_deals"),
+        tr(user_id, "undervalued"),
+        tr(user_id, "sale"),
+        tr(user_id, "rent"),
+        tr(user_id, "both"),
+        tr(user_id, "skip"),
+        tr(user_id, "all_time"),
+        tr(user_id, "p3"),
+        tr(user_id, "p6"),
+        tr(user_id, "p12"),
+        tr(user_id, "p36"),
+        "📉 Проверить сделку",
+        "🧠 Инвестиционный подбор",
+        "💼 Экономическое резюме",
+    }
+    return text in items or text in PROPERTY_OPTIONS
+
+
 def base_from():
     return f"""
         FROM (
@@ -644,6 +725,34 @@ def get_stats(scope="dubai", name=None, prop=None, period=None, deal_type=None):
             """, params)
             return cur.fetchone()
 
+
+
+def get_unit_summary(scope="building", name=None, prop=None, period=None, deal_type=None):
+    where, params = scope_condition(scope, name, original_query=name)
+    prop_sql, prop_args = property_condition(prop)
+    deal_sql, deal_args = make_deal_type_condition(deal_type)
+    params += prop_args + deal_args
+
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT
+                    COUNT(*) AS deals,
+                    AVG({PRICE}) AS avg_price,
+                    MIN({PRICE}) AS min_price,
+                    MAX({PRICE}) AS max_price,
+                    AVG({METER_PRICE}) AS avg_meter,
+                    percentile_cont(0.25) WITHIN GROUP (ORDER BY {PRICE}) AS p25_price,
+                    percentile_cont(0.50) WITHIN GROUP (ORDER BY {PRICE}) AS median_price,
+                    percentile_cont(0.75) WITHIN GROUP (ORDER BY {PRICE}) AS p75_price
+                {base_from()}
+                  {where}
+                  {prop_sql}
+                  {deal_sql}
+                  {period_condition(period)}
+                  AND {PRICE} IS NOT NULL
+            """, params)
+            return cur.fetchone()
 
 def get_comparison(scope="dubai", name=None, prop=None, period=None, deal_type=None):
     if not period:
@@ -794,6 +903,48 @@ def get_top_buildings_in_scope(scope="dubai", name=None, period=None, deal_type=
             return cur.fetchall()
 
 
+
+def show_unit_summary(title, row, prop=None, period=None):
+    if not row or not row.get("deals"):
+        return "❌ Недостаточно данных для экономического резюме."
+
+    avg_price = row.get("avg_price")
+    min_price = row.get("min_price")
+    max_price = row.get("max_price")
+    p25 = row.get("p25_price") or min_price
+    median = row.get("median_price") or avg_price
+    p75 = row.get("p75_price") or max_price
+
+    prop_label = prop or "выбранный тип"
+
+    if row.get("deals", 0) < 5:
+        conclusion = "⚠️ Сделок мало, вывод осторожный. Используйте как ориентир, не как окончательную оценку."
+    else:
+        conclusion = (
+            f"Если купить <b>{prop_label}</b> до <b>{format_money(p25)}</b>, "
+            f"сделка выглядит интересной относительно DLD истории. "
+            f"Выше <b>{format_money(p75)}</b> — уже дорого, нужен торг или сильная причина."
+        )
+
+    return (
+        f"💼 <b>Экономическое резюме</b>\n"
+        f"{title}\n\n"
+        f"🏠 Тип/комнаты: <b>{prop_label}</b>\n"
+        f"📅 Период: <b>{period_label(period)}</b>\n"
+        f"📊 Сделок в выборке: <b>{format_int(row['deals'])}</b>\n\n"
+        f"💰 Средняя цена DLD: <b>{format_money(avg_price)}</b>\n"
+        f"🔻 Самая низкая сделка: <b>{format_money(min_price)}</b>\n"
+        f"🔺 Самая высокая сделка: <b>{format_money(max_price)}</b>\n"
+        f"📐 Средняя цена за метр: <b>{format_money(row.get('avg_meter'))}</b>\n\n"
+        f"✅ <b>Выгодно:</b>\n"
+        f"от <b>{format_money(min_price)}</b> до <b>{format_money(p25)}</b>\n\n"
+        f"🟡 <b>Рынок:</b>\n"
+        f"от <b>{format_money(p25)}</b> до <b>{format_money(median)}</b>\n\n"
+        f"🔴 <b>Дорого:</b>\n"
+        f"выше <b>{format_money(p75)}</b>\n\n"
+        f"🧠 <b>Заключение:</b>\n{conclusion}"
+    )
+
 def quick_area_report(display_name, row, comparison=None, top_buildings=None):
     if not row or not row.get("deals"):
         return "❌ Нет данных по выбранному району."
@@ -898,7 +1049,7 @@ def show_comparison(title, current, previous):
 
 
 def compare_value(scope, name, price, size, prop=None, period=None, deal_type=None):
-    row = get_stats(scope, name, prop, period, deal_type)
+    row = get_unit_summary(scope, name, prop, period, deal_type)
     if not row or not row.get("avg_price"):
         return None
 
@@ -939,6 +1090,39 @@ async def show_current_state_prompt(message, state):
     else:
         await message.answer(tr(user_id, "main_menu"), reply_markup=main_menu(user_id))
 
+
+
+async def start_building_search_from_text(message, text):
+    user_id = message.from_user.id
+    await message.answer("🔎 Ищу похожие здания...")
+    rows = find_buildings(text)
+
+    if not rows:
+        await message.answer(tr(user_id, "not_found"), reply_markup=back_menu(user_id))
+        user_states[user_id] = {
+            "step": "building_query",
+            "scope": "building",
+            "history": user_states.get(user_id, {}).get("history", [])
+        }
+        return
+
+    suggestions = [r["building_name_en"] for r in rows if r["building_name_en"]]
+
+    user_states[user_id] = {
+        "step": "choose_building",
+        "scope": "building",
+        "suggestions": suggestions,
+        "history": user_states.get(user_id, {}).get("history", [])
+    }
+
+    buttons = [[name] for name in suggestions[:10]]
+    buttons.append([tr(user_id, "back"), tr(user_id, "main")])
+
+    response = tr(user_id, "choose_building") + "\n\n"
+    for i, r in enumerate(rows, 1):
+        response += f"{i}. {r['building_name_en']} — {r['area_name_en']} ({format_int(r['deals'])} сделок)\n"
+
+    await message.answer(response, reply_markup=kb(buttons))
 
 @dp.message(CommandStart())
 async def start_handler(message: Message):
@@ -981,6 +1165,14 @@ async def main_handler(message: Message):
             await message.answer(tr(user_id, "choose_lang"), reply_markup=language_menu())
             return
 
+        if text == "🧠 Инвестиционный подбор":
+            push_state(user_id, {"step": "smart_goal"})
+            await message.answer(
+                "🧠 <b>Инвестиционный подбор</b>\n\nОтветьте на несколько вопросов, и я подберу оптимальный район и формат юнита.",
+                reply_markup=smart_goal_menu(user_id)
+            )
+            return
+
         if text == tr(user_id, "building_search"):
             push_state(user_id, {"step": "building_query", "scope": "building"})
             await message.answer(tr(user_id, "enter_building"), reply_markup=back_menu(user_id))
@@ -999,6 +1191,11 @@ async def main_handler(message: Message):
         if text == tr(user_id, "view_deals"):
             push_state(user_id, {"step": "choose_deal_type", "scope": "dubai", "name": None, "force_report": "last"})
             await message.answer(tr(user_id, "choose_deal_type"), reply_markup=deal_type_menu(user_id))
+            return
+
+        if text == "📉 Проверить сделку":
+            push_state(user_id, {"step": "building_query", "scope": "building", "force_report": "undervalued"})
+            await message.answer("📉 Сначала введите здание, по которому нужно проверить сделку.", reply_markup=back_menu(user_id))
             return
 
         if text == tr(user_id, "top_active"):
@@ -1029,6 +1226,13 @@ async def main_handler(message: Message):
                     f"📐 Цена за метр: {format_money(r['avg_meter'])}\n\n"
                 )
             await message.answer(response, reply_markup=main_menu(user_id))
+            return
+
+        # Bug fix #1:
+        # Если пользователь уже смотрит отчёт и вводит новое название здания,
+        # запускаем новый поиск, а не требуем нажимать кнопки.
+        if state.get("step") == "choose_report" and looks_like_free_search(text) and not is_navigation_text(user_id, text):
+            await start_building_search_from_text(message, text)
             return
 
         if state.get("step") == "building_query":
@@ -1113,6 +1317,9 @@ async def main_handler(message: Message):
 
         if state.get("step") == "choose_building":
             if text not in state.get("suggestions", []):
+                if looks_like_free_search(text) and not is_navigation_text(user_id, text):
+                    await start_building_search_from_text(message, text)
+                    return
                 await message.answer("Выберите здание кнопкой из списка.")
                 return
 
@@ -1166,6 +1373,12 @@ async def main_handler(message: Message):
                 await message.answer("Выберите вариант кнопкой.")
                 return
 
+            if state.get("after_property") == "enter_price":
+                state["step"] = "enter_price"
+                user_states[user_id] = state
+                await message.answer(tr(user_id, "enter_price"), reply_markup=back_menu(user_id))
+                return
+
             state["step"] = "choose_period"
             user_states[user_id] = state
             await message.answer(tr(user_id, "choose_period"), reply_markup=period_menu(user_id))
@@ -1208,6 +1421,15 @@ async def main_handler(message: Message):
                     title = f"🏙 <b>{name}</b>"
 
                 await message.answer(show_stats(title, row, prop, period, deal_type), reply_markup=report_menu(user_id))
+                return
+
+            if text == "💼 Экономическое резюме":
+                if scope == "dubai":
+                    await message.answer("Сначала выберите конкретное здание или район.", reply_markup=main_menu(user_id))
+                    return
+                await message.answer(tr(user_id, "loading"))
+                row = get_unit_summary(scope, name, prop, period, deal_type)
+                await message.answer(show_unit_summary(title, row, prop, period), reply_markup=report_menu(user_id))
                 return
 
             if text == tr(user_id, "period_compare"):
@@ -1256,6 +1478,10 @@ async def main_handler(message: Message):
                 state["step"] = "enter_price"
                 user_states[user_id] = state
                 await message.answer(tr(user_id, "enter_price"), reply_markup=back_menu(user_id))
+                return
+
+            if looks_like_free_search(text) and not is_navigation_text(user_id, text):
+                await start_building_search_from_text(message, text)
                 return
 
             await message.answer("Выберите действие кнопкой.")
@@ -1333,3 +1559,244 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+def parse_budget_range(text):
+    if text == "до 1M AED":
+        return 0, 1_000_000
+    if text == "1–2M AED":
+        return 1_000_000, 2_000_000
+    if text == "2–3M AED":
+        return 2_000_000, 3_000_000
+    if text == "3–5M AED":
+        return 3_000_000, 5_000_000
+    if text == "5M+ AED":
+        return 5_000_000, 100_000_000
+    return 0, 100_000_000
+
+
+def recommended_property_types(goal, budget_text):
+    bmin, bmax = parse_budget_range(budget_text)
+
+    if goal == "🏡 Для жизни":
+        if bmax <= 1_000_000:
+            return ["Studio", "1 BR"]
+        if bmax <= 2_000_000:
+            return ["1 BR", "2 BR"]
+        if bmax <= 3_000_000:
+            return ["2 BR", "3 BR", "Townhouse"]
+        return ["Townhouse", "Villa", "3 BR"]
+
+    if goal == "📈 Перепродажа":
+        if bmax <= 1_000_000:
+            return ["Studio", "1 BR"]
+        if bmax <= 2_000_000:
+            return ["1 BR", "2 BR"]
+        return ["1 BR", "2 BR", "Townhouse"]
+
+    if goal == "🔑 Аренда":
+        if bmax <= 1_000_000:
+            return ["Studio", "1 BR"]
+        if bmax <= 2_000_000:
+            return ["Studio", "1 BR", "2 BR"]
+        return ["1 BR", "2 BR", "Townhouse"]
+
+    if bmax <= 1_000_000:
+        return ["Studio", "1 BR"]
+    if bmax <= 2_000_000:
+        return ["1 BR", "Studio", "2 BR"]
+    if bmax <= 3_000_000:
+        return ["1 BR", "2 BR", "Townhouse"]
+    return ["1 BR", "2 BR", "Townhouse", "Villa"]
+
+
+def smart_area_universe(goal):
+    if goal == "🏡 Для жизни":
+        return [
+            ("Downtown Dubai", ["Burj Khalifa"]),
+            ("Dubai Marina", ["Marsa Dubai"]),
+            ("JVC", ["Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"]),
+            ("Business Bay", ["Business Bay"]),
+            ("Palm Jumeirah", ["Palm Jumeirah"]),
+        ]
+
+    if goal == "📈 Перепродажа":
+        return [
+            ("JVC", ["Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"]),
+            ("Business Bay", ["Business Bay"]),
+            ("Downtown Dubai", ["Burj Khalifa"]),
+            ("Dubai Marina", ["Marsa Dubai"]),
+            ("Sobha Hartland", ["Sobha Hartland"]),
+        ]
+
+    if goal == "🔑 Аренда":
+        return [
+            ("Dubai Marina", ["Marsa Dubai"]),
+            ("JVC", ["Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"]),
+            ("Business Bay", ["Business Bay"]),
+            ("Downtown Dubai", ["Burj Khalifa"]),
+            ("JLT", ["Jumeirah Lakes Towers"]),
+        ]
+
+    return [
+        ("JVC", ["Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"]),
+        ("Business Bay", ["Business Bay"]),
+        ("Dubai Marina", ["Marsa Dubai"]),
+        ("Downtown Dubai", ["Burj Khalifa"]),
+        ("Sobha Hartland", ["Sobha Hartland"]),
+        ("JLT", ["Jumeirah Lakes Towers"]),
+    ]
+
+
+def smart_pick_candidates(goal, budget_text, risk, timing):
+    bmin, bmax = parse_budget_range(budget_text)
+    ptypes = recommended_property_types(goal, budget_text)
+    areas = smart_area_universe(goal)
+
+    results = []
+
+    with db() as conn:
+        with conn.cursor() as cur:
+            for display_area, real_areas in areas:
+                area_conditions = " OR ".join(["area_name_en ILIKE %s"] * len(real_areas))
+                area_params = [f"%{a}%" for a in real_areas]
+
+                best_type_rows = []
+
+                for prop in ptypes:
+                    prop_sql, prop_args = property_condition(prop)
+
+                    cur.execute(f"""
+                        SELECT
+                            COUNT(*) AS deals,
+                            COUNT(DISTINCT {BUILDING_NAME}) AS buildings,
+                            AVG({PRICE}) AS avg_price,
+                            MIN({PRICE}) AS min_price,
+                            MAX({PRICE}) AS max_price,
+                            AVG({METER_PRICE}) AS avg_meter,
+                            MIN(safe_date) AS first_deal,
+                            MAX(safe_date) AS last_deal
+                        {base_from()}
+                          AND ({area_conditions})
+                          {prop_sql}
+                          AND {PRICE} IS NOT NULL
+                          AND {PRICE} >= %s
+                          AND {PRICE} <= %s
+                          AND safe_date >= CURRENT_DATE - INTERVAL '24 months'
+                    """, area_params + prop_args + [bmin, bmax])
+
+                    row = cur.fetchone()
+
+                    if row and row.get("deals") and row["deals"] > 0:
+                        deals = int(row["deals"])
+                        avg_price = float(row["avg_price"] or 0)
+
+                        budget_mid = (bmin + bmax) / 2 if bmax else avg_price
+                        affordability = 100 - min(100, abs(avg_price - budget_mid) / max(budget_mid, 1) * 100)
+                        liquidity = min(100, deals / 30 * 100)
+
+                        risk_bonus = 0
+                        if risk == "низкий риск" and deals >= 30:
+                            risk_bonus = 12
+                        elif risk == "агрессивно" and avg_price <= bmax:
+                            risk_bonus = 8
+                        elif risk == "сбалансировано":
+                            risk_bonus = 6
+
+                        goal_bonus = 0
+                        if goal == "🔑 Аренда" and prop in ["Studio", "1 BR"]:
+                            goal_bonus = 10
+                        elif goal == "🏡 Для жизни" and prop in ["1 BR", "2 BR", "Townhouse", "Villa"]:
+                            goal_bonus = 8
+                        elif goal == "📈 Перепродажа" and prop in ["Studio", "1 BR", "2 BR"]:
+                            goal_bonus = 8
+                        elif goal == "💰 Инвестиция / ROI" and prop in ["Studio", "1 BR"]:
+                            goal_bonus = 10
+
+                        score = liquidity * 0.45 + affordability * 0.35 + risk_bonus + goal_bonus
+
+                        best_type_rows.append({
+                            "area": display_area,
+                            "property": prop,
+                            "deals": deals,
+                            "buildings": row.get("buildings") or 0,
+                            "avg_price": avg_price,
+                            "min_price": row.get("min_price"),
+                            "max_price": row.get("max_price"),
+                            "avg_meter": row.get("avg_meter"),
+                            "first_deal": row.get("first_deal"),
+                            "last_deal": row.get("last_deal"),
+                            "score": score,
+                        })
+
+                if best_type_rows:
+                    best = sorted(best_type_rows, key=lambda x: x["score"], reverse=True)[0]
+                    results.append(best)
+
+    return sorted(results, key=lambda x: x["score"], reverse=True)[:5]
+
+
+def show_smart_recommendation(goal, budget, timing, risk, rows):
+    if not rows:
+        return (
+            "❌ По этим параметрам не нашёл достаточно сильных вариантов.\n\n"
+            "Попробуйте расширить бюджет или выбрать другой риск-профиль."
+        )
+
+    best = rows[0]
+
+    good_low = best["min_price"] if best.get("min_price") else best["avg_price"] * 0.9
+    good_high = best["avg_price"] * 0.95
+
+    text = (
+        f"🧠 <b>Инвестиционный подбор</b>\n\n"
+        f"🎯 Цель: <b>{goal}</b>\n"
+        f"💰 Бюджет: <b>{budget}</b>\n"
+        f"⏱ Горизонт: <b>{timing}</b>\n"
+        f"⚖️ Риск: <b>{risk}</b>\n\n"
+        f"🏆 <b>Лучший выбор:</b>\n"
+        f"📍 Район: <b>{best['area']}</b>\n"
+        f"🏠 Формат: <b>{best['property']}</b>\n"
+        f"💰 Средняя цена: <b>{format_money(best['avg_price'])}</b>\n"
+        f"✅ Хорошая покупка: <b>{format_money(good_low)}</b> — <b>{format_money(good_high)}</b>\n"
+        f"📐 Средняя цена за метр: <b>{format_money(best['avg_meter'])}</b>\n"
+        f"📊 Сделок за 24 мес.: <b>{format_int(best['deals'])}</b>\n\n"
+        f"🧠 <b>Вывод:</b>\n"
+    )
+
+    if goal == "🏡 Для жизни":
+        text += (
+            f"Для жизни оптимально смотреть <b>{best['property']}</b> в <b>{best['area']}</b>: "
+            f"район ликвидный, данных достаточно, формат соответствует бюджету."
+        )
+    elif goal == "📈 Перепродажа":
+        text += (
+            f"Для перепродажи лучше заходить в <b>{best['property']}</b> в <b>{best['area']}</b> "
+            f"ниже средней цены DLD. Идея — купить ниже рынка и выйти при росте спроса."
+        )
+    elif goal == "🔑 Аренда":
+        text += (
+            f"Для аренды лучше смотреть <b>{best['property']}</b> в <b>{best['area']}</b>: "
+            f"такие юниты легче сдавать и быстрее перепродавать."
+        )
+    else:
+        text += (
+            f"Для инвестиции лучший баланс сейчас даёт <b>{best['property']}</b> в <b>{best['area']}</b>. "
+            f"Ориентир входа — ниже средней цены DLD."
+        )
+
+    text += "\n\n📋 <b>Альтернативы:</b>\n"
+
+    for idx, r in enumerate(rows[1:], 2):
+        text += (
+            f"{idx}. <b>{r['area']}</b> · {r['property']}\n"
+            f"   💰 {format_money(r['avg_price'])} · 📊 {format_int(r['deals'])} сделок\n"
+        )
+
+    text += (
+        "\n⚠️ Это аналитический ориентир по DLD, не финальная рекомендация к покупке. "
+        "Перед сделкой нужно проверить конкретный юнит, вид, этаж, сервис-чардж, состояние и срочность продавца."
+    )
+
+    return text
+
+
