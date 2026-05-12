@@ -507,73 +507,54 @@ def property_condition(prop):
     if not prop:
         return "", []
 
-    p = (prop or "").lower()
+    p = (prop or "").lower().strip()
 
-    studio_keys = ["studio"]
-    one_keys = ["1 br", "1br", "1 b/r", "1 bedroom"]
-    two_keys = ["2 br", "2br", "2 b/r", "2 bedroom"]
-    three_keys = ["3 br", "3br", "3 b/r", "3 bedroom"]
-    town_keys = ["townhouse", "town house"]
-    villa_keys = ["villa"]
+    if p == "studio":
+        return """
+        AND (
+            rooms_en ILIKE %s
+            OR property_type_en ILIKE %s
+            OR property_sub_type_en ILIKE %s
+        )
+        """, ["%studio%", "%studio%", "%studio%"]
 
-    if any(k in p for k in studio_keys):
-        return "AND LOWER(property_type_en) ILIKE %s", ["%studio%"]
+    if p in ["1 br", "2 br", "3 br", "4 br"]:
+        n = p.split()[0]
+        return """
+        AND (
+            rooms_en ILIKE %s
+            OR rooms_en ILIKE %s
+            OR property_type_en ILIKE %s
+            OR property_sub_type_en ILIKE %s
+        )
+        """, [f"%{n}%", f"%{n} B/R%", f"%{n}%", f"%{n}%"]
 
-    if any(k in p for k in one_keys):
-        return "AND (LOWER(property_type_en) ILIKE %s OR LOWER(property_sub_type_en) ILIKE %s)", ["%1%", "%1%"]
+    if p == "5 br+":
+        return """
+        AND (
+            rooms_en ILIKE %s OR rooms_en ILIKE %s OR rooms_en ILIKE %s
+            OR rooms_en ILIKE %s OR rooms_en ILIKE %s
+            OR property_type_en ILIKE %s OR property_sub_type_en ILIKE %s
+        )
+        """, ["%5%", "%6%", "%7%", "%8%", "%9%", "%5%", "%5%"]
 
-    if any(k in p for k in two_keys):
-        return "AND (LOWER(property_type_en) ILIKE %s OR LOWER(property_sub_type_en) ILIKE %s)", ["%2%", "%2%"]
+    if p == "villa":
+        return "AND (property_type_en ILIKE %s OR property_sub_type_en ILIKE %s)", ["%villa%", "%villa%"]
 
-    if any(k in p for k in three_keys):
-        return "AND (LOWER(property_type_en) ILIKE %s OR LOWER(property_sub_type_en) ILIKE %s)", ["%3%", "%3%"]
+    if p == "townhouse":
+        return "AND (property_type_en ILIKE %s OR property_sub_type_en ILIKE %s)", ["%town%", "%town%"]
 
-    if any(k in p for k in town_keys):
-        return "AND LOWER(property_type_en) ILIKE %s", ["%town%"]
+    if p == "penthouse":
+        return "AND (property_type_en ILIKE %s OR property_sub_type_en ILIKE %s)", ["%penthouse%", "%penthouse%"]
 
-    if any(k in p for k in villa_keys):
-        return "AND LOWER(property_type_en) ILIKE %s", ["%villa%"]
+    if p == "apartment":
+        return "AND (property_type_en ILIKE %s OR property_sub_type_en ILIKE %s OR property_sub_type_en ILIKE %s)", ["%apartment%", "%apartment%", "%flat%"]
 
-    return "", []
+    if p == "office":
+        return "AND (property_type_en ILIKE %s OR property_sub_type_en ILIKE %s)", ["%office%", "%office%"]
 
-
-
-    d = deal_type.lower()
-
-    if "rent" in d or "арен" in d or "إيجار" in d:
-        return "AND (procedure_name_en ILIKE %s OR procedure_name_en ILIKE %s OR rent_value IS NOT NULL)", ["%rent%", "%lease%"]
-
-    if "sale" in d or "прод" in d or "بيع" in d:
-        return "AND (procedure_name_en ILIKE %s OR procedure_name_en ILIKE %s OR actual_worth IS NOT NULL)", ["%sale%", "%sell%"]
-
-    return "", []
-
-
-
-def scope_condition(scope, name, original_query=None):
-    if scope == "building":
-        return f" AND {BUILDING_NAME} = %s", [name]
-
-    if scope == "area":
-        query = original_query or name
-        q = clean_query(query).lower()
-
-        reverse_virtual = {
-            "jvc": "jvc",
-            "downtown dubai": "downtown",
-            "dubai marina": "dubai marina",
-            "jlt": "jlt",
-        }
-
-        if q in reverse_virtual:
-            q = reverse_virtual[q]
-            query = q
-
-        if q in AREA_ALIASES:
-            area_sql, area_params = make_area_exact_condition(query)
-            return " " + area_sql, area_params
-
-        return " AND area_name_en = %s", [name]
+    if p == "shop":
+        return "AND (property_type_en ILIKE %s OR property_sub_type_en ILIKE %s)", ["%shop%", "%shop%"]
 
     return "", []
 
@@ -1034,45 +1015,129 @@ def smart_area_universe(goal):
 
 
 def smart_pick_candidates(goal, budget_text, risk, timing):
+    """
+    Умный подбор.
+
+    Важно:
+    раньше фильтр был слишком жёсткий:
+    - только 24 месяца
+    - только price внутри бюджета
+    - rooms/property могли не совпадать с DLD форматом
+
+    Поэтому бот часто писал "ничего не найдено", хотя данные в базе есть.
+    Теперь логика мягче:
+    1) ищем по бюджету и типу юнита;
+    2) если пусто — расширяем бюджет +15%;
+    3) если всё ещё пусто — ищем по району без строгого типа;
+    4) период берём 36 месяцев, чтобы было достаточно данных.
+    """
     bmin, bmax = parse_budget_range(budget_text)
     ptypes = recommended_property_types(goal, budget_text)
+    areas = smart_area_universe(goal)
+
     results = []
+
     with db() as conn:
         with conn.cursor() as cur:
-            for display_area, real_areas in smart_area_universe(goal):
+            for display_area, real_areas in areas:
                 area_conditions = " OR ".join(["area_name_en ILIKE %s"] * len(real_areas))
                 area_params = [f"%{a}%" for a in real_areas]
-                best_rows = []
+
+                best_type_rows = []
+
+                search_attempts = []
+
+                # Attempt 1: strict budget + recommended property types
                 for prop in ptypes:
                     prop_sql, prop_args = property_condition(prop)
+                    search_attempts.append((prop, prop_sql, prop_args, bmin, bmax))
+
+                # Attempt 2: slightly wider budget
+                for prop in ptypes:
+                    prop_sql, prop_args = property_condition(prop)
+                    search_attempts.append((prop, prop_sql, prop_args, max(0, bmin * 0.85), bmax * 1.15))
+
+                # Attempt 3: no property filter, but still within budget
+                search_attempts.append(("Any", "", [], bmin, bmax * 1.15))
+
+                for prop, prop_sql, prop_args, low_price, high_price in search_attempts:
                     cur.execute(f"""
-                        SELECT COUNT(*) AS deals,
-                               COUNT(DISTINCT {BUILDING_NAME}) AS buildings,
-                               AVG({PRICE}) AS avg_price,
-                               MIN({PRICE}) AS min_price,
-                               MAX({PRICE}) AS max_price,
-                               AVG({METER_PRICE}) AS avg_meter
+                        SELECT
+                            COUNT(*) AS deals,
+                            COUNT(DISTINCT {BUILDING_NAME}) AS buildings,
+                            AVG({PRICE}) AS avg_price,
+                            MIN({PRICE}) AS min_price,
+                            MAX({PRICE}) AS max_price,
+                            AVG({METER_PRICE}) AS avg_meter,
+                            MIN(safe_date) AS first_deal,
+                            MAX(safe_date) AS last_deal
                         {base_from()}
                           AND ({area_conditions})
                           {prop_sql}
                           AND {PRICE} IS NOT NULL
                           AND {PRICE} >= %s
                           AND {PRICE} <= %s
-                          AND safe_date >= CURRENT_DATE - INTERVAL '24 months'
-                    """, area_params + prop_args + [bmin, bmax])
+                          AND safe_date >= CURRENT_DATE - INTERVAL '36 months'
+                    """, area_params + prop_args + [low_price, high_price])
+
                     row = cur.fetchone()
-                    if row and row.get("deals"):
+
+                    if row and row.get("deals") and int(row["deals"]) > 0:
                         deals = int(row["deals"])
                         avg_price = float(row["avg_price"] or 0)
-                        budget_mid = (bmin + bmax) / 2
-                        affordability = 100 - min(100, abs(avg_price - budget_mid) / max(budget_mid, 1) * 100)
-                        liquidity = min(100, deals / 30 * 100)
-                        risk_bonus = 12 if risk == "низкий риск" and deals >= 30 else 8 if risk == "агрессивно" else 6
-                        goal_bonus = 10 if prop in ["Studio", "1 BR"] else 5
-                        score = liquidity * 0.45 + affordability * 0.35 + risk_bonus + goal_bonus
-                        best_rows.append({"area": display_area, "property": prop, "deals": deals, "buildings": row.get("buildings") or 0, "avg_price": avg_price, "min_price": row.get("min_price"), "max_price": row.get("max_price"), "avg_meter": row.get("avg_meter"), "score": score})
-                if best_rows:
-                    results.append(sorted(best_rows, key=lambda x: x["score"], reverse=True)[0])
+                        avg_meter = float(row["avg_meter"] or 0)
+
+                        budget_mid = (bmin + bmax) / 2 if bmax else avg_price
+
+                        affordability = 100 - min(
+                            100,
+                            abs(avg_price - budget_mid) / max(budget_mid, 1) * 100
+                        )
+
+                        liquidity = min(100, deals / 20 * 100)
+
+                        score = liquidity * 0.50 + affordability * 0.35
+
+                        if risk == "низкий риск" and deals >= 20:
+                            score += 15
+                        elif risk == "сбалансировано":
+                            score += 10
+                        elif risk == "агрессивно":
+                            score += 8
+
+                        if goal in ["💰 Инвестиция / ROI", "🔑 Аренда"] and prop in ["Studio", "1 BR"]:
+                            score += 12
+                        elif goal == "🏡 Для жизни" and prop in ["1 BR", "2 BR", "Townhouse", "Villa"]:
+                            score += 10
+                        elif goal == "📈 Перепродажа" and prop in ["Studio", "1 BR", "2 BR"]:
+                            score += 10
+
+                        # Penalize fallback Any slightly, but still allow result.
+                        if prop == "Any":
+                            score -= 8
+
+                        best_type_rows.append({
+                            "area": display_area,
+                            "property": prop,
+                            "deals": deals,
+                            "buildings": row.get("buildings") or 0,
+                            "avg_price": avg_price,
+                            "min_price": row.get("min_price"),
+                            "max_price": row.get("max_price"),
+                            "avg_meter": avg_meter,
+                            "first_deal": row.get("first_deal"),
+                            "last_deal": row.get("last_deal"),
+                            "score": score,
+                        })
+
+                    # If strict attempt already found enough data for this prop, no need to over-search same prop.
+                    if best_type_rows and prop != "Any":
+                        continue
+
+                if best_type_rows:
+                    best = sorted(best_type_rows, key=lambda x: x["score"], reverse=True)[0]
+                    results.append(best)
+
     return sorted(results, key=lambda x: x["score"], reverse=True)[:5]
 
 
