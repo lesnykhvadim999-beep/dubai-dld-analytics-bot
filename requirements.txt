@@ -1,0 +1,14 @@
+aiogram
+asyncpg
+sqlalchemy
+psycopg2-binary
+pandas
+numpy
+requests
+aiohttp
+python-dotenv
+apscheduler
+rapidfuzz
+redis
+uvicorn
+fastapi
