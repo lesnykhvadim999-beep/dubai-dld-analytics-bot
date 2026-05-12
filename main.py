@@ -503,6 +503,41 @@ def make_deal_type_condition(deal_type):
     if not deal_type:
         return "", []
 
+def property_condition(prop):
+    if not prop:
+        return "", []
+
+    p = (prop or "").lower()
+
+    studio_keys = ["studio"]
+    one_keys = ["1 br", "1br", "1 b/r", "1 bedroom"]
+    two_keys = ["2 br", "2br", "2 b/r", "2 bedroom"]
+    three_keys = ["3 br", "3br", "3 b/r", "3 bedroom"]
+    town_keys = ["townhouse", "town house"]
+    villa_keys = ["villa"]
+
+    if any(k in p for k in studio_keys):
+        return "AND LOWER(property_type_en) ILIKE %s", ["%studio%"]
+
+    if any(k in p for k in one_keys):
+        return "AND (LOWER(property_type_en) ILIKE %s OR LOWER(property_sub_type_en) ILIKE %s)", ["%1%", "%1%"]
+
+    if any(k in p for k in two_keys):
+        return "AND (LOWER(property_type_en) ILIKE %s OR LOWER(property_sub_type_en) ILIKE %s)", ["%2%", "%2%"]
+
+    if any(k in p for k in three_keys):
+        return "AND (LOWER(property_type_en) ILIKE %s OR LOWER(property_sub_type_en) ILIKE %s)", ["%3%", "%3%"]
+
+    if any(k in p for k in town_keys):
+        return "AND LOWER(property_type_en) ILIKE %s", ["%town%"]
+
+    if any(k in p for k in villa_keys):
+        return "AND LOWER(property_type_en) ILIKE %s", ["%villa%"]
+
+    return "", []
+
+
+
     d = deal_type.lower()
 
     if "rent" in d or "арен" in d or "إيجار" in d:
