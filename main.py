@@ -214,6 +214,34 @@ AREA_ALIASES = {
 }
 
 
+
+VIRTUAL_AREA_DISPLAY = {
+    "jvc": "JVC",
+    "jumeirah village circle": "JVC",
+    "downtown": "Downtown Dubai",
+    "downtown dubai": "Downtown Dubai",
+    "dubai downtown": "Downtown Dubai",
+    "dubai marina": "Dubai Marina",
+    "marina": "Dubai Marina",
+    "marsa dubai": "Dubai Marina",
+    "business bay": "Business Bay",
+    "palm": "Palm Jumeirah",
+    "palm jumeirah": "Palm Jumeirah",
+    "jlt": "JLT",
+    "jumeirah lakes towers": "JLT",
+    "creek": "Dubai Creek Harbour",
+    "dubai creek": "Dubai Creek Harbour",
+    "sobha": "Sobha Hartland",
+    "sobha hartland": "Sobha Hartland",
+}
+
+
+def virtual_area_name(query):
+    q = clean_query(query).lower()
+    return VIRTUAL_AREA_DISPLAY.get(q, clean_query(query))
+
+
+
 def lang(user_id):
     return user_languages.get(user_id, "ru")
 
@@ -399,6 +427,30 @@ def make_deal_type_condition(deal_type):
     return "", []
 
 
+
+def scope_condition(scope, name, original_query=None):
+    """
+    Возвращает SQL WHERE для Dubai / building / area.
+
+    Для виртуальных районов типа JVC используем исходный запрос
+    и реальные DLD aliases, но пользователю показываем красивое название.
+    """
+    if scope == "building":
+        return f" AND {BUILDING_NAME} = %s", [name]
+
+    if scope == "area":
+        query = original_query or name
+        q = clean_query(query).lower()
+
+        if q in AREA_ALIASES:
+            area_sql, area_params = make_area_exact_condition(query)
+            return " " + area_sql, area_params
+
+        return " AND area_name_en = %s", [name]
+
+    return "", []
+
+
 def period_condition(period_key):
     if period_key == "3":
         return "AND safe_date >= CURRENT_DATE - INTERVAL '3 months'"
@@ -513,16 +565,36 @@ def find_buildings(query, limit=10):
 
 def find_areas(query, limit=10):
     """
-    Поиск районов. Работает через controlled aliases, чтобы:
-    - JVC не цеплял Palm Jumeirah только из-за слова Jumeirah.
-    - Downtown не цеплял Marina.
-    - Dubai Marina не цеплял всё, где есть Dubai.
+    Поиск районов.
+
+    Если пользователь вводит известное рыночное название:
+    JVC / Downtown / Dubai Marina и т.д.,
+    бот НЕ показывает технические DLD районы отдельно.
+    Он собирает их в один виртуальный район и показывает красивое название.
     """
+    q = clean_query(query).lower()
     area_sql, params = make_area_exact_condition(query)
-    params.append(limit)
+
+    is_virtual = q in AREA_ALIASES
 
     with db() as conn:
         with conn.cursor() as cur:
+            if is_virtual:
+                cur.execute(f"""
+                    SELECT
+                        %s AS area_name_en,
+                        COUNT(*) AS deals,
+                        COUNT(DISTINCT {BUILDING_NAME}) AS buildings
+                    {base_from()}
+                      {area_sql}
+                      AND area_name_en IS NOT NULL
+                      AND area_name_en <> ''
+                    LIMIT 1
+                """, [virtual_area_name(query)] + params)
+                row = cur.fetchone()
+                return [row] if row and row.get("deals") else []
+
+            params.append(limit)
             cur.execute(f"""
                 SELECT
                     area_name_en,
@@ -540,15 +612,7 @@ def find_areas(query, limit=10):
 
 
 def get_stats(scope="dubai", name=None, prop=None, period=None, deal_type=None):
-    params = []
-
-    where = ""
-    if scope == "building":
-        where += f" AND {BUILDING_NAME} = %s"
-        params.append(name)
-    elif scope == "area":
-        where += " AND area_name_en = %s"
-        params.append(name)
+    where, params = scope_condition(scope, name, original_query=name)
 
     prop_sql, prop_args = property_condition(prop)
     deal_sql, deal_args = make_deal_type_condition(deal_type)
@@ -585,18 +649,10 @@ def get_comparison(scope="dubai", name=None, prop=None, period=None, deal_type=N
     if not period:
         return None
 
-    params_current = []
-    params_previous = []
+    where, base_params = scope_condition(scope, name, original_query=name)
 
-    where = ""
-    if scope == "building":
-        where += f" AND {BUILDING_NAME} = %s"
-        params_current.append(name)
-        params_previous.append(name)
-    elif scope == "area":
-        where += " AND area_name_en = %s"
-        params_current.append(name)
-        params_previous.append(name)
+    params_current = list(base_params)
+    params_previous = list(base_params)
 
     prop_sql, prop_args = property_condition(prop)
     deal_sql, deal_args = make_deal_type_condition(deal_type)
@@ -638,15 +694,7 @@ def get_comparison(scope="dubai", name=None, prop=None, period=None, deal_type=N
 
 
 def get_latest_deals(scope="building", name=None, prop=None, period=None, deal_type=None, limit=7):
-    params = []
-
-    where = ""
-    if scope == "building":
-        where += f" AND {BUILDING_NAME} = %s"
-        params.append(name)
-    elif scope == "area":
-        where += " AND area_name_en = %s"
-        params.append(name)
+    where, params = scope_condition(scope, name, original_query=name)
 
     prop_sql, prop_args = property_condition(prop)
     deal_sql, deal_args = make_deal_type_condition(deal_type)
@@ -717,6 +765,71 @@ def get_top_price():
             """)
             return cur.fetchall()
 
+
+
+def get_top_buildings_in_scope(scope="dubai", name=None, period=None, deal_type=None, limit=7):
+    where, params = scope_condition(scope, name, original_query=name)
+    deal_sql, deal_args = make_deal_type_condition(deal_type)
+    params += deal_args + [limit]
+
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT
+                    {BUILDING_NAME} AS building_name_en,
+                    area_name_en,
+                    COUNT(*) AS deals,
+                    AVG({PRICE}) AS avg_price,
+                    AVG({METER_PRICE}) AS avg_meter
+                {base_from()}
+                  {where}
+                  {deal_sql}
+                  {period_condition(period)}
+                  AND {BUILDING_NAME} IS NOT NULL
+                  AND {PRICE} IS NOT NULL
+                GROUP BY {BUILDING_NAME}, area_name_en
+                ORDER BY deals DESC
+                LIMIT %s
+            """, params)
+            return cur.fetchall()
+
+
+def quick_area_report(display_name, row, comparison=None, top_buildings=None):
+    if not row or not row.get("deals"):
+        return "❌ Нет данных по выбранному району."
+
+    text = (
+        f"🏙 <b>Статистика района: {display_name}</b>\n\n"
+        f"📊 Сделок: <b>{row['deals']:,}</b>\n"
+        f"🏢 Зданий: <b>{row.get('buildings') or 0:,}</b>\n"
+        f"💰 Средняя цена: <b>{format_money(row['avg_price'])}</b>\n"
+        f"📐 Средняя цена за метр: <b>{format_money(row['avg_meter'])}</b>\n"
+        f"🗓 Первая сделка: <b>{row['first_deal']}</b>\n"
+        f"🗓 Последняя сделка: <b>{row['last_deal']}</b>\n"
+    )
+
+    if comparison:
+        current, previous = comparison
+        deals_change = pct_change(current["deals"], previous["deals"])
+        price_change = pct_change(current["avg_price"], previous["avg_price"])
+        meter_change = pct_change(current["avg_meter"], previous["avg_meter"])
+
+        text += (
+            f"\n📈 <b>Динамика за 12 месяцев к предыдущим 12:</b>\n"
+            f"📊 Сделки: <b>{format_pct(deals_change)}</b>\n"
+            f"💰 Средняя цена: <b>{format_pct(price_change)}</b>\n"
+            f"📐 Цена за метр: <b>{format_pct(meter_change)}</b>\n"
+        )
+
+    if top_buildings:
+        text += "\n🔥 <b>Самые активные здания:</b>\n"
+        for i, b in enumerate(top_buildings[:5], 1):
+            text += (
+                f"{i}. <b>{b['building_name_en']}</b>\n"
+                f"   📊 {b['deals']:,} сделок · 💰 {format_money(b['avg_price'])}\n"
+            )
+
+    return text
 
 def pct_change(current, previous):
     if previous is None or float(previous) == 0 or current is None:
@@ -953,6 +1066,28 @@ async def main_handler(message: Message):
                 await message.answer(tr(user_id, "not_found"), reply_markup=back_menu(user_id))
                 return
 
+            # Если найден один понятный район или виртуальный район типа JVC,
+            # не заставляем пользователя выбирать — сразу показываем аналитику.
+            q_lower = clean_query(text).lower()
+            if len(rows) == 1 or q_lower in AREA_ALIASES:
+                selected_name = rows[0]["area_name_en"]
+                state["scope"] = "area"
+                state["name"] = selected_name
+                state["step"] = "choose_report"
+                user_states[user_id] = state
+
+                await message.answer(tr(user_id, "loading"))
+
+                stats = get_stats("area", selected_name, None, "12", None)
+                comparison = get_comparison("area", selected_name, None, "12", None)
+                top_buildings = get_top_buildings_in_scope("area", selected_name, "12", None)
+
+                await message.answer(
+                    quick_area_report(selected_name, stats, comparison, top_buildings),
+                    reply_markup=report_menu(user_id)
+                )
+                return
+
             suggestions = [r["area_name_en"] for r in rows if r["area_name_en"]]
             new_state = {
                 "step": "choose_area",
@@ -967,7 +1102,11 @@ async def main_handler(message: Message):
 
             response = tr(user_id, "choose_area") + "\n\n"
             for i, r in enumerate(rows, 1):
-                response += f"{i}. {r['area_name_en']} — {r['deals']:,} сделок, зданий: {r['buildings']}\n"
+                response += (
+                    f"{i}. <b>{r['area_name_en']}</b>\n"
+                    f"   📊 Сделок: {r['deals']:,}\n"
+                    f"   🏢 Зданий: {r['buildings']:,}\n"
+                )
 
             await message.answer(response, reply_markup=kb(buttons))
             return
@@ -989,9 +1128,19 @@ async def main_handler(message: Message):
                 return
 
             state["name"] = text
-            state["step"] = "choose_deal_type"
+            state["step"] = "choose_report"
             user_states[user_id] = state
-            await message.answer(tr(user_id, "choose_deal_type"), reply_markup=deal_type_menu(user_id))
+
+            await message.answer(tr(user_id, "loading"))
+
+            stats = get_stats("area", text, None, "12", None)
+            comparison = get_comparison("area", text, None, "12", None)
+            top_buildings = get_top_buildings_in_scope("area", text, "12", None)
+
+            await message.answer(
+                quick_area_report(text, stats, comparison, top_buildings),
+                reply_markup=report_menu(user_id)
+            )
             return
 
         if state.get("step") == "choose_deal_type":
