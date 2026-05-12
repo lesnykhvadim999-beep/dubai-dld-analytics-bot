@@ -6,12 +6,13 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
     KeyboardButton
 )
-from aiogram.filters import CommandStart, Command
+from aiogram.filters import CommandStart
 
 from dotenv import load_dotenv
 
 import asyncio
 import os
+import sqlite3
 
 load_dotenv()
 
@@ -28,11 +29,90 @@ dp = Dispatcher()
 
 
 # =========================
+# DATABASE
+# =========================
+
+conn = sqlite3.connect("dld.db")
+cursor = conn.cursor()
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS buildings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT,
+    avg_price TEXT,
+    roi TEXT,
+    sqft TEXT,
+    growth TEXT,
+    deals TEXT
+)
+""")
+
+conn.commit()
+
+
+# =========================
+# TEST DATA
+# =========================
+
+cursor.execute("SELECT * FROM buildings")
+
+existing = cursor.fetchall()
+
+if not existing:
+
+    buildings_data = [
+
+        (
+            "Creek Vista Heights",
+            "2.4M AED",
+            "7.2%",
+            "2,150 AED",
+            "+14%",
+            "148 deals"
+        ),
+
+        (
+            "Bayz 101",
+            "1.9M AED",
+            "8.4%",
+            "2,050 AED",
+            "+21%",
+            "203 deals"
+        ),
+
+        (
+            "Sobha Hartland Waves",
+            "1.6M AED",
+            "6.8%",
+            "1,950 AED",
+            "+11%",
+            "97 deals"
+        )
+    ]
+
+    cursor.executemany("""
+    INSERT INTO buildings
+    (
+        name,
+        avg_price,
+        roi,
+        sqft,
+        growth,
+        deals
+    )
+    VALUES (?, ?, ?, ?, ?, ?)
+    """, buildings_data)
+
+    conn.commit()
+
+
+# =========================
 # MENU
 # =========================
 
 main_menu = ReplyKeyboardMarkup(
     keyboard=[
+
         [KeyboardButton(text="📊 Смотреть сделки")],
 
         [
@@ -64,25 +144,8 @@ async def start_handler(message: Message):
     await message.answer(
         "🏙 <b>Dubai DLD Analytics Bot</b>\n\n"
         "Бот запущен успешно.\n\n"
-        "Выберите раздел в меню ниже:",
+        "Введите название здания:",
         reply_markup=main_menu
-    )
-
-
-# =========================
-# HELP
-# =========================
-
-@dp.message(Command("help"))
-async def help_handler(message: Message):
-
-    await message.answer(
-        "📌 <b>Команды бота:</b>\n\n"
-        "/start — запуск\n"
-        "/help — помощь\n\n"
-        "Также можно просто написать название здания.\n\n"
-        "Например:\n"
-        "Creek Vista Heights"
     )
 
 
@@ -94,12 +157,7 @@ async def help_handler(message: Message):
 async def deals_handler(message: Message):
 
     await message.answer(
-        "📊 Раздел сделок.\n\n"
-        "Скоро здесь будет:\n"
-        "• Продажи\n"
-        "• Аренда\n"
-        "• Фильтры\n"
-        "• DLD данные"
+        "📊 Live DLD сделки скоро будут подключены."
     )
 
 
@@ -107,8 +165,7 @@ async def deals_handler(message: Message):
 async def area_handler(message: Message):
 
     await message.answer(
-        "🏙 Статистика района.\n\n"
-        "Скоро здесь появится аналитика районов."
+        "🏙 Аналитика районов скоро будет доступна."
     )
 
 
@@ -116,12 +173,7 @@ async def area_handler(message: Message):
 async def dubai_handler(message: Message):
 
     await message.answer(
-        "🌆 Общая статистика Дубая.\n\n"
-        "Скоро здесь будет:\n"
-        "• Объём рынка\n"
-        "• Средние цены\n"
-        "• Рост рынка\n"
-        "• Тренды"
+        "🌆 Общая аналитика Дубая скоро будет доступна."
     )
 
 
@@ -129,8 +181,7 @@ async def dubai_handler(message: Message):
 async def growth_handler(message: Message):
 
     await message.answer(
-        "🚀 Топ растущих районов.\n\n"
-        "Скоро здесь будет live аналитика роста."
+        "🚀 Топ растущих районов скоро будет доступен."
     )
 
 
@@ -138,8 +189,7 @@ async def growth_handler(message: Message):
 async def roi_handler(message: Message):
 
     await message.answer(
-        "💰 Топ ROI районов.\n\n"
-        "Скоро здесь будет реальная доходность."
+        "💰 ROI аналитика скоро будет доступна."
     )
 
 
@@ -147,76 +197,58 @@ async def roi_handler(message: Message):
 async def building_handler(message: Message):
 
     await message.answer(
-        "🏢 Напишите название здания.\n\n"
-        "Например:\n"
-        "Creek Vista Heights"
-    )
-
-
-@dp.message(lambda message: message.text == "⚙️ Настройки")
-async def settings_handler(message: Message):
-
-    await message.answer(
-        "⚙️ Настройки.\n\n"
-        "Скоро здесь появится:\n"
-        "• Смена языка\n"
-        "• Валюта\n"
-        "• Избранное"
+        "🏢 Введите название здания."
     )
 
 
 # =========================
-# BUILDING SEARCH
+# SEARCH
 # =========================
 
 @dp.message()
-async def universal_search(message: Message):
+async def search_building(message: Message):
 
-    text = message.text.lower()
+    text = message.text.strip().lower()
 
-    buildings = {
+    cursor.execute("""
+    SELECT
+        name,
+        avg_price,
+        roi,
+        sqft,
+        growth,
+        deals
+    FROM buildings
+    WHERE lower(name)=?
+    """, (text,))
 
-        "creek vista heights": {
-            "price": "2.4M AED",
-            "roi": "7.2%",
-            "sqft": "2,150 AED",
-            "growth": "+14%",
-            "deals": "148 deals"
-        },
+    result = cursor.fetchone()
 
-        "bayz 101": {
-            "price": "1.9M AED",
-            "roi": "8.4%",
-            "sqft": "2,050 AED",
-            "growth": "+21%",
-            "deals": "203 deals"
-        }
+    if result:
 
-    }
-
-    if text in buildings:
-
-        data = buildings[text]
+        name, avg_price, roi, sqft, growth, deals = result
 
         await message.answer(
-            f"🏢 <b>{message.text}</b>\n\n"
 
-            f"💰 Average Price: {data['price']}\n"
-            f"📈 ROI: {data['roi']}\n"
-            f"📐 Price per sqft: {data['sqft']}\n"
-            f"🚀 Growth: {data['growth']}\n"
-            f"📊 Transactions: {data['deals']}\n\n"
+            f"🏢 <b>{name}</b>\n\n"
 
-            f"✅ Building analytics loaded"
+            f"💰 Average Price: {avg_price}\n"
+            f"📈 ROI: {roi}\n"
+            f"📐 Price per sqft: {sqft}\n"
+            f"🚀 Growth: {growth}\n"
+            f"📊 Transactions: {deals}\n\n"
+
+            f"✅ Live analytics loaded"
         )
 
     else:
 
         await message.answer(
-            "❌ Building not found.\n\n"
-            "Try:\n"
+            "❌ Здание не найдено.\n\n"
+            "Попробуйте:\n"
             "- Creek Vista Heights\n"
-            "- Bayz 101"
+            "- Bayz 101\n"
+            "- Sobha Hartland Waves"
         )
 
 
@@ -226,7 +258,7 @@ async def universal_search(message: Message):
 
 async def main():
 
-    print("Bot started...")
+    print("Bot started")
 
     await dp.start_polling(bot)
 
