@@ -639,6 +639,38 @@ def period_previous_condition(period):
     return ""
 
 
+
+def period_months(period):
+    p = str(period or "").strip().lower()
+    if p in ["3", "3m", "3 мес", "3 месяца", "3 months"]:
+        return 3
+    if p in ["6", "6m", "6 мес", "6 месяцев", "6 months"]:
+        return 6
+    if p in ["12", "1", "1y", "1 год", "год", "12 months", "1 year"]:
+        return 12
+    if p in ["36", "3y", "3 года", "36 months", "3 years"]:
+        return 36
+    return None
+
+
+def period_window_sql(period, previous=False):
+    months = period_months(period)
+    if not months:
+        return "всё время"
+    if previous:
+        return f"с CURRENT_DATE - INTERVAL '{months * 2} months' до CURRENT_DATE - INTERVAL '{months} months'"
+    return f"с CURRENT_DATE - INTERVAL '{months} months' до сегодня"
+
+
+def period_window_human(period, previous=False):
+    months = period_months(period)
+    if not months:
+        return "всё время"
+    if previous:
+        return f"предыдущие {months} мес. перед текущим периодом"
+    return f"последние {months} мес. до сегодняшнего дня"
+
+
 def get_period_key(user_id, text):
     if text == tr(user_id, "p3"):
         return "3"
@@ -941,11 +973,68 @@ def get_comparison(scope="dubai", name=None, prop=None, period=None, deal_type=N
         return None
 
 
-def get_latest_deals(scope, name, prop=None, period=None, deal_type=None, limit=5):
+
+_UNIT_COLUMN_CACHE = None
+
+
+def available_unit_column():
+    """Пытаемся найти колонку номера юнита в вашей DLD таблице.
+    Если её нет — просто не применяем фильтр, чтобы бот не падал.
+    """
+    global _UNIT_COLUMN_CACHE
+    if _UNIT_COLUMN_CACHE is not None:
+        return _UNIT_COLUMN_CACHE
+
+    candidates = [
+        "property_number", "unit_number", "unit_no", "unit", "property_unit_number",
+        "property_no", "parcel_number", "unit_id", "unit_number_en"
+    ]
+    try:
+        with db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'dld_transactions_full'
+                """)
+                cols = {r["column_name"] for r in cur.fetchall()}
+        for c in candidates:
+            if c in cols:
+                _UNIT_COLUMN_CACHE = c
+                return c
+    except Exception as e:
+        print("UNIT_COLUMN_DETECT_ERROR:", repr(e))
+
+    _UNIT_COLUMN_CACHE = ""
+    return ""
+
+
+def make_unit_condition(unit_text):
+    unit_text = clean_query(unit_text)
+    if not unit_text:
+        return "", []
+
+    col = available_unit_column()
+    if not col:
+        return "", []
+
+    # Пользователь может ввести полный юнит или серию: 08, 0804, 1208.
+    # Для серии ищем окончание/вхождение, чтобы ловить unit ending 08.
+    q = unit_text.replace("№", "").replace("unit", "").replace("Unit", "").strip()
+    only_digits = re.sub(r"\D", "", q)
+    if only_digits:
+        if len(only_digits) <= 2:
+            return f"AND COALESCE({col}::text, '') ILIKE %s", [f"%{only_digits}"]
+        return f"AND COALESCE({col}::text, '') ILIKE %s", [f"%{only_digits}%"]
+    return f"AND COALESCE({col}::text, '') ILIKE %s", [f"%{q}%"]
+
+def get_latest_deals(scope, name, prop=None, period=None, deal_type=None, limit=5, unit_query=None):
     prop_sql, prop_args = property_condition(prop)
     deal_sql, deal_args = make_deal_type_condition(deal_type)
     p_sql = period_condition(period)
     value_expr = deal_value_expr(deal_type)
+    unit_sql, unit_args = make_unit_condition(unit_query)
 
     if scope == "area":
         scope_sql, scope_args = make_area_exact_condition(name)
@@ -954,7 +1043,7 @@ def get_latest_deals(scope, name, prop=None, period=None, deal_type=None, limit=
     else:
         scope_sql, scope_args = "", []
 
-    params = scope_args + prop_args + deal_args + [limit]
+    params = scope_args + prop_args + deal_args + unit_args + [limit]
 
     try:
         with db() as conn:
@@ -976,6 +1065,7 @@ def get_latest_deals(scope, name, prop=None, period=None, deal_type=None, limit=
                       {prop_sql}
                       {deal_sql}
                       {p_sql}
+                      {unit_sql}
                     ORDER BY safe_date DESC NULLS LAST
                     LIMIT %s
                 """, params)
@@ -1382,7 +1472,7 @@ def show_smart_recommendation(goal, budget, timing, risk, rows):
     text += "\n⚠️ Это аналитический ориентир по DLD, не финальная рекомендация к покупке. Перед сделкой нужно проверить конкретный юнит, вид, этаж, сервис-чардж, состояние и срочность продавца."
     return text
 
-def get_latest_deals_smart(scope, name, prop=None, period=None, deal_type=None, limit=5):
+def get_latest_deals_smart(scope, name, prop=None, period=None, deal_type=None, limit=5, unit_query=None):
     # ВАЖНО: если пользователь выбрал Продажа или Аренда — не сбрасываем тип сделки.
     # Иначе кнопка "Аренда" могла показывать продажи и наоборот.
     if deal_type:
@@ -1402,7 +1492,7 @@ def get_latest_deals_smart(scope, name, prop=None, period=None, deal_type=None, 
         ]
 
     for p, per, dt in attempts:
-        rows = get_latest_deals(scope, name, p, per, dt, limit)
+        rows = get_latest_deals(scope, name, p, per, dt, limit, unit_query)
         if rows:
             return rows, p, per, dt
     return [], prop, period, deal_type
@@ -1474,7 +1564,7 @@ def show_stats(title, row, prop=None, period=None, deal_type=None):
     )
 
 
-def show_comparison(title, current, previous):
+def show_comparison(title, current, previous, period=None, deal_type=None):
     if not current or not previous:
         return "❌ Недостаточно данных для сравнения."
 
@@ -1482,22 +1572,49 @@ def show_comparison(title, current, previous):
     price_change = pct_change(current["avg_price"], previous["avg_price"])
     meter_change = pct_change(current["avg_meter"], previous["avg_meter"])
 
+    value_name = "Средняя аренда" if is_rent_deal_type(deal_type) else "Средняя цена"
+    months = period_months(period)
+    period_text = period_label(period)
+    current_desc = period_window_human(period, previous=False)
+    previous_desc = period_window_human(period, previous=True)
+
+    def arrow(v):
+        if v is None:
+            return "⚪"
+        return "🟢" if float(v) > 0 else ("🔴" if float(v) < 0 else "⚪")
+
+    conclusion = ""
+    if price_change is not None and meter_change is not None:
+        if price_change > 0 and meter_change > 0:
+            conclusion = "Рынок по выбранному фильтру показывает рост: средний чек и цена за метр выше предыдущего аналогичного периода."
+        elif price_change < 0 and meter_change < 0:
+            conclusion = "Рынок по выбранному фильтру просел: средний чек и цена за метр ниже предыдущего аналогичного периода. Это может давать окно для переговоров."
+        elif price_change > 0 and meter_change < 0:
+            conclusion = "Средний чек вырос, но цена за метр снизилась. Вероятно, в текущем периоде было больше крупных или нестандартных сделок."
+        else:
+            conclusion = "Картина смешанная: часть показателей растёт, часть снижается. Для решения лучше смотреть последние сделки и экономическое резюме."
+    else:
+        conclusion = "Для уверенного вывода данных недостаточно, но базовая динамика показана выше."
+
     return (
         f"{title}\n\n"
-        f"<b>Текущий период:</b>\n"
+        f"📅 <b>Период анализа:</b> {period_text}\n"
+        f"➡️ <b>Текущий период:</b> {current_desc}\n"
+        f"↩️ <b>Сравнение:</b> с предыдущим аналогичным периодом ({previous_desc})\n\n"
+        f"<b>Текущий период</b>\n"
         f"📊 Сделок: <b>{format_int(current.get('deals'))}</b>\n"
-        f"💰 Средняя цена: <b>{format_money(current['avg_price'])}</b>\n"
+        f"💰 {value_name}: <b>{format_money(current['avg_price'])}</b>\n"
         f"📐 Цена за метр: <b>{format_money(current['avg_meter'])}</b>\n\n"
-        f"<b>Предыдущий такой же период:</b>\n"
+        f"<b>Предыдущий аналогичный период</b>\n"
         f"📊 Сделок: <b>{format_int(previous.get('deals'))}</b>\n"
-        f"💰 Средняя цена: <b>{format_money(previous['avg_price'])}</b>\n"
+        f"💰 {value_name}: <b>{format_money(previous['avg_price'])}</b>\n"
         f"📐 Цена за метр: <b>{format_money(previous['avg_meter'])}</b>\n\n"
-        f"<b>Динамика:</b>\n"
-        f"📊 Сделки: <b>{format_pct(deals_change)}</b>\n"
-        f"💰 Средняя цена: <b>{format_pct(price_change)}</b>\n"
-        f"📐 Цена за метр: <b>{format_pct(meter_change)}</b>"
+        f"<b>Динамика</b>\n"
+        f"{arrow(deals_change)} Сделки: <b>{format_pct(deals_change)}</b>\n"
+        f"{arrow(price_change)} {value_name}: <b>{format_pct(price_change)}</b>\n"
+        f"{arrow(meter_change)} Цена за метр: <b>{format_pct(meter_change)}</b>\n\n"
+        f"🧠 <b>Вывод:</b> {conclusion}"
     )
-
 
 def compare_value(scope, name, price, size, prop=None, period=None, deal_type=None):
     row = get_unit_summary(scope, name, prop, period, deal_type)
@@ -1683,8 +1800,8 @@ async def main_handler(message: Message):
             return
 
         if text == tr(user_id, "view_deals"):
-            push_state(user_id, {"step": "choose_deal_type", "scope": "dubai", "name": None, "force_report": "last"})
-            await message.answer(tr(user_id, "choose_deal_type"), reply_markup=deal_type_menu(user_id))
+            push_state(user_id, {"step": "building_query", "scope": "building", "force_report": "last"})
+            await message.answer("🧾 Введите название здания для просмотра сделок.\n\nНапример:\n• Grande\n• Address Opera\n• Marina Gate", reply_markup=back_menu(user_id))
             return
 
         if text == "📉 Проверить сделку":
@@ -1983,14 +2100,27 @@ async def main_handler(message: Message):
                 state["period"] = period_key
 
             if state.get("force_report") == "last":
-                state["step"] = "choose_report"
+                state["step"] = "enter_unit_optional"
                 user_states[user_id] = state
-                text = tr(user_id, "last_deals")
+                await message.answer(
+                    "🔢 Введите номер юнита или серию.\n\nНапример:\n• 0804 — конкретный юнит\n• 08 — вся серия\n\nМожно нажать «Пропустить», если номер/серия не нужны.",
+                    reply_markup=kb([[tr(user_id, "skip")], [tr(user_id, "back"), tr(user_id, "main")]])
+                )
+                return
             else:
                 state["step"] = "choose_report"
                 user_states[user_id] = state
                 await message.answer(tr(user_id, "choose_report"), reply_markup=report_menu(user_id))
                 return
+
+        if state.get("step") == "enter_unit_optional":
+            if text == tr(user_id, "skip"):
+                state["unit_query"] = None
+            else:
+                state["unit_query"] = text
+            state["step"] = "choose_report"
+            user_states[user_id] = state
+            text = tr(user_id, "last_deals")
 
         if state.get("step") == "choose_report":
             scope = state.get("scope", "dubai")
@@ -2015,7 +2145,22 @@ async def main_handler(message: Message):
                 note = ""
                 if (used_prop, used_period, used_deal_type) != (prop, period, deal_type):
                     note = "\n\nℹ️ По выбранным фильтрам данных мало, поэтому показал ближайшую доступную выборку."
-                await message.answer(show_stats(title, row, used_prop, used_period, used_deal_type) + note, reply_markup=report_menu(user_id))
+                extra = ""
+                if scope == "dubai":
+                    comp = get_comparison("dubai", None, used_prop, used_period or "3", used_deal_type)
+                    if comp:
+                        c, pr = comp
+                        pc = pct_change(c.get("avg_price"), pr.get("avg_price"))
+                        mc = pct_change(c.get("avg_meter"), pr.get("avg_meter"))
+                        dc = pct_change(c.get("deals"), pr.get("deals"))
+                        extra = (
+                            "\n\n🌆 <b>Резюме по Дубаю</b>\n"
+                            f"Сравнение: {period_window_human(used_period or '3')} против предыдущего аналогичного периода.\n"
+                            f"📊 Сделки: <b>{format_pct(dc)}</b>\n"
+                            f"💰 Средняя цена: <b>{format_pct(pc)}</b>\n"
+                            f"📐 Цена за метр: <b>{format_pct(mc)}</b>\n"
+                        )
+                await message.answer(show_stats(title, row, used_prop, used_period, used_deal_type) + note + extra, reply_markup=report_menu(user_id))
                 return
 
             if text == "💼 Экономическое резюме":
@@ -2044,12 +2189,12 @@ async def main_handler(message: Message):
                 title = "📈 <b>Сравнение периодов</b>"
                 if name:
                     title += f"\n{name}"
-                await message.answer(show_comparison(title, current, previous), reply_markup=report_menu(user_id))
+                await message.answer(show_comparison(title, current, previous, period, deal_type), reply_markup=report_menu(user_id))
                 return
 
             if text == tr(user_id, "last_deals"):
                 await message.answer(tr(user_id, "loading"))
-                rows, used_prop, used_period, used_deal_type = get_latest_deals_smart(scope, name, prop, period, deal_type)
+                rows, used_prop, used_period, used_deal_type = get_latest_deals_smart(scope, name, prop, period, deal_type, unit_query=state.get("unit_query"))
                 if not rows:
                     await message.answer(no_data_message("Последние сделки"), reply_markup=report_menu(user_id))
                     return
