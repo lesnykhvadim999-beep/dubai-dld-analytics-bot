@@ -48,13 +48,7 @@ PRICE = num_sql("actual_worth")
 METER_PRICE = num_sql("meter_sale_price")
 RENT_VALUE = num_sql("rent_value")
 
-BUILDING_NAME = """
-COALESCE(
-    NULLIF(building_name_en, ''),
-    NULLIF(building_name_en, ''),
-    NULLIF(building_name_en, '')
-)
-"""
+BUILDING_NAME = "COALESCE(building_name_en::text, '')"
 
 
 TEXTS = {
@@ -407,16 +401,6 @@ def area_alias_values(query):
 
 
 def make_area_exact_condition(query):
-    """
-    Строгий поиск района.
-
-    Важно:
-    - JVC не ищем как слово JVC в DLD, потому что в DLD его часто нет.
-    - JVC подменяем на реальные DLD area_name_en:
-      Al Barsha South Fourth / Fifth / Al Hebiah First.
-    - Downtown подменяем на Burj Khalifa.
-    - Marina подменяем на Marsa Dubai.
-    """
     values = [v for v in area_alias_values(query) if v]
 
     if not values:
@@ -426,37 +410,26 @@ def make_area_exact_condition(query):
     parts = []
 
     for value in values:
-        parts.append("area_name_en ILIKE %s")
+        parts.append("COALESCE(area_name_en::text, '') ILIKE %s")
         params.append(f"%{value}%")
 
     return "AND (" + " OR ".join(parts) + ")", params
 
 
-
-BUILDING_ALIASES = {
-    "address opera": ["address", "opera"],
-    "the address opera": ["address", "opera"],
-    "address residences dubai opera": ["address", "opera"],
-    "address residence dubai opera": ["address", "opera"],
-    "dubai opera address": ["address", "opera"],
-
-    "grande": ["grande"],
-    "grande signature": ["grande"],
-    "grande signature residences": ["grande"],
-
-    "burj vista": ["burj", "vista"],
-    "marina gate": ["marina", "gate"],
-    "binghatti corner": ["binghatti", "corner"],
-    "stax": ["stax"],
-}
+def txt(column):
+    return f"COALESCE({column}::text, '')"
 
 
-STOP_WORDS = {
-    "the", "a", "an", "of", "by", "at", "in", "on",
-    "dubai", "residence", "residences", "tower", "towers",
-    "apartment", "apartments", "building", "block", "phase",
-    "hotel", "homes", "home"
-}
+def null_txt(column):
+    return f"NULLIF(COALESCE({column}::text, ''), '')"
+
+
+ROOMS_TXT = txt("rooms_en")
+PROPERTY_TYPE_TXT = txt("property_type_en")
+PROPERTY_SUB_TYPE_TXT = txt("property_sub_type_en")
+PROCEDURE_TXT = txt("procedure_name_en")
+AREA_TXT = txt("area_name_en")
+BUILDING_TXT = txt("building_name_en")
 
 
 def normalize_search_text(value):
@@ -518,18 +491,18 @@ def make_deal_type_condition(deal_type):
     if "sale" in d or "прод" in d or "🏠" in d:
         return """
         AND (
-            procedure_name_en ILIKE %s
-            OR procedure_name_en ILIKE %s
-            OR procedure_name_en ILIKE %s
+            COALESCE(procedure_name_en::text, '') ILIKE %s
+            OR COALESCE(procedure_name_en::text, '') ILIKE %s
+            OR COALESCE(procedure_name_en::text, '') ILIKE %s
         )
         """, ["%sale%", "%sell%", "%sales%"]
 
     if "rent" in d or "lease" in d or "аренд" in d or "🔑" in d:
         return """
         AND (
-            procedure_name_en ILIKE %s
-            OR procedure_name_en ILIKE %s
-            OR procedure_name_en ILIKE %s
+            COALESCE(procedure_name_en::text, '') ILIKE %s
+            OR COALESCE(procedure_name_en::text, '') ILIKE %s
+            OR COALESCE(procedure_name_en::text, '') ILIKE %s
         )
         """, ["%rent%", "%lease%", "%rental%"]
 
@@ -545,9 +518,9 @@ def property_condition(prop):
     if p == "studio":
         return """
         AND (
-            rooms_en ILIKE %s
-            OR property_type_en ILIKE %s
-            OR property_sub_type_en ILIKE %s
+            COALESCE(rooms_en::text, '') ILIKE %s
+            OR COALESCE(property_type_en::text, '') ILIKE %s
+            OR COALESCE(property_sub_type_en::text, '') ILIKE %s
         )
         """, ["%studio%", "%studio%", "%studio%"]
 
@@ -555,39 +528,39 @@ def property_condition(prop):
         n = p.split()[0]
         return """
         AND (
-            rooms_en ILIKE %s
-            OR rooms_en ILIKE %s
-            OR property_type_en ILIKE %s
-            OR property_sub_type_en ILIKE %s
+            COALESCE(rooms_en::text, '') ILIKE %s
+            OR COALESCE(rooms_en::text, '') ILIKE %s
+            OR COALESCE(property_type_en::text, '') ILIKE %s
+            OR COALESCE(property_sub_type_en::text, '') ILIKE %s
         )
         """, [f"%{n}%", f"%{n} B/R%", f"%{n}%", f"%{n}%"]
 
     if p == "5 br+":
         return """
         AND (
-            rooms_en ILIKE %s OR rooms_en ILIKE %s OR rooms_en ILIKE %s
-            OR rooms_en ILIKE %s OR rooms_en ILIKE %s
-            OR property_type_en ILIKE %s OR property_sub_type_en ILIKE %s
+            COALESCE(rooms_en::text, '') ILIKE %s OR COALESCE(rooms_en::text, '') ILIKE %s OR COALESCE(rooms_en::text, '') ILIKE %s
+            OR COALESCE(rooms_en::text, '') ILIKE %s OR COALESCE(rooms_en::text, '') ILIKE %s
+            OR COALESCE(property_type_en::text, '') ILIKE %s OR COALESCE(property_sub_type_en::text, '') ILIKE %s
         )
         """, ["%5%", "%6%", "%7%", "%8%", "%9%", "%5%", "%5%"]
 
     if p == "villa":
-        return "AND (property_type_en ILIKE %s OR property_sub_type_en ILIKE %s)", ["%villa%", "%villa%"]
+        return "AND (COALESCE(property_type_en::text, '') ILIKE %s OR COALESCE(property_sub_type_en::text, '') ILIKE %s)", ["%villa%", "%villa%"]
 
     if p == "townhouse":
-        return "AND (property_type_en ILIKE %s OR property_sub_type_en ILIKE %s)", ["%town%", "%town%"]
+        return "AND (COALESCE(property_type_en::text, '') ILIKE %s OR COALESCE(property_sub_type_en::text, '') ILIKE %s)", ["%town%", "%town%"]
 
     if p == "penthouse":
-        return "AND (property_type_en ILIKE %s OR property_sub_type_en ILIKE %s)", ["%penthouse%", "%penthouse%"]
+        return "AND (COALESCE(property_type_en::text, '') ILIKE %s OR COALESCE(property_sub_type_en::text, '') ILIKE %s)", ["%penthouse%", "%penthouse%"]
 
     if p == "apartment":
-        return "AND (property_type_en ILIKE %s OR property_sub_type_en ILIKE %s OR property_sub_type_en ILIKE %s)", ["%apartment%", "%apartment%", "%flat%"]
+        return "AND (COALESCE(property_type_en::text, '') ILIKE %s OR COALESCE(property_sub_type_en::text, '') ILIKE %s OR COALESCE(property_sub_type_en::text, '') ILIKE %s)", ["%apartment%", "%apartment%", "%flat%"]
 
     if p == "office":
-        return "AND (property_type_en ILIKE %s OR property_sub_type_en ILIKE %s)", ["%office%", "%office%"]
+        return "AND (COALESCE(property_type_en::text, '') ILIKE %s OR COALESCE(property_sub_type_en::text, '') ILIKE %s)", ["%office%", "%office%"]
 
     if p == "shop":
-        return "AND (property_type_en ILIKE %s OR property_sub_type_en ILIKE %s)", ["%shop%", "%shop%"]
+        return "AND (COALESCE(property_type_en::text, '') ILIKE %s OR COALESCE(property_sub_type_en::text, '') ILIKE %s)", ["%shop%", "%shop%"]
 
     return "", []
 
@@ -671,18 +644,22 @@ def building_aliases(name):
     return aliases.get(q, [name])
 
 def building_exact_condition_for_name(name):
-    name = (name or "").strip()
+    name = clean_query(name)
     aliases = building_aliases(name)
 
     conditions = []
     params = []
 
     for alias in aliases:
-        conditions.append("LOWER(building_name_en) = LOWER(%s)")
-        params.append(alias)
+        conditions.append("COALESCE(building_name_en::text, '') ILIKE %s")
+        params.append(f"%{alias}%")
 
-    conditions.append("building_name_en ILIKE %s")
-    params.append(f"%{name}%")
+    if name:
+        conditions.append("COALESCE(building_name_en::text, '') ILIKE %s")
+        params.append(f"%{name}%")
+
+    if not conditions:
+        return "AND 1=0", []
 
     return "AND (" + " OR ".join(conditions) + ")", params
 
@@ -792,17 +769,17 @@ def get_stats(scope="dubai", name=None, prop=None, period=None, deal_type=None):
                 cur.execute(f"""
                     SELECT
                         COUNT(*) AS deals,
-                        COUNT(DISTINCT {BUILDING_NAME}) AS buildings,
-                        COUNT(DISTINCT area_name_en) AS areas,
+                        COUNT(DISTINCT COALESCE(building_name_en::text, '')) AS buildings,
+                        COUNT(DISTINCT COALESCE(area_name_en::text, '')) AS areas,
                         AVG({PRICE}) AS avg_price,
                         MIN({PRICE}) AS min_price,
                         MAX({PRICE}) AS max_price,
                         AVG({METER_PRICE}) AS avg_meter,
                         MIN(safe_date) AS first_deal,
                         MAX(safe_date) AS last_deal,
-                        STRING_AGG(DISTINCT NULLIF(rooms_en, ''), ', ') AS rooms_list,
-                        STRING_AGG(DISTINCT NULLIF(property_type_en, ''), ', ') AS property_types,
-                        STRING_AGG(DISTINCT NULLIF(property_sub_type_en, ''), ', ') AS property_sub_types
+                        STRING_AGG(DISTINCT NULLIF(COALESCE(rooms_en::text, ''), ''), ', ') AS rooms_list,
+                        STRING_AGG(DISTINCT NULLIF(COALESCE(property_type_en::text, ''), ''), ', ') AS property_types,
+                        STRING_AGG(DISTINCT NULLIF(COALESCE(property_sub_type_en::text, ''), ''), ', ') AS property_sub_types
                     {base_from()}
                       {where}
                       {prop_sql}
@@ -916,14 +893,14 @@ def get_latest_deals(scope, name, prop=None, period=None, deal_type=None, limit=
                 cur.execute(f"""
                     SELECT
                         safe_date,
-                        procedure_name_en,
-                        rooms_en,
-                        property_type_en,
-                        property_sub_type_en,
+                        COALESCE(procedure_name_en::text, '') AS procedure_name_en,
+                        COALESCE(rooms_en::text, '') AS rooms_en,
+                        COALESCE(property_type_en::text, '') AS property_type_en,
+                        COALESCE(property_sub_type_en::text, '') AS property_sub_type_en,
                         {PRICE} AS price,
                         {METER_PRICE} AS meter_price,
-                        building_name_en,
-                        area_name_en
+                        COALESCE(building_name_en::text, '') AS building_name_en,
+                        COALESCE(area_name_en::text, '') AS area_name_en
                     {base_from()}
                       {scope_sql}
                       AND {PRICE} IS NOT NULL
@@ -991,8 +968,8 @@ def get_top_buildings_in_scope(scope="dubai", name=None, period=None, deal_type=
             with conn.cursor() as cur:
                 cur.execute(f"""
                     SELECT
-                        {BUILDING_NAME} AS building_name_en,
-                        area_name_en,
+                        COALESCE(building_name_en::text, '') AS building_name_en,
+                        COALESCE(area_name_en::text, '') AS area_name_en,
                         COUNT(*) AS deals,
                         AVG({PRICE}) AS avg_price,
                         AVG({METER_PRICE}) AS avg_meter
@@ -1000,9 +977,9 @@ def get_top_buildings_in_scope(scope="dubai", name=None, period=None, deal_type=
                       {where}
                       {deal_sql}
                       {period_condition(period)}
-                      AND {BUILDING_NAME} IS NOT NULL
+                      AND COALESCE(building_name_en::text, '') <> ''
                       AND {PRICE} IS NOT NULL
-                    GROUP BY {BUILDING_NAME}, area_name_en
+                    GROUP BY COALESCE(building_name_en::text, ''), COALESCE(area_name_en::text, '')
                     ORDER BY deals DESC
                     LIMIT %s
                 """, params)
@@ -1059,7 +1036,7 @@ def quick_area_report(display_name, row, comparison=None, top_buildings=None):
 
     text = (
         f"🏙 <b>Статистика района: {display_name}</b>\n\n"
-        f"📊 Сделок: <b>{row['deals']:,}</b>\n"
+        f"📊 Сделок: <b>{format_int(row.get('deals'))}</b>\n"
         f"🏢 Зданий: <b>{row.get('buildings') or 0:,}</b>\n"
         f"💰 Средняя цена: <b>{format_money(row['avg_price'])}</b>\n"
         f"📐 Средняя цена за метр: <b>{format_money(row['avg_meter'])}</b>\n"
@@ -1350,9 +1327,9 @@ def show_stats(title, row, prop=None, period=None, deal_type=None):
         f"📊 Сделка: <b>{deal_type or 'все'}</b>\n"
         f"🏠 Тип/комнаты: <b>{prop or 'все'}</b>\n"
         f"📅 Период: <b>{period_label(period)}</b>\n\n"
-        f"📊 Сделок: <b>{row['deals']:,}</b>\n"
-        f"🏢 Зданий: <b>{row.get('buildings') or 0}</b>\n"
-        f"📍 Районов: <b>{row.get('areas') or 0}</b>\n"
+        f"📊 Сделок: <b>{format_int(row.get('deals'))}</b>\n"
+        f"🏢 Зданий: <b>{format_int(row.get('buildings'))}</b>\n"
+        f"📍 Районов: <b>{format_int(row.get('areas'))}</b>\n"
         f"💰 Средняя цена: <b>{format_money(row['avg_price'])}</b>\n"
         f"🔻 Минимальная цена: <b>{format_money(row['min_price'])}</b>\n"
         f"🔺 Максимальная цена: <b>{format_money(row['max_price'])}</b>\n"
@@ -1376,11 +1353,11 @@ def show_comparison(title, current, previous):
     return (
         f"{title}\n\n"
         f"<b>Текущий период:</b>\n"
-        f"📊 Сделок: <b>{current['deals']:,}</b>\n"
+        f"📊 Сделок: <b>{format_int(current.get('deals'))}</b>\n"
         f"💰 Средняя цена: <b>{format_money(current['avg_price'])}</b>\n"
         f"📐 Цена за метр: <b>{format_money(current['avg_meter'])}</b>\n\n"
         f"<b>Предыдущий такой же период:</b>\n"
-        f"📊 Сделок: <b>{previous['deals']:,}</b>\n"
+        f"📊 Сделок: <b>{format_int(previous.get('deals'))}</b>\n"
         f"💰 Средняя цена: <b>{format_money(previous['avg_price'])}</b>\n"
         f"📐 Цена за метр: <b>{format_money(previous['avg_meter'])}</b>\n\n"
         f"<b>Динамика:</b>\n"
