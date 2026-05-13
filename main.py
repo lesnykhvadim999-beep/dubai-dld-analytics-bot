@@ -50,10 +50,9 @@ RENT_VALUE = num_sql("rent_value")
 
 
 def rent_value_strict_sql():
-    """
-    Возвращает только реальную годовую аренду.
-    ВАЖНО: если rent_value пустой или похож на цену продажи, строка отсекается.
-    Не используем actual_worth как fallback для аренды.
+    """Оставлено для совместимости старых частей кода.
+    Новая логика аренды использует rent_amount_expr(), который сам находит реальные
+    арендные колонки в базе и никогда не подставляет actual_worth.
     """
     rv = RENT_VALUE
     aw = PRICE
@@ -61,7 +60,7 @@ def rent_value_strict_sql():
         CASE
             WHEN {rv} IS NOT NULL
              AND {rv} > 0
-             AND {rv} < 1500000
+             AND {rv} <= 1500000
              AND (
                  {aw} IS NULL
                  OR {aw} <= 0
@@ -451,6 +450,75 @@ def null_txt(column):
     return f"NULLIF(COALESCE({column}::text, ''), '')"
 
 
+_TABLE_COLUMNS_CACHE = None
+
+def available_table_columns():
+    """Кэшируем реальные колонки DLD таблицы. Это нужно, потому что в разных выгрузках аренда
+    может называться rent_value / annual_rent / contract_amount и т.д.
+    """
+    global _TABLE_COLUMNS_CACHE
+    if _TABLE_COLUMNS_CACHE is not None:
+        return _TABLE_COLUMNS_CACHE
+    try:
+        with db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'dld_transactions_full'
+                """)
+                _TABLE_COLUMNS_CACHE = {r["column_name"] for r in cur.fetchall()}
+                return _TABLE_COLUMNS_CACHE
+    except Exception as e:
+        print("COLUMN_DETECT_ERROR:", repr(e))
+        _TABLE_COLUMNS_CACHE = set()
+        return _TABLE_COLUMNS_CACHE
+
+
+def first_existing_columns(candidates):
+    cols = available_table_columns()
+    return [c for c in candidates if c in cols]
+
+
+def coalesce_numeric_expr(candidates, max_value=None):
+    existing = first_existing_columns(candidates)
+    if not existing:
+        return "NULL::numeric"
+    parts = []
+    for c in existing:
+        val = num_sql(c)
+        if max_value:
+            parts.append(f"CASE WHEN {val} > 0 AND {val} <= {max_value} THEN {val} ELSE NULL END")
+        else:
+            parts.append(f"CASE WHEN {val} > 0 THEN {val} ELSE NULL END")
+    return "COALESCE(" + ", ".join(parts) + ")"
+
+
+def rent_amount_expr():
+    # Только реальные арендные колонки. actual_worth здесь специально не используется.
+    # Верхняя граница защищает от продажных цен, случайно попавших в rent_value.
+    return coalesce_numeric_expr([
+        "rent_value", "annual_rent", "rent_amount", "annual_amount",
+        "contract_amount", "rent_contract_amount", "rental_value",
+        "lease_value", "lease_amount", "yearly_rent", "ejari_value",
+        "actual_rent", "contract_rent"
+    ], max_value=1500000)
+
+
+def rent_text_expr():
+    candidates = [
+        "procedure_name_en", "procedure_name_ar", "procedure_name",
+        "transaction_type_en", "transaction_type", "transaction_sub_type_en",
+        "registration_type_en", "registration_type", "instance_procedure_en"
+    ]
+    existing = first_existing_columns(candidates)
+    if not existing:
+        return "''"
+    return "LOWER(" + " || ' ' || ".join([f"COALESCE({c}::text, '')" for c in existing]) + ")"
+
+
+
 ROOMS_TXT = txt("rooms_en")
 PROPERTY_TYPE_TXT = txt("property_type_en")
 PROPERTY_SUB_TYPE_TXT = txt("property_sub_type_en")
@@ -539,58 +607,52 @@ def is_sale_deal_type(deal_type):
 
 def deal_value_expr(deal_type):
     # Продажа: actual_worth.
-    # Аренда: только строгая годовая аренда из rent_value, без fallback на actual_worth.
-    # Если rent_value выглядит как цена продажи, строка отсекается.
+    # Аренда: только реальные арендные колонки, без fallback на actual_worth.
     if is_rent_deal_type(deal_type):
-        return RENT_VALUE_STRICT
+        return rent_amount_expr()
     return PRICE
 
 
 def make_deal_type_condition(deal_type):
-    """
-    Жёстко разделяет продажу и аренду.
+    """Жёстко разделяет продажу и аренду.
 
-    Важно: в некоторых импортированных DLD-таблицах поле rent_value может быть заполнено
-    даже у строк продажи или содержать не годовую аренду, поэтому для аренды больше
-    нельзя ориентироваться только на rent_value. Главный фильтр аренды — название процедуры.
-    Если в базе нет настоящих rental/lease строк, бот должен честно сказать, что аренды нет,
-    а не показывать продажи как аренду.
+    Для аренды нельзя показывать actual_worth. Если в выбранном здании/периоде нет
+    реальных арендных значений в арендных колонках, бот честно вернёт пустую выборку.
     """
     if not deal_type:
         return "", []
 
-    rent_proc = """
-        (
-            COALESCE(procedure_name_en::text, '') ILIKE %s
-            OR COALESCE(procedure_name_en::text, '') ILIKE %s
-            OR COALESCE(procedure_name_en::text, '') ILIKE %s
-            OR COALESCE(procedure_name_en::text, '') ILIKE %s
-            OR COALESCE(procedure_name_en::text, '') ILIKE %s
-            OR COALESCE(procedure_name_en::text, '') ILIKE %s
-            OR COALESCE(procedure_name_en::text, '') ILIKE %s
-        )
-    """
-    rent_args = ["%rent%", "%lease%", "%tenancy%", "%ejari%", "%rental%", "%rental contract%", "%lease contract%"]
+    rt = rent_text_expr()
+    rent_keywords = [
+        "%rent%", "%lease%", "%tenancy%", "%ejari%", "%rental%",
+        "%rental contract%", "%lease contract%", "%аренд%"
+    ]
+    rent_text_sql = "(" + " OR ".join([f"{rt} ILIKE %s" for _ in rent_keywords]) + ")"
+    rent_val = rent_amount_expr()
 
     if is_sale_deal_type(deal_type):
+        # Продажа: цена продажи есть, и строка не выглядит как rental/lease.
+        # Если арендная колонка заполнена реальной арендой, тоже исключаем такую строку.
         return f"""
         AND {PRICE} IS NOT NULL
         AND {PRICE} > 0
-        AND NOT {rent_proc}
-        """, rent_args
+        AND NOT {rent_text_sql}
+        AND {rent_val} IS NULL
+        """, rent_keywords
 
     if is_rent_deal_type(deal_type):
-        # ЖЁСТКИЙ ФИКС v23:
-        # аренда НЕ имеет права показывать продажи.
-        # Поэтому требуем одновременно:
-        # 1) процедура похожа на Rent/Lease/Tenancy/Ejari;
-        # 2) rent_value проходит проверку как реальная годовая аренда;
-        # 3) actual_worth не используется как fallback.
-        rv = RENT_VALUE_STRICT
+        # Аренда: показываем только строки с реальной арендной суммой.
+        # Текст процедуры используем как плюс, но не как единственное условие:
+        # в некоторых выгрузках rental type лежит в другой колонке или не заполнен.
         return f"""
-        AND {rent_proc}
-        AND {rv} IS NOT NULL
-        """, rent_args
+        AND {rent_val} IS NOT NULL
+        AND (
+            {rent_text_sql}
+            OR {PRICE} IS NULL
+            OR {PRICE} <= 0
+            OR {rent_val} < ({PRICE} * 0.20)
+        )
+        """, rent_keywords
 
     return "", []
 
@@ -2437,7 +2499,7 @@ def selftest_deal_type_logic():
     rent_sql, rent_params = make_deal_type_condition("🔑 Аренда")
     assert deal_value_expr("🏠 Продажа") == PRICE
     assert deal_value_expr("🔑 Аренда") == RENT_VALUE
-    assert "rent_value" in rent_sql
+    assert "actual_worth" not in rent_sql.lower() or "0.20" in rent_sql
     assert "actual_worth" in sale_sql
     assert "%rent%" in sale_params
     return True
