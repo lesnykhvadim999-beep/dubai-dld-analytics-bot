@@ -12,6 +12,8 @@ import re
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
+BOT_VERSION = "v7_no_railway_debug_2026_05_13"
+
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -92,7 +94,7 @@ TEXTS = {
         "enter_price": "💰 Введите цену объекта в AED.\n\nНапример: 2500000",
         "enter_size": "📐 Введите площадь объекта в sq.ft.\n\nНапример: 850",
         "loading": "⏳ Считаю аналитику по DLD базе...",
-        "error": "⚠️ Возникла ошибка при расчёте. Пришлите лог Railway, сэр.",
+        "error": "⚠️ Не удалось посчитать этот запрос. Попробуйте другое название или вернитесь в главное меню.",
         "choose_deal_type": "📊 Выберите тип сделки:",
         "sale": "🏠 Продажа",
         "rent": "🔑 Аренда",
@@ -132,7 +134,7 @@ TEXTS = {
         "enter_price": "💰 Enter price in AED.\n\nExample: 2500000",
         "enter_size": "📐 Enter size in sq.ft.\n\nExample: 850",
         "loading": "⏳ Calculating DLD analytics...",
-        "error": "⚠️ Calculation error. Please send Railway logs.",
+        "error": "⚠️ Could not calculate this request. Please try another name or return to the main menu.",
         "choose_deal_type": "📊 Choose deal type:",
         "sale": "🏠 Sale",
         "rent": "🔑 Rent",
@@ -172,7 +174,7 @@ TEXTS = {
         "enter_price": "💰 أدخل السعر بالدرهم.\n\nمثال: 2500000",
         "enter_size": "📐 أدخل المساحة بالقدم المربع.\n\nمثال: 850",
         "loading": "⏳ يتم حساب تحليلات DLD...",
-        "error": "⚠️ حدث خطأ في الحساب.",
+        "error": "⚠️ تعذر حساب هذا الطلب. جرّب اسماً آخر أو ارجع إلى القائمة الرئيسية.",
         "choose_deal_type": "📊 اختر نوع الصفقة:",
         "sale": "🏠 بيع",
         "rent": "🔑 إيجار",
@@ -367,6 +369,16 @@ def go_back(user_id):
 
 def reset_to_main(user_id):
     user_states[user_id] = {}
+
+
+
+def format_int(value):
+    if value is None:
+        return "0"
+    try:
+        return f"{int(value):,}".replace(",", " ")
+    except Exception:
+        return str(value)
 
 
 def format_money(value):
@@ -611,40 +623,95 @@ def base_from():
     """
 
 
+
+def safe_building_label(row):
+    if not row:
+        return ""
+    return (
+        row.get("building_name_en")
+        or row.get("project_name_en")
+        or row.get("master_project_en")
+        or ""
+    )
+
+
+def building_exact_condition_for_name(name):
+    return """
+    AND (
+        building_name_en = %s
+        OR project_name_en = %s
+        OR master_project_en = %s
+        OR LOWER(building_name_en) = LOWER(%s)
+        OR LOWER(project_name_en) = LOWER(%s)
+        OR LOWER(master_project_en) = LOWER(%s)
+    )
+    """, [name, name, name, name, name, name]
+
+
 def find_buildings(query, limit=10):
-    search_sql, params = make_building_condition(query)
     q = normalize_search_text(query)
     tokens = smart_query_tokens(query)
-    expr = building_search_expression()
 
-    # ranking params:
-    # exact full phrase, startswith, and token count hits
-    rank_params = [q, f"{q}%"] + [f"%{t}%" for t in tokens] + params + [limit]
+    if not tokens:
+        return []
+
+    expr = """
+    LOWER(
+        COALESCE(building_name_en, '') || ' ' ||
+        COALESCE(project_name_en, '') || ' ' ||
+        COALESCE(master_project_en, '') || ' ' ||
+        COALESCE(area_name_en, '')
+    )
+    """
+
+    token_conditions = " AND ".join([f"{expr} ILIKE %s" for _ in tokens])
+    token_params = [f"%{t}%" for t in tokens]
 
     token_score_sql = " + ".join([f"CASE WHEN {expr} ILIKE %s THEN 1 ELSE 0 END" for _ in tokens]) or "0"
 
-    with db() as conn:
-        with conn.cursor() as cur:
-            cur.execute(f"""
-                SELECT
-                    {BUILDING_NAME} AS building_name_en,
-                    area_name_en,
-                    COUNT(*) AS deals,
-                    CASE
-                        WHEN {expr} = %s THEN 1000
-                        WHEN {expr} ILIKE %s THEN 700
-                        ELSE 0
-                    END
-                    + ({token_score_sql}) * 100
-                    + LEAST(COUNT(*), 500) AS relevance_score
-                {base_from()}
-                  AND {BUILDING_NAME} IS NOT NULL
-                  {search_sql}
-                GROUP BY {BUILDING_NAME}, area_name_en
-                ORDER BY relevance_score DESC, deals DESC
-                LIMIT %s
-            """, rank_params)
-            return cur.fetchall()
+    alias_bonus = 0
+    if q in ["grande", "grande signature", "grande signature residences"]:
+        tokens = ["grande"]
+        token_conditions = f"{expr} ILIKE %s"
+        token_params = ["%grande%"]
+        token_score_sql = f"CASE WHEN {expr} ILIKE %s THEN 1 ELSE 0 END"
+        alias_bonus = 500
+    elif q in ["address opera", "the address opera", "address residences dubai opera"]:
+        tokens = ["address", "opera"]
+        token_conditions = f"{expr} ILIKE %s AND {expr} ILIKE %s"
+        token_params = ["%address%", "%opera%"]
+        token_score_sql = f"CASE WHEN {expr} ILIKE %s THEN 1 ELSE 0 END + CASE WHEN {expr} ILIKE %s THEN 1 ELSE 0 END"
+        alias_bonus = 500
+
+    rank_params = [q, f"{q}%"] + [f"%{t}%" for t in tokens] + token_params + [limit]
+
+    try:
+        with db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT
+                        COALESCE(NULLIF(building_name_en, ''), NULLIF(project_name_en, ''), NULLIF(master_project_en, '')) AS building_name_en,
+                        area_name_en,
+                        COUNT(*) AS deals,
+                        CASE
+                            WHEN {expr} = %s THEN 1000
+                            WHEN {expr} ILIKE %s THEN 700
+                            ELSE 0
+                        END
+                        + ({token_score_sql}) * 100
+                        + {alias_bonus}
+                        + LEAST(COUNT(*), 500) AS relevance_score
+                    {base_from()}
+                      AND COALESCE(building_name_en, project_name_en, master_project_en) IS NOT NULL
+                      AND ({token_conditions})
+                    GROUP BY COALESCE(NULLIF(building_name_en, ''), NULLIF(project_name_en, ''), NULLIF(master_project_en, '')), area_name_en
+                    ORDER BY relevance_score DESC, deals DESC
+                    LIMIT %s
+                """, rank_params)
+                return cur.fetchall()
+    except Exception as e:
+        print("FIND BUILDINGS ERROR:", repr(e))
+        return []
 
 
 def find_areas(query, limit=10):
@@ -1324,19 +1391,36 @@ async def show_current_state_prompt(message, state):
 
 async def start_building_search_from_text(message, text):
     user_id = message.from_user.id
-    await message.answer("🔎 Ищу похожие здания...")
-    rows = find_buildings(text)
+
+    try:
+        await message.answer("🔎 Ищу похожие здания...")
+        rows = find_buildings(text)
+    except Exception as e:
+        print("START BUILDING SEARCH ERROR:", repr(e))
+        rows = []
 
     if not rows:
-        await message.answer(tr(user_id, "not_found"), reply_markup=back_menu(user_id))
         user_states[user_id] = {
             "step": "building_query",
             "scope": "building",
             "history": user_states.get(user_id, {}).get("history", [])
         }
+        await message.answer(
+            "❌ Ничего не найдено. Попробуйте ввести иначе.\n\n"
+            "Примеры:\n"
+            "• Grande\n"
+            "• Address Opera\n"
+            "• Marina Gate\n"
+            "• Burj Vista",
+            reply_markup=back_menu(user_id)
+        )
         return
 
-    suggestions = [r["building_name_en"] for r in rows if r["building_name_en"]]
+    suggestions = []
+    for r in rows:
+        name = r.get("building_name_en")
+        if name and name not in suggestions:
+            suggestions.append(name)
 
     user_states[user_id] = {
         "step": "choose_building",
@@ -1345,19 +1429,23 @@ async def start_building_search_from_text(message, text):
         "history": user_states.get(user_id, {}).get("history", [])
     }
 
-    buttons = [[name] for name in suggestions[:10]]
+    buttons = [[name] for name in suggestions[:8]]
     buttons.append([tr(user_id, "back"), tr(user_id, "main")])
 
     response = tr(user_id, "choose_building") + "\n\n"
-    for i, r in enumerate(rows, 1):
-        response += f"{i}. {r['building_name_en']} — {r['area_name_en']} ({format_int(r['deals'])} сделок)\n"
+    for i, r in enumerate(rows[:8], 1):
+        response += (
+            f"{i}. <b>{r.get('building_name_en')}</b>\n"
+            f"   📍 {r.get('area_name_en') or '-'} · 📊 {format_int(r.get('deals') or 0)} сделок\n"
+        )
 
     await message.answer(response, reply_markup=kb(buttons))
+
 
 @dp.message(CommandStart())
 async def start_handler(message: Message):
     user_states[message.from_user.id] = {}
-    await message.answer(TEXTS["ru"]["choose_lang"], reply_markup=language_menu())
+    await message.answer(TEXTS["ru"]["choose_lang"] + "\n\n<code>" + BOT_VERSION + "</code>", reply_markup=language_menu())
 
 
 @dp.message(lambda m: m.text in ["🇷🇺 Русский", "🇬🇧 English", "🇦🇪 العربية"])
@@ -1380,6 +1468,9 @@ async def main_handler(message: Message):
     state = user_states.get(user_id, {})
 
     try:
+        if text == "/version":
+            await message.answer("✅ Работает файл: <code>" + BOT_VERSION + "</code>")
+            return
         if text == tr(user_id, "main"):
             reset_to_main(user_id)
             await message.answer(tr(user_id, "main_menu"), reply_markup=main_menu(user_id))
@@ -1870,7 +1961,14 @@ async def main_handler(message: Message):
 
     except Exception as e:
         print("ERROR:", repr(e))
-        await message.answer(tr(user_id, "error"), reply_markup=main_menu(user_id))
+        current_state = user_states.get(user_id, {})
+        if current_state.get("step") in ["building_query", "choose_building"]:
+            await message.answer(
+                "⚠️ Поиск временно не отработал. Попробуйте ввести название иначе, например: Grande или Address Opera.",
+                reply_markup=back_menu(user_id)
+            )
+        else:
+            await message.answer("⚠️ Не удалось выполнить расчёт. Попробуйте другой запрос или вернитесь в главное меню.", reply_markup=main_menu(user_id))
 
 
 async def main():
