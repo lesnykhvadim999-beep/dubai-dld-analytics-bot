@@ -30,38 +30,190 @@ bot = Bot(
 
 dp = Dispatcher()
 
-TABLE = "public.dld_transactions_full"
+SALES_TABLE = "public.dld_transactions_full"
+RENTS_TABLE = "public.dld_rents"
 
 user_languages = {}
 user_states = {}
+_SCHEMA_CACHE = {}
 
 
 def db():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
 
-def num_sql(column):
-    return f"NULLIF(regexp_replace({column}, '[^0-9.]', '', 'g'), '')::numeric"
+def parse_table_name(full_name: str):
+    if "." in full_name:
+        schema, table = full_name.split(".", 1)
+        return schema, table
+    return "public", full_name
 
 
-PRICE = num_sql("actual_worth")
-METER_PRICE = num_sql("meter_sale_price")
-RENT_VALUE = num_sql("rent_value")
+def qident(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
 
-BUILDING_NAME = """
-COALESCE(
-    NULLIF(building_name_en, ''),
-    NULLIF(project_name_en, ''),
-    NULLIF(master_project_en, '')
-)
-"""
+
+def get_columns(table_full_name: str):
+    table_full_name = table_full_name.strip()
+    if table_full_name in _SCHEMA_CACHE:
+        return _SCHEMA_CACHE[table_full_name]
+
+    schema, table = parse_table_name(table_full_name)
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = %s
+                  AND table_name = %s
+                ORDER BY ordinal_position
+                """,
+                [schema, table]
+            )
+            cols = {r["column_name"] for r in cur.fetchall()}
+
+    _SCHEMA_CACHE[table_full_name] = cols
+    return cols
+
+
+def first_col(cols, candidates):
+    for c in candidates:
+        if c in cols:
+            return c
+    return None
+
+
+def coalesce_expr(cols, candidates, alias=None):
+    parts = []
+    for c in candidates:
+        if c in cols:
+            parts.append(f"NULLIF({qident(c)}::text, '')")
+    if not parts:
+        expr = "NULL::text"
+    elif len(parts) == 1:
+        expr = parts[0]
+    else:
+        expr = "COALESCE(" + ", ".join(parts) + ")"
+    if alias:
+        return f"{expr} AS {alias}"
+    return expr
+
+
+def numeric_expr(cols, candidates):
+    c = first_col(cols, candidates)
+    if not c:
+        return "NULL::numeric"
+    return f"NULLIF(regexp_replace({qident(c)}::text, '[^0-9.]', '', 'g'), '')::numeric"
+
+
+def date_expr(cols, candidates):
+    c = first_col(cols, candidates)
+    if not c:
+        return "NULL::date"
+    return f"""
+        CASE
+            WHEN {qident(c)}::text ~ '^\\d{{4}}-\\d{{2}}-\\d{{2}}'
+            THEN LEFT({qident(c)}::text, 10)::date
+            ELSE NULL
+        END
+    """
+
+
+def sql_ilike_on_expr(expr, n):
+    return "(" + " OR ".join([f"{expr} ILIKE %s" for _ in range(n)]) + ")"
+
+
+class Source:
+    def __init__(self, kind: str):
+        self.kind = kind
+        self.table = SALES_TABLE if kind == "sale" else RENTS_TABLE
+        self.cols = get_columns(self.table)
+
+        if kind == "sale":
+            self.date = date_expr(self.cols, ["instance_date", "transaction_date", "procedure_date", "trans_date", "date"])
+            self.building = coalesce_expr(self.cols, [
+                "building_name_en", "project_name_en", "master_project_en", "building_name", "project_name"
+            ])
+            self.area = coalesce_expr(self.cols, ["area_name_en", "area_name", "area", "area_en"])
+            self.rooms = coalesce_expr(self.cols, ["rooms_en", "rooms", "rooms_ar"])
+            self.property_type = coalesce_expr(self.cols, ["property_type_en", "property_type", "property_usage_en"])
+            self.property_sub_type = coalesce_expr(self.cols, ["property_sub_type_en", "property_sub_type", "property_usage_en"])
+            self.price = numeric_expr(self.cols, ["actual_worth", "procedure_area_value", "amount", "price", "value"])
+            self.size = numeric_expr(self.cols, ["procedure_area", "actual_area", "property_size", "area_sqft", "size_sqft"])
+            self.meter_price = numeric_expr(self.cols, ["meter_sale_price", "meter_price", "price_per_meter"])
+            self.deal_title = "'Продажа'"
+            self.deal_label = "Продажа"
+            self.value_label = "цена"
+        else:
+            self.date = date_expr(self.cols, [
+                "contract_start_date", "contract_date", "start_date", "registration_date", "instance_date", "date"
+            ])
+            self.building = coalesce_expr(self.cols, [
+                "building_name_en", "building_name", "property_name", "project_name_en", "project_name",
+                "master_project_en", "master_project", "building", "project"
+            ])
+            self.area = coalesce_expr(self.cols, [
+                "area_name_en", "area_name", "area", "area_en", "community", "location"
+            ])
+            self.rooms = coalesce_expr(self.cols, ["rooms_en", "rooms", "bedrooms", "unit_bedrooms"])
+            self.property_type = coalesce_expr(self.cols, ["property_type_en", "property_type", "property_usage_en", "property_usage"])
+            self.property_sub_type = coalesce_expr(self.cols, ["property_sub_type_en", "property_sub_type", "property_type_en", "property_type"])
+            self.price = numeric_expr(self.cols, [
+                "annual_amount", "annual_rent", "rent_value", "rent_amount", "contract_amount",
+                "contract_value", "actual_worth", "amount", "value"
+            ])
+            self.size = numeric_expr(self.cols, ["property_size", "area_sqft", "size_sqft", "ejari_property_size", "unit_size"])
+            self.meter_price = f"""
+                CASE
+                    WHEN {self.size} IS NOT NULL AND {self.size} > 0
+                    THEN ({self.price}) / ({self.size})
+                    ELSE NULL
+                END
+            """
+            self.deal_title = "'Аренда'"
+            self.deal_label = "Аренда"
+            self.value_label = "аренда"
+
+    def base_from(self):
+        return f"""
+            FROM (
+                SELECT
+                    *,
+                    {self.date} AS safe_date,
+                    {self.building} AS building_name_norm,
+                    {self.area} AS area_name_norm,
+                    {self.rooms} AS rooms_norm,
+                    {self.property_type} AS property_type_norm,
+                    {self.property_sub_type} AS property_sub_type_norm,
+                    {self.price} AS value_norm,
+                    {self.meter_price} AS meter_value_norm,
+                    {self.deal_title} AS deal_kind
+                FROM {self.table}
+            ) t
+            WHERE 1=1
+        """
+
+
+def source_for_deal_type(deal_type):
+    if is_rent_deal(deal_type):
+        return Source("rent")
+    return Source("sale")
 
 
 TEXTS = {
     "ru": {
         "choose_lang": "🏙 <b>Dubai DLD Analytics Bot</b>\n\nВыберите язык:",
-        "lang_selected": "✅ Язык выбран: <b>Русский</b>\n\nГлавное меню:",
-        "main_menu": "🏠 <b>Главное меню</b>\n\nВыберите раздел:",
+        "lang_selected": (
+            "✅ Язык выбран: <b>Русский</b>\n\n"
+            "🏙 <b>Dubai DLD Analytics Bot</b>\n"
+            "Ваш быстрый аналитик по сделкам DLD: продажи, аренда, здания, районы, динамика рынка и экономический вывод по объектам.\n\n"
+            "Выберите раздел:"
+        ),
+        "main_menu": (
+            "🏠 <b>Главное меню</b>\n\n"
+            "Выберите раздел для анализа рынка Дубая:"
+        ),
         "view_deals": "📊 Смотреть сделки",
         "area_stats": "🏙 Статистика района",
         "dubai_stats": "🌆 Статистика по Дубаю",
@@ -100,7 +252,7 @@ TEXTS = {
     },
     "en": {
         "choose_lang": "🏙 <b>Dubai DLD Analytics Bot</b>\n\nChoose language:",
-        "lang_selected": "✅ Language selected: <b>English</b>\n\nMain menu:",
+        "lang_selected": "✅ Language selected: <b>English</b>\n\n🏙 <b>Dubai DLD Analytics Bot</b>\nFast DLD analytics: sales, rents, buildings, areas and market conclusions.\n\nChoose section:",
         "main_menu": "🏠 <b>Main menu</b>\n\nChoose section:",
         "view_deals": "📊 View deals",
         "area_stats": "🏙 Area statistics",
@@ -140,7 +292,7 @@ TEXTS = {
     },
     "ar": {
         "choose_lang": "🏙 <b>Dubai DLD Analytics Bot</b>\n\nاختر اللغة:",
-        "lang_selected": "✅ تم اختيار اللغة: <b>العربية</b>\n\nالقائمة الرئيسية:",
+        "lang_selected": "✅ تم اختيار اللغة: <b>العربية</b>\n\n🏙 <b>Dubai DLD Analytics Bot</b>\n\nاختر القسم:",
         "main_menu": "🏠 <b>القائمة الرئيسية</b>\n\nاختر القسم:",
         "view_deals": "📊 عرض الصفقات",
         "area_stats": "🏙 إحصائيات المنطقة",
@@ -326,48 +478,14 @@ def area_alias_values(query):
     return AREA_ALIASES.get(q, [clean_query(query)])
 
 
-def make_area_exact_condition(query):
-    values = area_alias_values(query)
-    params = [f"%{v}%" for v in values if v]
-    if not params:
-        return "AND 1=0", []
-    return "AND (" + " OR ".join(["area_name_en ILIKE %s" for _ in params]) + ")", params
+def is_rent_deal(deal_type):
+    d = (deal_type or "").lower()
+    return "rent" in d or "арен" in d or "إيجار" in d
 
 
-def make_building_condition(query):
-    q = clean_query(query)
-    words = split_words(q)
-
-    if not words:
-        return "AND 1=0", []
-
-    exact = f"%{q}%"
-    params = [exact, exact, exact]
-
-    condition = """
-    AND (
-        building_name_en ILIKE %s
-        OR project_name_en ILIKE %s
-        OR master_project_en ILIKE %s
-    )
-    """
-
-    return condition, params
-
-
-def make_deal_type_condition(deal_type):
-    if not deal_type:
-        return "", []
-
-    d = deal_type.lower()
-
-    if "rent" in d or "арен" in d or "إيجار" in d:
-        return "AND (procedure_name_en ILIKE %s OR procedure_name_en ILIKE %s OR rent_value IS NOT NULL)", ["%rent%", "%lease%"]
-
-    if "sale" in d or "прод" in d or "بيع" in d:
-        return "AND (procedure_name_en ILIKE %s OR procedure_name_en ILIKE %s OR actual_worth IS NOT NULL)", ["%sale%", "%sell%"]
-
-    return "", []
+def is_sale_deal(deal_type):
+    d = (deal_type or "").lower()
+    return "sale" in d or "прод" in d or "بيع" in d
 
 
 def period_condition(period_key):
@@ -401,17 +519,17 @@ def property_condition(prop):
     p = prop.lower()
 
     if p == "studio":
-        return "AND (rooms_en ILIKE %s OR property_sub_type_en ILIKE %s)", ["%studio%", "%studio%"]
+        return "AND (rooms_norm ILIKE %s OR property_sub_type_norm ILIKE %s OR property_type_norm ILIKE %s)", ["%studio%", "%studio%", "%studio%"]
 
     if p in ["1 br", "2 br", "3 br", "4 br"]:
         rooms = p.split()[0]
-        return "AND (rooms_en ILIKE %s OR rooms_en = %s)", [f"%{rooms}%", rooms]
+        return "AND (rooms_norm ILIKE %s OR rooms_norm = %s)", [f"%{rooms}%", rooms]
 
     if p == "5 br+":
         return """
         AND (
-            rooms_en ILIKE %s OR rooms_en ILIKE %s OR rooms_en ILIKE %s
-            OR rooms_en ILIKE %s OR rooms_en ILIKE %s
+            rooms_norm ILIKE %s OR rooms_norm ILIKE %s OR rooms_norm ILIKE %s
+            OR rooms_norm ILIKE %s OR rooms_norm ILIKE %s
         )
         """, ["%5%", "%6%", "%7%", "%8%", "%9%"]
 
@@ -426,7 +544,7 @@ def property_condition(prop):
 
     if p in mapping:
         val = mapping[p]
-        return "AND (property_type_en ILIKE %s OR property_sub_type_en ILIKE %s)", [val, val]
+        return "AND (property_type_norm ILIKE %s OR property_sub_type_norm ILIKE %s)", [val, val]
 
     return "", []
 
@@ -443,159 +561,202 @@ def get_period_key(user_id, text):
     return None
 
 
-def base_from():
-    return f"""
-        FROM (
-            SELECT
-                *,
-                CASE
-                    WHEN instance_date ~ '^\\d{{4}}-\\d{{2}}-\\d{{2}}'
-                    THEN instance_date::date
-                    ELSE NULL
-                END AS safe_date
-            FROM {TABLE}
-        ) t
-        WHERE 1=1
-    """
+def make_building_search_condition(query):
+    q = clean_query(query)
+    words = split_words(q)
+    if not words:
+        return "AND 1=0", []
+    params = [f"%{q}%", f"%{q}%"]
+    # full phrase OR every meaningful word in building/area
+    cond = "AND (building_name_norm ILIKE %s OR area_name_norm ILIKE %s"
+    for w in words:
+        cond += " OR building_name_norm ILIKE %s"
+        params.append(f"%{w}%")
+    cond += ")"
+    return cond, params
+
+
+def make_area_search_condition(query):
+    values = area_alias_values(query)
+    params = [f"%{v}%" for v in values if v]
+    if not params:
+        return "AND 1=0", []
+    return "AND (" + " OR ".join(["area_name_norm ILIKE %s" for _ in params]) + ")", params
 
 
 def find_buildings(query, limit=10):
-    search_sql, params = make_building_condition(query)
-    params.append(limit)
+    rows_all = []
+    for kind in ["sale", "rent"]:
+        s = Source(kind)
+        search_sql, params = make_building_search_condition(query)
+        params.append(limit)
+        try:
+            with db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(f"""
+                        SELECT
+                            building_name_norm AS building_name_en,
+                            area_name_norm AS area_name_en,
+                            COUNT(*) AS deals
+                        {s.base_from()}
+                          AND building_name_norm IS NOT NULL
+                          AND building_name_norm <> ''
+                          {search_sql}
+                        GROUP BY building_name_norm, area_name_norm
+                        ORDER BY
+                            CASE WHEN building_name_norm ILIKE %s THEN 0 ELSE 1 END,
+                            deals DESC
+                        LIMIT %s
+                    """, params[:-1] + [f"%{clean_query(query)}%", params[-1]])
+                    rows_all.extend(cur.fetchall())
+        except Exception as e:
+            print(f"find_buildings {kind} error:", repr(e))
 
-    with db() as conn:
-        with conn.cursor() as cur:
-            cur.execute(f"""
-                SELECT
-                    {BUILDING_NAME} AS building_name_en,
-                    area_name_en,
-                    COUNT(*) AS deals
-                {base_from()}
-                  AND {BUILDING_NAME} IS NOT NULL
-                  {search_sql}
-                GROUP BY {BUILDING_NAME}, area_name_en
-                ORDER BY
-                    CASE WHEN {BUILDING_NAME} ILIKE %s THEN 0 ELSE 1 END,
-                    deals DESC
-                LIMIT %s
-            """, params[:-1] + [f"%{clean_query(query)}%", params[-1]])
-            return cur.fetchall()
+    merged = {}
+    for r in rows_all:
+        key = (r["building_name_en"], r["area_name_en"])
+        if key not in merged:
+            merged[key] = dict(r)
+        else:
+            merged[key]["deals"] += r["deals"]
+
+    return sorted(merged.values(), key=lambda x: x["deals"], reverse=True)[:limit]
 
 
 def find_areas(query, limit=10):
-    area_sql, params = make_area_exact_condition(query)
-    params.append(limit)
+    rows_all = []
+    for kind in ["sale", "rent"]:
+        s = Source(kind)
+        area_sql, params = make_area_search_condition(query)
+        params.append(limit)
+        try:
+            with db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(f"""
+                        SELECT
+                            area_name_norm AS area_name_en,
+                            COUNT(*) AS deals,
+                            COUNT(DISTINCT building_name_norm) AS buildings
+                        {s.base_from()}
+                          {area_sql}
+                          AND area_name_norm IS NOT NULL
+                          AND area_name_norm <> ''
+                        GROUP BY area_name_norm
+                        ORDER BY deals DESC
+                        LIMIT %s
+                    """, params)
+                    rows_all.extend(cur.fetchall())
+        except Exception as e:
+            print(f"find_areas {kind} error:", repr(e))
 
-    with db() as conn:
-        with conn.cursor() as cur:
-            cur.execute(f"""
-                SELECT
-                    area_name_en,
-                    COUNT(*) AS deals,
-                    COUNT(DISTINCT {BUILDING_NAME}) AS buildings
-                {base_from()}
-                  {area_sql}
-                  AND area_name_en IS NOT NULL
-                  AND area_name_en <> ''
-                GROUP BY area_name_en
-                ORDER BY deals DESC
-                LIMIT %s
-            """, params)
-            return cur.fetchall()
+    merged = {}
+    for r in rows_all:
+        key = r["area_name_en"]
+        if key not in merged:
+            merged[key] = dict(r)
+        else:
+            merged[key]["deals"] += r["deals"]
+            merged[key]["buildings"] += r["buildings"] or 0
+
+    return sorted(merged.values(), key=lambda x: x["deals"], reverse=True)[:limit]
 
 
 def get_stats(scope="dubai", name=None, prop=None, period=None, deal_type=None):
+    s = source_for_deal_type(deal_type)
     params = []
 
     where = ""
     if scope == "building":
-        where += f" AND {BUILDING_NAME} = %s"
+        where += " AND building_name_norm = %s"
         params.append(name)
     elif scope == "area":
-        where += " AND area_name_en = %s"
+        where += " AND area_name_norm = %s"
         params.append(name)
 
     prop_sql, prop_args = property_condition(prop)
-    deal_sql, deal_args = make_deal_type_condition(deal_type)
-
-    params += prop_args + deal_args
+    params += prop_args
 
     with db() as conn:
         with conn.cursor() as cur:
             cur.execute(f"""
                 SELECT
                     COUNT(*) AS deals,
-                    COUNT(DISTINCT {BUILDING_NAME}) AS buildings,
-                    COUNT(DISTINCT area_name_en) AS areas,
-                    AVG({PRICE}) AS avg_price,
-                    MIN({PRICE}) AS min_price,
-                    MAX({PRICE}) AS max_price,
-                    AVG({METER_PRICE}) AS avg_meter,
+                    COUNT(DISTINCT building_name_norm) AS buildings,
+                    COUNT(DISTINCT area_name_norm) AS areas,
+                    AVG(value_norm) AS avg_price,
+                    MIN(value_norm) AS min_price,
+                    MAX(value_norm) AS max_price,
+                    AVG(meter_value_norm) AS avg_meter,
                     MIN(safe_date) AS first_deal,
                     MAX(safe_date) AS last_deal,
-                    STRING_AGG(DISTINCT NULLIF(rooms_en, ''), ', ') AS rooms_list,
-                    STRING_AGG(DISTINCT NULLIF(property_type_en, ''), ', ') AS property_types,
-                    STRING_AGG(DISTINCT NULLIF(property_sub_type_en, ''), ', ') AS property_sub_types
-                {base_from()}
+                    STRING_AGG(DISTINCT NULLIF(rooms_norm, ''), ', ') AS rooms_list,
+                    STRING_AGG(DISTINCT NULLIF(property_type_norm, ''), ', ') AS property_types,
+                    STRING_AGG(DISTINCT NULLIF(property_sub_type_norm, ''), ', ') AS property_sub_types
+                {s.base_from()}
                   {where}
                   {prop_sql}
-                  {deal_sql}
                   {period_condition(period)}
-                  AND {PRICE} IS NOT NULL
+                  AND value_norm IS NOT NULL
             """, params)
-            return cur.fetchone()
+            row = cur.fetchone()
+            if row:
+                row["deal_label"] = s.deal_label
+                row["value_label"] = s.value_label
+            return row
 
 
 def get_comparison(scope="dubai", name=None, prop=None, period=None, deal_type=None):
     if not period:
         return None
 
+    s = source_for_deal_type(deal_type)
     params_current = []
     params_previous = []
 
     where = ""
     if scope == "building":
-        where += f" AND {BUILDING_NAME} = %s"
+        where += " AND building_name_norm = %s"
         params_current.append(name)
         params_previous.append(name)
     elif scope == "area":
-        where += " AND area_name_en = %s"
+        where += " AND area_name_norm = %s"
         params_current.append(name)
         params_previous.append(name)
 
     prop_sql, prop_args = property_condition(prop)
-    deal_sql, deal_args = make_deal_type_condition(deal_type)
 
-    params_current += prop_args + deal_args
-    params_previous += prop_args + deal_args
+    params_current += prop_args
+    params_previous += prop_args
 
     with db() as conn:
         with conn.cursor() as cur:
             cur.execute(f"""
                 SELECT
                     COUNT(*) AS deals,
-                    AVG({PRICE}) AS avg_price,
-                    AVG({METER_PRICE}) AS avg_meter
-                {base_from()}
+                    AVG(value_norm) AS avg_price,
+                    AVG(meter_value_norm) AS avg_meter,
+                    MIN(safe_date) AS first_deal,
+                    MAX(safe_date) AS last_deal
+                {s.base_from()}
                   {where}
                   {prop_sql}
-                  {deal_sql}
                   {period_condition(period)}
-                  AND {PRICE} IS NOT NULL
+                  AND value_norm IS NOT NULL
             """, params_current)
             current = cur.fetchone()
 
             cur.execute(f"""
                 SELECT
                     COUNT(*) AS deals,
-                    AVG({PRICE}) AS avg_price,
-                    AVG({METER_PRICE}) AS avg_meter
-                {base_from()}
+                    AVG(value_norm) AS avg_price,
+                    AVG(meter_value_norm) AS avg_meter,
+                    MIN(safe_date) AS first_deal,
+                    MAX(safe_date) AS last_deal
+                {s.base_from()}
                   {where}
                   {prop_sql}
-                  {deal_sql}
                   {period_previous_condition(period)}
-                  AND {PRICE} IS NOT NULL
+                  AND value_norm IS NOT NULL
             """, params_previous)
             previous = cur.fetchone()
 
@@ -603,59 +764,63 @@ def get_comparison(scope="dubai", name=None, prop=None, period=None, deal_type=N
 
 
 def get_latest_deals(scope="building", name=None, prop=None, period=None, deal_type=None, limit=7):
+    s = source_for_deal_type(deal_type)
     params = []
 
     where = ""
     if scope == "building":
-        where += f" AND {BUILDING_NAME} = %s"
+        where += " AND building_name_norm = %s"
         params.append(name)
     elif scope == "area":
-        where += " AND area_name_en = %s"
+        where += " AND area_name_norm = %s"
         params.append(name)
 
     prop_sql, prop_args = property_condition(prop)
-    deal_sql, deal_args = make_deal_type_condition(deal_type)
-    params += prop_args + deal_args + [limit]
+    params += prop_args + [limit]
 
     with db() as conn:
         with conn.cursor() as cur:
             cur.execute(f"""
                 SELECT
                     safe_date,
-                    procedure_name_en,
-                    rooms_en,
-                    property_type_en,
-                    property_sub_type_en,
-                    {PRICE} AS price,
-                    {METER_PRICE} AS meter_price,
-                    {BUILDING_NAME} AS building_name_en,
-                    area_name_en
-                {base_from()}
+                    deal_kind,
+                    rooms_norm AS rooms_en,
+                    property_type_norm AS property_type_en,
+                    property_sub_type_norm AS property_sub_type_en,
+                    value_norm AS price,
+                    meter_value_norm AS meter_price,
+                    building_name_norm AS building_name_en,
+                    area_name_norm AS area_name_en
+                {s.base_from()}
                   {where}
                   {prop_sql}
-                  {deal_sql}
                   {period_condition(period)}
-                  AND {PRICE} IS NOT NULL
+                  AND value_norm IS NOT NULL
                 ORDER BY safe_date DESC NULLS LAST
                 LIMIT %s
             """, params)
-            return cur.fetchall()
+            rows = cur.fetchall()
+            for r in rows:
+                r["deal_label"] = s.deal_label
+                r["value_label"] = s.value_label
+            return rows
 
 
 def get_top_active():
+    s = Source("sale")
     with db() as conn:
         with conn.cursor() as cur:
             cur.execute(f"""
                 SELECT
-                    {BUILDING_NAME} AS building_name_en,
-                    area_name_en,
+                    building_name_norm AS building_name_en,
+                    area_name_norm AS area_name_en,
                     COUNT(*) AS deals,
-                    AVG({PRICE}) AS avg_price,
-                    AVG({METER_PRICE}) AS avg_meter
-                {base_from()}
-                  AND {BUILDING_NAME} IS NOT NULL
-                  AND {PRICE} IS NOT NULL
-                GROUP BY {BUILDING_NAME}, area_name_en
+                    AVG(value_norm) AS avg_price,
+                    AVG(meter_value_norm) AS avg_meter
+                {s.base_from()}
+                  AND building_name_norm IS NOT NULL
+                  AND value_norm IS NOT NULL
+                GROUP BY building_name_norm, area_name_norm
                 ORDER BY deals DESC
                 LIMIT 10
             """)
@@ -663,19 +828,20 @@ def get_top_active():
 
 
 def get_top_price():
+    s = Source("sale")
     with db() as conn:
         with conn.cursor() as cur:
             cur.execute(f"""
                 SELECT
-                    {BUILDING_NAME} AS building_name_en,
-                    area_name_en,
+                    building_name_norm AS building_name_en,
+                    area_name_norm AS area_name_en,
                     COUNT(*) AS deals,
-                    AVG({PRICE}) AS avg_price,
-                    AVG({METER_PRICE}) AS avg_meter
-                {base_from()}
-                  AND {BUILDING_NAME} IS NOT NULL
-                  AND {PRICE} IS NOT NULL
-                GROUP BY {BUILDING_NAME}, area_name_en
+                    AVG(value_norm) AS avg_price,
+                    AVG(meter_value_norm) AS avg_meter
+                {s.base_from()}
+                  AND building_name_norm IS NOT NULL
+                  AND value_norm IS NOT NULL
+                GROUP BY building_name_norm, area_name_norm
                 HAVING COUNT(*) >= 5
                 ORDER BY avg_price DESC
                 LIMIT 10
@@ -699,33 +865,85 @@ def period_label(period):
     }.get(period, "всё время")
 
 
+def period_range_note(period):
+    if period == "3":
+        return "текущие 3 месяца против предыдущих 3 месяцев"
+    if period == "6":
+        return "текущие 6 месяцев против предыдущих 6 месяцев"
+    if period == "12":
+        return "текущий год против предыдущего аналогичного года"
+    if period == "36":
+        return "текущие 3 года против предыдущих 3 лет"
+    return "всё время"
+
+
+def economic_summary(row, deal_type=None):
+    if not row or not row.get("deals"):
+        return ""
+
+    label = "аренде" if is_rent_deal(deal_type) else "продаже"
+    avg_price = row.get("avg_price")
+    min_price = row.get("min_price")
+    avg_meter = row.get("avg_meter")
+
+    return (
+        "\n\n🧠 <b>Экономический вывод:</b> "
+        f"по {label} ориентир рынка — около <b>{format_money(avg_price)}</b>. "
+        f"Интересная точка входа начинается ниже среднего рынка; всё, что ближе к нижней границе "
+        f"<b>{format_money(min_price)}</b>, выглядит сильнее для переговоров. "
+        f"Средний ориентир за единицу площади: <b>{format_money(avg_meter)}</b>."
+    )
+
+
+def comparison_summary(current, previous, deal_type=None):
+    price_change = pct_change(current.get("avg_price") if current else None, previous.get("avg_price") if previous else None)
+    meter_change = pct_change(current.get("avg_meter") if current else None, previous.get("avg_meter") if previous else None)
+    deal_label = "арендный" if is_rent_deal(deal_type) else "рынок продаж"
+
+    if price_change is None:
+        return "\n\n🧠 <b>Вывод:</b> данных мало, использовать как предварительный ориентир."
+
+    direction = "вырос" if price_change > 0 else "снизился"
+    return (
+        f"\n\n🧠 <b>Вывод:</b> {deal_label} за выбранный период {direction} примерно на "
+        f"<b>{format_pct(price_change)}</b> по средней цене"
+        + (f" и на <b>{format_pct(meter_change)}</b> по цене за площадь." if meter_change is not None else ".")
+        + " Чем ниже объект относительно этих средних значений, тем интереснее он для переговоров."
+    )
+
+
 def show_stats(title, row, prop=None, period=None, deal_type=None):
     if not row or not row.get("deals"):
         return "❌ Нет данных по выбранным фильтрам."
 
-    return (
+    value_title = "Средняя аренда" if is_rent_deal(deal_type) else "Средняя цена"
+    min_title = "Минимальная аренда" if is_rent_deal(deal_type) else "Минимальная цена"
+    max_title = "Максимальная аренда" if is_rent_deal(deal_type) else "Максимальная цена"
+
+    text = (
         f"{title}\n\n"
         f"Фильтры:\n"
-        f"📊 Сделка: <b>{deal_type or 'все'}</b>\n"
+        f"📊 Сделка: <b>{'Аренда' if is_rent_deal(deal_type) else ('Продажа' if is_sale_deal(deal_type) else 'продажи')}</b>\n"
         f"🏠 Тип/комнаты: <b>{prop or 'все'}</b>\n"
         f"📅 Период: <b>{period_label(period)}</b>\n\n"
         f"📊 Сделок: <b>{row['deals']:,}</b>\n"
         f"🏢 Зданий: <b>{row.get('buildings') or 0}</b>\n"
         f"📍 Районов: <b>{row.get('areas') or 0}</b>\n"
-        f"💰 Средняя цена: <b>{format_money(row['avg_price'])}</b>\n"
-        f"🔻 Минимальная цена: <b>{format_money(row['min_price'])}</b>\n"
-        f"🔺 Максимальная цена: <b>{format_money(row['max_price'])}</b>\n"
-        f"📐 Средняя цена за метр: <b>{format_money(row['avg_meter'])}</b>\n"
+        f"💰 {value_title}: <b>{format_money(row['avg_price'])}</b>\n"
+        f"🔻 {min_title}: <b>{format_money(row['min_price'])}</b>\n"
+        f"🔺 {max_title}: <b>{format_money(row['max_price'])}</b>\n"
+        f"📐 Средний показатель за площадь: <b>{format_money(row['avg_meter'])}</b>\n"
         f"🗓 Первая сделка: <b>{row['first_deal']}</b>\n"
         f"🗓 Последняя сделка: <b>{row['last_deal']}</b>\n\n"
         f"🛏 Комнаты: {row.get('rooms_list') or 'нет данных'}\n"
         f"🏗 Типы: {row.get('property_types') or 'нет данных'}\n"
         f"🏘 Подтипы: {row.get('property_sub_types') or 'нет данных'}"
     )
+    return text + economic_summary(row, deal_type)
 
 
-def show_comparison(title, current, previous):
-    if not current or not previous:
+def show_comparison(title, current, previous, period=None, deal_type=None):
+    if not current or not previous or not current.get("deals") or not previous.get("deals"):
         return "❌ Недостаточно данных для сравнения."
 
     deals_change = pct_change(current["deals"], previous["deals"])
@@ -734,18 +952,22 @@ def show_comparison(title, current, previous):
 
     return (
         f"{title}\n\n"
+        f"📅 <b>Сравнение:</b> {period_range_note(period)}\n"
+        f"🗓 Текущий период: <b>{current.get('first_deal')} — {current.get('last_deal')}</b>\n"
+        f"🗓 Предыдущий период: <b>{previous.get('first_deal')} — {previous.get('last_deal')}</b>\n\n"
         f"<b>Текущий период:</b>\n"
         f"📊 Сделок: <b>{current['deals']:,}</b>\n"
-        f"💰 Средняя цена: <b>{format_money(current['avg_price'])}</b>\n"
-        f"📐 Цена за метр: <b>{format_money(current['avg_meter'])}</b>\n\n"
+        f"💰 Средний показатель: <b>{format_money(current['avg_price'])}</b>\n"
+        f"📐 За площадь: <b>{format_money(current['avg_meter'])}</b>\n\n"
         f"<b>Предыдущий такой же период:</b>\n"
         f"📊 Сделок: <b>{previous['deals']:,}</b>\n"
-        f"💰 Средняя цена: <b>{format_money(previous['avg_price'])}</b>\n"
-        f"📐 Цена за метр: <b>{format_money(previous['avg_meter'])}</b>\n\n"
+        f"💰 Средний показатель: <b>{format_money(previous['avg_price'])}</b>\n"
+        f"📐 За площадь: <b>{format_money(previous['avg_meter'])}</b>\n\n"
         f"<b>Динамика:</b>\n"
         f"📊 Сделки: <b>{format_pct(deals_change)}</b>\n"
-        f"💰 Средняя цена: <b>{format_pct(price_change)}</b>\n"
-        f"📐 Цена за метр: <b>{format_pct(meter_change)}</b>"
+        f"💰 Средний показатель: <b>{format_pct(price_change)}</b>\n"
+        f"📐 За площадь: <b>{format_pct(meter_change)}</b>"
+        f"{comparison_summary(current, previous, deal_type)}"
     )
 
 
@@ -892,13 +1114,12 @@ async def main_handler(message: Message):
                 return
 
             suggestions = [r["building_name_en"] for r in rows if r["building_name_en"]]
-            new_state = {
+            user_states[user_id] = {
                 "step": "choose_building",
                 "scope": "building",
                 "suggestions": suggestions,
                 "history": state.get("history", [])
             }
-            user_states[user_id] = new_state
 
             buttons = [[name] for name in suggestions[:10]]
             buttons.append([tr(user_id, "back"), tr(user_id, "main")])
@@ -919,13 +1140,12 @@ async def main_handler(message: Message):
                 return
 
             suggestions = [r["area_name_en"] for r in rows if r["area_name_en"]]
-            new_state = {
+            user_states[user_id] = {
                 "step": "choose_area",
                 "scope": "area",
                 "suggestions": suggestions,
                 "history": state.get("history", [])
             }
-            user_states[user_id] = new_state
 
             buttons = [[name] for name in suggestions[:10]]
             buttons.append([tr(user_id, "back"), tr(user_id, "main")])
@@ -961,7 +1181,7 @@ async def main_handler(message: Message):
 
         if state.get("step") == "choose_deal_type":
             if text == tr(user_id, "skip") or text == tr(user_id, "both"):
-                state["deal_type"] = None
+                state["deal_type"] = tr(user_id, "sale")
             elif text in [tr(user_id, "sale"), tr(user_id, "rent")]:
                 state["deal_type"] = text
             else:
@@ -997,13 +1217,12 @@ async def main_handler(message: Message):
                     return
                 state["period"] = period_key
 
+            state["step"] = "choose_report"
+            user_states[user_id] = state
+
             if state.get("force_report") == "last":
-                state["step"] = "choose_report"
-                user_states[user_id] = state
                 text = tr(user_id, "last_deals")
             else:
-                state["step"] = "choose_report"
-                user_states[user_id] = state
                 await message.answer(tr(user_id, "choose_report"), reply_markup=report_menu(user_id))
                 return
 
@@ -1038,7 +1257,7 @@ async def main_handler(message: Message):
                 title = "📈 <b>Сравнение периодов</b>"
                 if name:
                     title += f"\n{name}"
-                await message.answer(show_comparison(title, current, previous), reply_markup=report_menu(user_id))
+                await message.answer(show_comparison(title, current, previous, period, deal_type), reply_markup=report_menu(user_id))
                 return
 
             if text == tr(user_id, "last_deals"):
@@ -1051,17 +1270,29 @@ async def main_handler(message: Message):
                 response = "🧾 <b>Последние сделки</b>\n"
                 if name:
                     response += f"📍 {name}\n"
-                response += "\n"
+                response += f"Фильтр: <b>{'Аренда' if is_rent_deal(deal_type) else 'Продажа'} / {prop or 'все типы'} / {period_label(period)}</b>\n\n"
 
+                value_caption = "Аренда" if is_rent_deal(deal_type) else "Цена"
                 for r in rows:
                     response += (
                         f"🗓 {r['safe_date']}\n"
                         f"🏢 {r['building_name_en'] or '-'}\n"
                         f"📍 {r['area_name_en'] or '-'}\n"
                         f"🏠 {r['rooms_en'] or '-'} / {r['property_sub_type_en'] or r['property_type_en'] or '-'}\n"
-                        f"💰 {format_money(r['price'])}\n"
-                        f"📐 {format_money(r['meter_price'])} за метр\n\n"
+                        f"💰 {value_caption}: {format_money(r['price'])}\n"
+                        f"📐 За площадь: {format_money(r['meter_price'])}\n\n"
                     )
+
+                # small conclusion based on shown rows
+                prices = [float(r["price"]) for r in rows if r.get("price") is not None]
+                if prices:
+                    avg = sum(prices) / len(prices)
+                    response += (
+                        f"🧠 <b>Экономический вывод:</b> средний ориентир по этой выборке — "
+                        f"<b>{format_money(avg)}</b>. Всё ниже этого уровня выглядит интереснее для переговоров; "
+                        f"если объект ближе к нижней границе, его стоит проверять первым."
+                    )
+
                 await message.answer(response, reply_markup=report_menu(user_id))
                 return
 
@@ -1125,9 +1356,10 @@ async def main_handler(message: Message):
                 f"🏠 Фильтр: {state.get('property') or 'все'}\n\n"
                 f"💰 Цена объекта: <b>{format_money(result['user_price'])}</b>\n"
                 f"📐 Цена объекта за sqft: <b>{format_money(result['user_ppsqft'])}</b>\n"
-                f"📊 Средняя цена DLD: <b>{format_money(result['market_avg'])}</b>\n"
+                f"📊 Средний ориентир DLD: <b>{format_money(result['market_avg'])}</b>\n"
                 f"📌 Отклонение: <b>{format_pct(diff_pct)}</b>\n\n"
-                f"{verdict}"
+                f"{verdict}\n\n"
+                f"🧠 <b>Вывод:</b> чем сильнее объект ниже среднего ориентира DLD, тем выше запас для переговоров, перепродажи или доходности. Перед сделкой проверьте юнит, вид, этаж, сервис-чардж, состояние и срочность продавца."
             )
 
             state["step"] = "choose_report"
@@ -1143,10 +1375,9 @@ async def main_handler(message: Message):
 
 
 async def main():
-    print("Dubai DLD Analytics Bot started")
+    print("Dubai DLD Analytics Bot started | sales=dld_transactions_full | rents=dld_rents")
     await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
     asyncio.run(main())
-
