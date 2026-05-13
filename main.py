@@ -76,6 +76,40 @@ def has_col(name):
 def num_sql_dynamic(column):
     return f"NULLIF(regexp_replace(COALESCE({column}::text, ''), '[^0-9.]', '', 'g'), '')::numeric"
 
+def first_existing_col(candidates):
+    for col in candidates:
+        if has_col(col):
+            return col
+    return None
+
+def coalesce_text_expr(candidates):
+    cols = [c for c in candidates if has_col(c)]
+    if not cols:
+        return "''"
+    return "LOWER(COALESCE(" + ", ' ', ".join([f"{c}::text" for c in cols]) + ", ''))"
+
+def deal_text_expr():
+    return coalesce_text_expr([
+        'procedure_name_en', 'procedure_name_ar', 'procedure_type_en', 'procedure_type_ar',
+        'transaction_type_en', 'transaction_type_ar', 'transaction_type', 'deal_type',
+        'reg_type_en', 'reg_type_ar', 'contract_type_en', 'contract_type_ar'
+    ])
+
+def rent_value_column():
+    # 1) специальные арендные поля, если они есть в базе
+    col = first_existing_col([
+        'rent_value', 'annual_amount', 'annual_rent', 'rent_amount',
+        'lease_amount', 'contract_amount', 'contract_value', 'ejari_value',
+        'annual_value', 'amount'
+    ])
+    if col:
+        return col
+    # 2) во многих DLD выгрузках аренда лежит в actual_worth,
+    # но использовать его можно ТОЛЬКО вместе со строгим rent/lease фильтром по процедуре.
+    if has_col('actual_worth'):
+        return 'actual_worth'
+    return None
+
 def is_rent_deal(deal_type):
     d = str(deal_type or '').lower()
     return ('rent' in d) or ('lease' in d) or ('аренд' in d) or ('🔑' in d)
@@ -85,12 +119,10 @@ def is_sale_deal(deal_type):
     return ('sale' in d) or ('sell' in d) or ('прод' in d) or ('🏠' in d)
 
 def value_expr(deal_type=None):
-    # Для аренды категорически НЕ используем actual_worth как fallback,
-    # иначе бот начинает показывать цены продажи под видом аренды.
     if is_rent_deal(deal_type):
-        for col in ['rent_value', 'annual_amount', 'annual_rent', 'rent_amount', 'lease_amount', 'contract_amount', 'contract_value', 'ejari_value']:
-            if has_col(col):
-                return num_sql_dynamic(col)
+        col = rent_value_column()
+        if col:
+            return num_sql_dynamic(col)
         return 'NULL::numeric'
     return PRICE
 
@@ -102,7 +134,6 @@ def meter_expr(deal_type=None):
         for col in ['meter_rent_price', 'rent_meter_price', 'meter_lease_price', 'annual_rent_per_meter', 'rent_per_meter']:
             if has_col(col):
                 return num_sql_dynamic(col)
-        # Если отдельной цены аренды за метр нет, считаем её как rent / площадь.
         size = None
         for col in ['procedure_area', 'actual_area', 'property_size', 'area_sqft', 'size_sqft', 'rooms_area']:
             if has_col(col):
@@ -118,500 +149,31 @@ def value_not_null_sql(deal_type=None):
     return f"AND {value_expr(deal_type)} IS NOT NULL"
 
 
-BUILDING_NAME = """
-COALESCE(
-    NULLIF(building_name_en, ''),
-    NULLIF(building_name_en, ''),
-    NULLIF(building_name_en, '')
-)
-"""
-
-
-TEXTS = {
-    "ru": {
-        "choose_lang": '🏙 <b>Dubai DLD Analytics Bot</b>\n\nВаш аналитический помощник по рынку недвижимости Дубая.\n\nЧто умеет бот:\n• искать здания и похожие названия;\n• показывать статистику по районам;\n• анализировать сделки DLD;\n• сравнивать периоды;\n• оценивать выгодность конкретной сделки;\n• подбирать район и формат юнита под бюджет и цель.\n\nВыберите язык:',
-        "lang_selected": "✅ Язык выбран: <b>Русский</b>\n\nГлавное меню:",
-        "main_menu": "🏠 <b>Главное меню</b>\n\nВыберите раздел:",
-        "view_deals": "📊 Смотреть сделки",
-        "area_stats": "🏙 Статистика района",
-        "dubai_stats": "🌆 Статистика по Дубаю",
-        "top_active": "🚀 Топ активных зданий",
-        "top_price": "💰 Топ по средней цене",
-        "building_search": "🏢 Поиск здания",
-        "settings": "⚙️ Настройки",
-        "back": "⬅️ Назад",
-        "main": "🏠 Главное меню",
-        "skip": "⏭ Пропустить",
-        "all_time": "📅 Всё время",
-        "p3": "3 месяца",
-        "p6": "6 месяцев",
-        "p12": "1 год",
-        "p36": "3 года",
-        "enter_building": "🏢 <b>Введите название здания</b>\n\nМожно полностью или частично:\n• Grande\n• Marina\n• Sobha\n• Anantara",
-        "enter_area": "🏙 <b>Введите название района</b>\n\nНапример:\n• JVC\n• Downtown\n• Business Bay\n• Dubai Marina",
-        "not_found": "❌ Ничего не найдено. Попробуйте другое название.",
-        "choose_building": "🔎 <b>Выберите нужное здание:</b>",
-        "choose_area": "🔎 <b>Выберите нужный район:</b>",
-        "choose_property": "🏠 Выберите тип недвижимости / комнатность:",
-        "choose_period": "📅 Выберите период:",
-        "choose_report": "📊 Что показать?",
-        "full_report": "📊 Полная аналитика",
-        "last_deals": "🧾 Последние сделки",
-        "period_compare": "📈 Сравнение периодов",
-        "undervalued": "📉 Проверить выгодность объекта",
-        "enter_price": "💰 Введите цену объекта в AED.\n\nНапример: 2500000",
-        "enter_size": "📐 Введите площадь объекта в sq.ft.\n\nНапример: 850",
-        "loading": "⏳ Считаю аналитику по DLD базе...",
-        "error": '⚠️ По этим фильтрам DLD не вернул стабильную выборку. Нажмите «Назад» и попробуйте: «Всё время», «Пропустить» тип юнита или другой формат комнат.',
-        "choose_deal_type": "📊 Выберите тип сделки:",
-        "sale": "🏠 Продажа",
-        "rent": "🔑 Аренда",
-        "both": "📊 Всё",
-    },
-    "en": {
-        "choose_lang": "🏙 <b>Dubai DLD Analytics Bot</b>\n\nChoose language:",
-        "lang_selected": "✅ Language selected: <b>English</b>\n\nMain menu:",
-        "main_menu": "🏠 <b>Main menu</b>\n\nChoose section:",
-        "view_deals": "📊 View deals",
-        "area_stats": "🏙 Area statistics",
-        "dubai_stats": "🌆 Dubai statistics",
-        "top_active": "🚀 Top active buildings",
-        "top_price": "💰 Top average price",
-        "building_search": "🏢 Building search",
-        "settings": "⚙️ Settings",
-        "back": "⬅️ Back",
-        "main": "🏠 Main menu",
-        "skip": "⏭ Skip",
-        "all_time": "📅 All time",
-        "p3": "3 months",
-        "p6": "6 months",
-        "p12": "1 year",
-        "p36": "3 years",
-        "enter_building": "🏢 <b>Enter building name</b>\n\nFull or partial:\n• Grande\n• Marina\n• Sobha\n• Anantara",
-        "enter_area": "🏙 <b>Enter area name</b>\n\nExample:\n• JVC\n• Downtown\n• Business Bay\n• Dubai Marina",
-        "not_found": "❌ Nothing found. Try another name.",
-        "choose_building": "🔎 <b>Choose building:</b>",
-        "choose_area": "🔎 <b>Choose area:</b>",
-        "choose_property": "🏠 Choose property type / bedrooms:",
-        "choose_period": "📅 Choose period:",
-        "choose_report": "📊 What to show?",
-        "full_report": "📊 Full analytics",
-        "last_deals": "🧾 Latest deals",
-        "period_compare": "📈 Period comparison",
-        "undervalued": "📉 Check undervalued deal",
-        "enter_price": "💰 Enter price in AED.\n\nExample: 2500000",
-        "enter_size": "📐 Enter size in sq.ft.\n\nExample: 850",
-        "loading": "⏳ Calculating DLD analytics...",
-        "error": '⚠️ По этим фильтрам DLD не вернул стабильную выборку. Нажмите «Назад» и попробуйте: «Всё время», «Пропустить» тип юнита или другой формат комнат.',
-        "choose_deal_type": "📊 Choose deal type:",
-        "sale": "🏠 Sale",
-        "rent": "🔑 Rent",
-        "both": "📊 All",
-    },
-    "ar": {
-        "choose_lang": "🏙 <b>Dubai DLD Analytics Bot</b>\n\nاختر اللغة:",
-        "lang_selected": "✅ تم اختيار اللغة: <b>العربية</b>\n\nالقائمة الرئيسية:",
-        "main_menu": "🏠 <b>القائمة الرئيسية</b>\n\nاختر القسم:",
-        "view_deals": "📊 عرض الصفقات",
-        "area_stats": "🏙 إحصائيات المنطقة",
-        "dubai_stats": "🌆 إحصائيات دبي",
-        "top_active": "🚀 أكثر المباني نشاطاً",
-        "top_price": "💰 الأعلى حسب متوسط السعر",
-        "building_search": "🏢 بحث المبنى",
-        "settings": "⚙️ الإعدادات",
-        "back": "⬅️ رجوع",
-        "main": "🏠 القائمة الرئيسية",
-        "skip": "⏭ تخطي",
-        "all_time": "📅 كل الفترة",
-        "p3": "3 أشهر",
-        "p6": "6 أشهر",
-        "p12": "سنة",
-        "p36": "3 سنوات",
-        "enter_building": "🏢 <b>اكتب اسم المبنى</b>\n\nكامل أو جزئي:\n• Grande\n• Marina\n• Sobha\n• Anantara",
-        "enter_area": "🏙 <b>اكتب اسم المنطقة</b>\n\nمثال:\n• JVC\n• Downtown\n• Business Bay\n• Dubai Marina",
-        "not_found": "❌ لا توجد نتائج. جرب اسماً آخر.",
-        "choose_building": "🔎 <b>اختر المبنى:</b>",
-        "choose_area": "🔎 <b>اختر المنطقة:</b>",
-        "choose_property": "🏠 اختر نوع العقار / الغرف:",
-        "choose_period": "📅 اختر الفترة:",
-        "choose_report": "📊 ماذا تريد أن ترى؟",
-        "full_report": "📊 تحليل كامل",
-        "last_deals": "🧾 آخر الصفقات",
-        "period_compare": "📈 مقارنة الفترات",
-        "undervalued": "📉 فحص فرصة أقل من السوق",
-        "enter_price": "💰 أدخل السعر بالدرهم.\n\nمثال: 2500000",
-        "enter_size": "📐 أدخل المساحة بالقدم المربع.\n\nمثال: 850",
-        "loading": "⏳ يتم حساب تحليلات DLD...",
-        "error": '⚠️ По этим фильтрам DLD не вернул стабильную выборку. Нажмите «Назад» и попробуйте: «Всё время», «Пропустить» тип юнита или другой формат комнат.',
-        "choose_deal_type": "📊 اختر نوع الصفقة:",
-        "sale": "🏠 بيع",
-        "rent": "🔑 إيجار",
-        "both": "📊 الكل",
-    },
-}
-
-
-PROPERTY_OPTIONS = [
-    "Studio", "1 BR", "2 BR", "3 BR", "4 BR", "5 BR+",
-    "Apartment", "Villa", "Townhouse", "Penthouse", "Office", "Shop"
-]
-
-
-AREA_ALIASES = {
-    "jvc": ["Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"],
-    "jumeirah village circle": ["Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"],
-
-    "downtown": ["Burj Khalifa"],
-    "downtown dubai": ["Burj Khalifa"],
-    "dubai downtown": ["Burj Khalifa"],
-
-    "dubai marina": ["Marsa Dubai"],
-    "marina": ["Marsa Dubai"],
-    "marsa dubai": ["Marsa Dubai"],
-
-    "business bay": ["Business Bay"],
-    "palm": ["Palm Jumeirah"],
-    "palm jumeirah": ["Palm Jumeirah"],
-    "jlt": ["Jumeirah Lakes Towers"],
-    "jumeirah lakes towers": ["Jumeirah Lakes Towers"],
-    "creek": ["Dubai Creek Harbour", "Creek"],
-    "dubai creek": ["Dubai Creek Harbour", "Creek"],
-    "sobha": ["Sobha Hartland"],
-    "sobha hartland": ["Sobha Hartland"],
-}
-
-VIRTUAL_AREA_DISPLAY = {
-    "jvc": "JVC",
-    "jumeirah village circle": "JVC",
-    "downtown": "Downtown Dubai",
-    "downtown dubai": "Downtown Dubai",
-    "dubai downtown": "Downtown Dubai",
-    "dubai marina": "Dubai Marina",
-    "marina": "Dubai Marina",
-    "marsa dubai": "Dubai Marina",
-    "business bay": "Business Bay",
-    "palm": "Palm Jumeirah",
-    "palm jumeirah": "Palm Jumeirah",
-    "jlt": "JLT",
-    "jumeirah lakes towers": "JLT",
-    "creek": "Dubai Creek Harbour",
-    "dubai creek": "Dubai Creek Harbour",
-    "sobha": "Sobha Hartland",
-    "sobha hartland": "Sobha Hartland",
-}
-def virtual_area_name(query):
-    q = clean_query(query).lower()
-    return VIRTUAL_AREA_DISPLAY.get(q, clean_query(query))
-
-
-
-def lang(user_id):
-    return user_languages.get(user_id, "ru")
-
-
-def tr(user_id, key):
-    return TEXTS[lang(user_id)][key]
-
-
-def kb(rows):
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=item) for item in row] for row in rows],
-        resize_keyboard=True
-    )
-
-
-def language_menu():
-    return kb([["🇷🇺 Русский"], ["🇬🇧 English"], ["🇦🇪 العربية"]])
-
-
-def main_menu(user_id):
-    return kb([
-        ["🧠 Инвестиционный подбор"],
-        [tr(user_id, "building_search")],
-        [tr(user_id, "area_stats"), tr(user_id, "dubai_stats")],
-        [tr(user_id, "view_deals"), "📉 Проверить сделку"],
-        [tr(user_id, "top_active"), tr(user_id, "top_price")],
-        [tr(user_id, "settings")]
-    ])
-
-
-def back_menu(user_id):
-    return kb([[tr(user_id, "back"), tr(user_id, "main")]])
-
-
-def deal_type_menu(user_id):
-    return kb([
-        [tr(user_id, "sale"), tr(user_id, "rent")],
-        [tr(user_id, "both"), tr(user_id, "skip")],
-        [tr(user_id, "back"), tr(user_id, "main")]
-    ])
-
-
-def property_menu(user_id):
-    return kb([
-        ["Studio", "1 BR", "2 BR"],
-        ["3 BR", "4 BR", "5 BR+"],
-        ["Apartment", "Villa"],
-        ["Townhouse", "Penthouse"],
-        ["Office", "Shop"],
-        [tr(user_id, "skip")],
-        [tr(user_id, "back"), tr(user_id, "main")]
-    ])
-
-
-def period_menu(user_id):
-    return kb([
-        [tr(user_id, "p3"), tr(user_id, "p6")],
-        [tr(user_id, "p12"), tr(user_id, "p36")],
-        [tr(user_id, "all_time"), tr(user_id, "skip")],
-        [tr(user_id, "back"), tr(user_id, "main")]
-    ])
-
-
-
-def smart_goal_menu(user_id):
-    return kb([
-        ["💰 Инвестиция / ROI"],
-        ["🏡 Для жизни", "📈 Перепродажа"],
-        ["🔑 Аренда"],
-        [tr(user_id, "back"), tr(user_id, "main")]
-    ])
-
-
-def smart_budget_menu(user_id):
-    return kb([
-        ["до 1M AED", "1–2M AED"],
-        ["2–3M AED", "3–5M AED"],
-        ["5M+ AED"],
-        [tr(user_id, "back"), tr(user_id, "main")]
-    ])
-
-
-def smart_timing_menu(user_id):
-    return kb([
-        ["сейчас", "до 6 месяцев"],
-        ["до 12 месяцев", tr(user_id, "skip")],
-        [tr(user_id, "back"), tr(user_id, "main")]
-    ])
-
-
-def smart_risk_menu(user_id):
-    return kb([
-        ["низкий риск"],
-        ["сбалансировано"],
-        ["агрессивно"],
-        [tr(user_id, "back"), tr(user_id, "main")]
-    ])
-
-def report_menu(user_id):
-    return kb([
-        [tr(user_id, "full_report")],
-        ["💼 Экономическое резюме"],
-        [tr(user_id, "period_compare"), tr(user_id, "last_deals")],
-        [tr(user_id, "undervalued")],
-        [tr(user_id, "back"), tr(user_id, "main")]
-    ])
-
-
-def push_state(user_id, new_state):
-    old = user_states.get(user_id, {})
-    history = old.get("history", [])
-    if old.get("step"):
-        clean_old = {k: v for k, v in old.items() if k != "history"}
-        history.append(clean_old)
-    new_state["history"] = history
-    user_states[user_id] = new_state
-
-
-def go_back(user_id):
-    state = user_states.get(user_id, {})
-    history = state.get("history", [])
-    if history:
-        prev = history.pop()
-        prev["history"] = history
-        user_states[user_id] = prev
-        return prev
-    user_states[user_id] = {}
-    return {}
-
-
-def reset_to_main(user_id):
-    user_states[user_id] = {}
-
-
-
-def format_int(value):
-    if value is None:
-        return "0"
-    try:
-        return f"{int(value):,}".replace(",", " ")
-    except Exception:
-        return str(value)
-
-
-def format_money(value):
-    if value is None:
-        return "нет данных"
-    return f"{float(value):,.0f} AED".replace(",", " ")
-
-
-def format_pct(value):
-    if value is None:
-        return "нет данных"
-    sign = "+" if float(value) > 0 else ""
-    return f"{sign}{float(value):.1f}%"
-
-
-def clean_query(query):
-    return re.sub(r"\s+", " ", (query or "").strip())
-
-
-def split_words(query):
-    query = clean_query(query).replace("-", " ").replace("_", " ")
-    return [w for w in query.split() if len(w) >= 2][:8]
-
-
-def area_alias_values(query):
-    q = clean_query(query).lower()
-    return AREA_ALIASES.get(q, [clean_query(query)])
-
-
-def make_area_exact_condition(query):
-    """
-    Строгий поиск района.
-
-    Важно:
-    - JVC не ищем как слово JVC в DLD, потому что в DLD его часто нет.
-    - JVC подменяем на реальные DLD area_name_en:
-      Al Barsha South Fourth / Fifth / Al Hebiah First.
-    - Downtown подменяем на Burj Khalifa.
-    - Marina подменяем на Marsa Dubai.
-    """
-    values = [v for v in area_alias_values(query) if v]
-
-    if not values:
-        return "AND 1=0", []
-
-    params = []
-    parts = []
-
-    for value in values:
-        parts.append("area_name_en ILIKE %s")
-        params.append(f"%{value}%")
-
-    return "AND (" + " OR ".join(parts) + ")", params
-
-
-
-BUILDING_ALIASES = {
-    "address opera": ["address", "opera"],
-    "the address opera": ["address", "opera"],
-    "address residences dubai opera": ["address", "opera"],
-    "address residence dubai opera": ["address", "opera"],
-    "dubai opera address": ["address", "opera"],
-
-    "grande": ["grande"],
-    "grande signature": ["grande"],
-    "grande signature residences": ["grande"],
-
-    "burj vista": ["burj", "vista"],
-    "marina gate": ["marina", "gate"],
-    "binghatti corner": ["binghatti", "corner"],
-    "stax": ["stax"],
-}
-
-
-STOP_WORDS = {
-    "the", "a", "an", "of", "by", "at", "in", "on",
-    "dubai", "residence", "residences", "tower", "towers",
-    "apartment", "apartments", "building", "block", "phase",
-    "hotel", "homes", "home"
-}
-
-
-def normalize_search_text(value):
-    value = (value or "").lower()
-    value = re.sub(r"[^a-z0-9\s]", " ", value)
-    value = re.sub(r"\s+", " ", value).strip()
-    return value
-
-
-def smart_query_tokens(query):
-    q = normalize_search_text(query)
-    if q in BUILDING_ALIASES:
-        return BUILDING_ALIASES[q]
-
-    tokens = [t for t in q.split() if len(t) >= 2 and t not in STOP_WORDS]
-
-    # Если пользователь ввёл только шумовые слова, используем исходные токены.
-    if not tokens:
-        tokens = [t for t in q.split() if len(t) >= 2]
-
-    return tokens[:6]
-
-
-def building_search_expression():
-    return f"""
-    LOWER(
-        COALESCE(building_name_en, '') || ' ' ||
-        COALESCE(building_name_en, '') || ' ' ||
-        COALESCE(building_name_en, '') || ' ' ||
-        COALESCE(area_name_en, '')
-    )
-    """
-
-
-def make_building_condition(query):
-    tokens = smart_query_tokens(query)
-    if not tokens:
-        return "AND 1=0", []
-
-    expr = building_search_expression()
-    parts = []
-    params = []
-
-    # Все ключевые токены должны быть в searchable expression.
-    # Address Opera => address AND opera.
-    for token in tokens:
-        parts.append(f"{expr} ILIKE %s")
-        params.append(f"%{token}%")
-
-    return "AND (" + " AND ".join(parts) + ")", params
-
-
 def make_deal_type_condition(deal_type):
     if not deal_type:
         return "", []
 
-    d = str(deal_type).lower().strip()
+    txt = deal_text_expr()
 
     if is_sale_deal(deal_type):
-        # Продажа: только строки с продажной стоимостью. Исключаем rent/lease по процедуре.
-        return """
-        AND {price} IS NOT NULL
-        AND (
-            COALESCE(procedure_name_en, '') = ''
-            OR (procedure_name_en NOT ILIKE %s AND procedure_name_en NOT ILIKE %s AND procedure_name_en NOT ILIKE %s)
+        # Продажа: исключаем все строки rent/lease/ejari, чтобы аренда не смешивалась с продажей.
+        return f"""
+        AND {PRICE} IS NOT NULL
+        AND NOT (
+            {txt} ILIKE %s OR {txt} ILIKE %s OR {txt} ILIKE %s OR {txt} ILIKE %s OR {txt} ILIKE %s
         )
-        """.format(price=PRICE), ["%rent%", "%lease%", "%rental%"]
+        """, ["%rent%", "%lease%", "%rental%", "%ejari%", "%tenancy%"]
 
     if is_rent_deal(deal_type):
-        # Аренда: только строки, где есть арендная сумма.
-        # Никогда не подставляем продажи вместо аренды.
+        # Аренда: строго ищем только rent/lease/ejari/tenancy процедуры.
+        # Если в базе нет таких строк, лучше показать пустой результат, чем продажу под видом аренды.
         rent_val = value_expr(deal_type)
-        cond = f"AND {rent_val} IS NOT NULL"
-        if has_col('procedure_name_en'):
-            cond += """
-            AND (
-                procedure_name_en ILIKE %s
-                OR procedure_name_en ILIKE %s
-                OR procedure_name_en ILIKE %s
-                OR procedure_name_en IS NULL
-                OR procedure_name_en = ''
-            )
-            """
-            return cond, ["%rent%", "%lease%", "%rental%"]
-        return cond, []
+        return f"""
+        AND {rent_val} IS NOT NULL
+        AND (
+            {txt} ILIKE %s OR {txt} ILIKE %s OR {txt} ILIKE %s OR {txt} ILIKE %s OR {txt} ILIKE %s
+        )
+        """, ["%rent%", "%lease%", "%rental%", "%ejari%", "%tenancy%"]
 
     return "", []
 
@@ -978,7 +540,6 @@ def get_comparison(scope="dubai", name=None, prop=None, period=None, deal_type=N
 def get_latest_deals(scope, name, prop=None, period=None, deal_type=None, limit=5):
     prop_sql, prop_args = property_condition(prop)
     deal_sql, deal_args = make_deal_type_condition(deal_type)
-    p_sql = period_condition(period)
 
     if scope == "area":
         scope_sql, scope_args = make_area_exact_condition(name)
@@ -987,9 +548,9 @@ def get_latest_deals(scope, name, prop=None, period=None, deal_type=None, limit=
     else:
         scope_sql, scope_args = "", []
 
-    params = scope_args + prop_args + deal_args + [limit]
-
-    try:
+    def run_query(p_sql, p_args=None):
+        p_args = p_args or []
+        params = scope_args + prop_args + deal_args + p_args + [limit]
         with db() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"""
@@ -1005,14 +566,26 @@ def get_latest_deals(scope, name, prop=None, period=None, deal_type=None, limit=
                         area_name_en
                     {base_from()}
                       {scope_sql}
-                      {value_not_null_sql(deal_type)}
                       {prop_sql}
                       {deal_sql}
                       {p_sql}
+                      {value_not_null_sql(deal_type)}
                     ORDER BY safe_date DESC NULLS LAST
                     LIMIT %s
                 """, params)
                 return cur.fetchall()
+
+    try:
+        # 1) точный выбранный период
+        rows = run_query(period_condition(period))
+        if rows:
+            return rows
+        # 2) для кнопки «Последние сделки» лучше показать последние доступные сделки
+        # по тем же фильтрам, но без ограничения периода. Важно: тип сделки сохраняется,
+        # аренда не заменяется продажей.
+        if period:
+            rows = run_query("")
+        return rows
     except Exception as e:
         print("GET_LATEST_DEALS_ERROR:", repr(e))
         return []
