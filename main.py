@@ -565,6 +565,25 @@ def property_condition(prop):
     return "", []
 
 
+
+def period_condition(period):
+    if not period:
+        return ""
+
+    p = str(period).strip().lower()
+
+    if p in ["3", "3m", "3 мес", "3 месяца", "3 months"]:
+        return "AND safe_date >= CURRENT_DATE - INTERVAL '3 months'"
+    if p in ["6", "6m", "6 мес", "6 месяцев", "6 months"]:
+        return "AND safe_date >= CURRENT_DATE - INTERVAL '6 months'"
+    if p in ["12", "1", "1y", "1 год", "год", "12 months", "1 year"]:
+        return "AND safe_date >= CURRENT_DATE - INTERVAL '12 months'"
+    if p in ["36", "3y", "3 года", "36 months", "3 years"]:
+        return "AND safe_date >= CURRENT_DATE - INTERVAL '36 months'"
+
+    return ""
+
+
 def get_period_key(user_id, text):
     if text == tr(user_id, "p3"):
         return "3"
@@ -1291,8 +1310,11 @@ def show_smart_recommendation(goal, budget, timing, risk, rows):
 def get_latest_deals_smart(scope, name, prop=None, period=None, deal_type=None, limit=5):
     attempts = [
         (prop, period, deal_type),
+        (prop, period, None),
         (prop, None, deal_type),
+        (prop, None, None),
         (None, period, deal_type),
+        (None, period, None),
         (None, None, deal_type),
         (None, None, None),
     ]
@@ -1306,8 +1328,11 @@ def get_latest_deals_smart(scope, name, prop=None, period=None, deal_type=None, 
 def get_stats_smart(scope="dubai", name=None, prop=None, period=None, deal_type=None):
     attempts = [
         (prop, period, deal_type),
+        (prop, period, None),
         (prop, None, deal_type),
+        (prop, None, None),
         (None, period, deal_type),
+        (None, period, None),
         (None, None, deal_type),
         (None, None, None),
     ]
@@ -1942,6 +1967,9 @@ async def main_handler(message: Message):
                 response = "🧾 <b>Последние сделки</b>\n"
                 if name:
                     response += f"📍 {name}\n"
+                if (used_prop, used_period, used_deal_type) != (prop, period, deal_type):
+                    response += "ℹ️ По точному фильтру сделок мало, показываю ближайшую доступную выборку.\n"
+                    response += f"Фильтр: {used_deal_type or 'все сделки'} / {used_prop or 'все типы'} / {period_label(used_period)}\n"
                 response += "\n"
 
                 for r in rows:
