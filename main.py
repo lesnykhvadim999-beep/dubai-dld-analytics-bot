@@ -650,32 +650,36 @@ def safe_building_label(row):
 
 def building_aliases(name):
     q = normalize_search_text(name)
+
+    # Не превращаем короткое "Grande" в глобальный ILIKE "%Grande%"
+    # для расчётов. Иначе смешиваются:
+    # Grande / Sobha Creek Vistas Grande / Crest Grande / Beverly Grande.
     aliases = {
-        "grande": ["Grande", "Grande Signature Residences"],
-        "grande signature": ["Grande", "Grande Signature Residences"],
-        "grande signature residences": ["Grande", "Grande Signature Residences"],
-        "address opera": ["Address", "Address Residences Dubai Opera", "The Address Residences Dubai Opera"],
-        "the address opera": ["Address", "Address Residences Dubai Opera", "The Address Residences Dubai Opera"],
-        "address residences dubai opera": ["Address", "Address Residences Dubai Opera", "The Address Residences Dubai Opera"],
-        "corner": ["Corner", "Binghatti Corner"],
-        "binghatti corner": ["Corner", "Binghatti Corner"],
+        "grande signature": ["Grande Signature Residences", "Grande"],
+        "grande signature residences": ["Grande Signature Residences", "Grande"],
+        "address opera": ["Address Residences Dubai Opera", "The Address Residences Dubai Opera"],
+        "the address opera": ["Address Residences Dubai Opera", "The Address Residences Dubai Opera"],
+        "address residences dubai opera": ["Address Residences Dubai Opera", "The Address Residences Dubai Opera"],
+        "corner": ["Binghatti Corner"],
+        "binghatti corner": ["Binghatti Corner"],
     }
     return aliases.get(q, [name])
 
+
 def building_exact_condition_for_name(name):
     name = clean_query(name)
+    if not name:
+        return "AND 1=0", []
+
     aliases = building_aliases(name)
 
     conditions = []
     params = []
-
     for alias in aliases:
-        conditions.append("COALESCE(building_name_en::text, '') ILIKE %s")
-        params.append(f"%{alias}%")
-
-    if name:
-        conditions.append("COALESCE(building_name_en::text, '') ILIKE %s")
-        params.append(f"%{name}%")
+        alias = clean_query(alias)
+        if alias:
+            conditions.append("LOWER(TRIM(COALESCE(building_name_en::text, ''))) = LOWER(TRIM(%s))")
+            params.append(alias)
 
     if not conditions:
         return "AND 1=0", []
@@ -688,8 +692,8 @@ def find_buildings(query, limit=10):
     if not query:
         return []
 
-    where, params = building_exact_condition_for_name(query)
-
+    # Подсказки — частичный поиск.
+    # Отчёты после выбора — строго по выбранной кнопке/названию.
     try:
         with db() as conn:
             with conn.cursor() as cur:
@@ -697,14 +701,22 @@ def find_buildings(query, limit=10):
                     SELECT
                         COALESCE(building_name_en::text, '') AS building_name_en,
                         COALESCE(area_name_en::text, '') AS area_name_en,
-                        COUNT(*) AS deals
+                        COUNT(*) AS deals,
+                        CASE
+                            WHEN LOWER(TRIM(COALESCE(building_name_en::text, ''))) = LOWER(TRIM(%s)) THEN 0
+                            WHEN LOWER(TRIM(COALESCE(building_name_en::text, ''))) LIKE LOWER(TRIM(%s)) THEN 1
+                            ELSE 2
+                        END AS rank
                     {base_from()}
-                      {where}
                       AND COALESCE(building_name_en::text, '') <> ''
+                      AND (
+                            COALESCE(building_name_en::text, '') ILIKE %s
+                         OR COALESCE(area_name_en::text, '') ILIKE %s
+                      )
                     GROUP BY COALESCE(building_name_en::text, ''), COALESCE(area_name_en::text, '')
-                    ORDER BY deals DESC
+                    ORDER BY rank ASC, deals DESC
                     LIMIT %s
-                """, params + [limit])
+                """, (query, query + "%", f"%{query}%", f"%{query}%", limit))
                 return cur.fetchall()
     except Exception as e:
         print("FIND_BUILDINGS_ERROR:", repr(e))
@@ -909,7 +921,11 @@ def get_latest_deals(scope, name, prop=None, period=None, deal_type=None, limit=
                     ORDER BY safe_date DESC NULLS LAST
                     LIMIT %s
                 """, params)
-                return cur.fetchall()
+                rows = cur.fetchall()
+                if scope == "building" and name:
+                    target = normalize_search_text(name)
+                    rows = [r for r in rows if normalize_search_text(r.get("building_name_en", "")) == target]
+                return rows
     except Exception as e:
         print("GET_LATEST_DEALS_ERROR:", repr(e))
         return []
@@ -2070,6 +2086,18 @@ async def main_handler(message: Message):
             )
         else:
             await message.answer("⚠️ По этому узкому фильтру нет стабильной выборки. Попробуйте «Всё время», другой тип комнат или нажмите «Назад».", reply_markup=main_menu(user_id))
+
+
+
+def selftest_building_matching():
+    sql, params = building_exact_condition_for_name("Grande")
+    assert "ILIKE" not in sql, sql
+    assert any(str(p).lower() == "grande" for p in params), params
+
+    sql2, params2 = building_exact_condition_for_name("Grande Signature Residences")
+    assert "ILIKE" not in sql2, sql2
+    assert any(str(p).lower() == "grande signature residences" for p in params2), params2
+    return True
 
 
 async def main():
