@@ -352,6 +352,67 @@ def period_menu(user_id):
     ])
 
 
+
+def smart_goal_menu(user_id):
+    return kb([
+        ["💰 Инвестиция / ROI"],
+        ["🏡 Для жизни", "📈 Перепродажа"],
+        ["🔑 Аренда"],
+        [tr(user_id, "back"), tr(user_id, "main")],
+    ])
+
+
+def smart_budget_menu(user_id):
+    return kb([
+        ["до 1M AED", "1–2M AED"],
+        ["2–3M AED", "3–5M AED"],
+        ["5M+ AED"],
+        [tr(user_id, "back"), tr(user_id, "main")],
+    ])
+
+
+def smart_timing_menu(user_id):
+    return kb([
+        ["сейчас", "до 6 месяцев"],
+        ["до 12 месяцев", tr(user_id, "skip")],
+        [tr(user_id, "back"), tr(user_id, "main")],
+    ])
+
+
+def smart_risk_menu(user_id):
+    return kb([
+        ["низкий риск"],
+        ["сбалансировано"],
+        ["агрессивно"],
+        [tr(user_id, "back"), tr(user_id, "main")],
+    ])
+
+
+def push_state(user_id, new_state):
+    old = user_states.get(user_id, {}) or {}
+    history = old.get("history", []) or []
+    if old.get("step"):
+        clean_old = {k: v for k, v in old.items() if k != "history"}
+        history.append(clean_old)
+    new_state["history"] = history
+    user_states[user_id] = new_state
+
+
+def go_back(user_id):
+    state = user_states.get(user_id, {}) or {}
+    history = state.get("history", []) or []
+    if history:
+        prev = history.pop()
+        prev["history"] = history
+        user_states[user_id] = prev
+        return prev
+    user_states[user_id] = {}
+    return {}
+
+
+def reset_to_main(user_id):
+    user_states[user_id] = {}
+
 def report_menu(user_id):
     return kb([
         [tr(user_id, "full_report")],
