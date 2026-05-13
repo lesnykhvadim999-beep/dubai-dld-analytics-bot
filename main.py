@@ -86,7 +86,7 @@ TEXTS = {
         "enter_price": "💰 Введите цену объекта в AED.\n\nНапример: 2500000",
         "enter_size": "📐 Введите площадь объекта в sq.ft.\n\nНапример: 850",
         "loading": "⏳ Считаю аналитику по DLD базе...",
-        "error": '⚠️ По этим фильтрам DLD не вернул стабильную выборку. Нажмите «Назад» и попробуйте: «Всё время», «Пропустить» тип юнита или другой формат комнат.',
+        "error": '⚠️ По этому узкому фильтру нет стабильной выборки. Попробуйте «Всё время», другой тип комнат или нажмите «Назад».',
         "choose_deal_type": "📊 Выберите тип сделки:",
         "sale": "🏠 Продажа",
         "rent": "🔑 Аренда",
@@ -126,7 +126,7 @@ TEXTS = {
         "enter_price": "💰 Enter price in AED.\n\nExample: 2500000",
         "enter_size": "📐 Enter size in sq.ft.\n\nExample: 850",
         "loading": "⏳ Calculating DLD analytics...",
-        "error": '⚠️ По этим фильтрам DLD не вернул стабильную выборку. Нажмите «Назад» и попробуйте: «Всё время», «Пропустить» тип юнита или другой формат комнат.',
+        "error": '⚠️ По этому узкому фильтру нет стабильной выборки. Попробуйте «Всё время», другой тип комнат или нажмите «Назад».',
         "choose_deal_type": "📊 Choose deal type:",
         "sale": "🏠 Sale",
         "rent": "🔑 Rent",
@@ -166,7 +166,7 @@ TEXTS = {
         "enter_price": "💰 أدخل السعر بالدرهم.\n\nمثال: 2500000",
         "enter_size": "📐 أدخل المساحة بالقدم المربع.\n\nمثال: 850",
         "loading": "⏳ يتم حساب تحليلات DLD...",
-        "error": '⚠️ По этим фильтрам DLD не вернул стабильную выборку. Нажмите «Назад» и попробуйте: «Всё время», «Пропустить» тип юнита или другой формат комнат.',
+        "error": '⚠️ По этому узкому фильтру нет стабильной выборки. Попробуйте «Всё время», другой тип комнат или нажмите «Назад».',
         "choose_deal_type": "📊 اختر نوع الصفقة:",
         "sale": "🏠 بيع",
         "rent": "🔑 إيجار",
@@ -665,78 +665,58 @@ def building_exact_condition_for_name(name):
 
 
 def find_buildings(query, limit=10):
-    q = normalize_search_text(query)
-    aliases = building_aliases(query)
-
-    words = []
-    for a in aliases:
-        words.extend([w for w in normalize_search_text(a).split() if len(w) >= 2])
-    words.extend([w for w in q.split() if len(w) >= 2])
-    words = list(dict.fromkeys(words))
-
-    if not words:
+    query = clean_query(query)
+    if not query:
         return []
 
-    expr = "LOWER(COALESCE(building_name_en, '') || ' ' || COALESCE(area_name_en, ''))"
-    conditions = " OR ".join([f"{expr} ILIKE %s" for _ in words])
-    params = [f"%{w}%" for w in words] + [limit]
+    where, params = building_exact_condition_for_name(query)
 
     try:
         with db() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"""
                     SELECT
-                        building_name_en,
-                        area_name_en,
+                        COALESCE(building_name_en::text, '') AS building_name_en,
+                        COALESCE(area_name_en::text, '') AS area_name_en,
                         COUNT(*) AS deals
                     {base_from()}
-                      AND building_name_en IS NOT NULL
-                      AND building_name_en <> ''
-                      AND ({conditions})
-                    GROUP BY building_name_en, area_name_en
+                      {where}
+                      AND COALESCE(building_name_en::text, '') <> ''
+                    GROUP BY COALESCE(building_name_en::text, ''), COALESCE(area_name_en::text, '')
                     ORDER BY deals DESC
                     LIMIT %s
-                """, params)
+                """, params + [limit])
                 return cur.fetchall()
     except Exception as e:
-        print("FIND_BUILDINGS_SQL_ERROR:", repr(e))
+        print("FIND_BUILDINGS_ERROR:", repr(e))
         return []
 
 
 def find_areas(query, limit=10):
-    q = normalize_search_text(query)
-    aliases = {
-        "jvc": ["jumeirah village circle", "al hebiah", "al barsha south"],
-        "downtown": ["downtown", "burj khalifa"],
-        "downtown dubai": ["downtown", "burj khalifa"],
-        "business bay": ["business bay"],
-        "marina": ["marina", "marsa dubai"],
-        "dubai marina": ["dubai marina", "marsa dubai"],
-    }
-    words = aliases.get(q, [q])
-    expr = "LOWER(COALESCE(area_name_en, ''))"
-    conditions = " OR ".join([f"{expr} ILIKE %s" for _ in words])
-    params = [f"%{w}%" for w in words] + [limit]
+    query = clean_query(query)
+    if not query:
+        return []
+
+    where, params = make_area_exact_condition(query)
 
     try:
         with db() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"""
                     SELECT
-                        area_name_en,
+                        COALESCE(area_name_en::text, '') AS area_name_en,
                         COUNT(*) AS deals,
-                        COUNT(DISTINCT building_name_en) AS buildings
+                        COUNT(DISTINCT COALESCE(building_name_en::text, '')) AS buildings
                     {base_from()}
-                      AND area_name_en IS NOT NULL
-                      AND area_name_en <> ''
-                      AND ({conditions})
-                    GROUP BY area_name_en
+                      {where}
+                      AND COALESCE(area_name_en::text, '') <> ''
+                    GROUP BY COALESCE(area_name_en::text, '')
                     ORDER BY deals DESC
                     LIMIT %s
-                """, params)
+                """, params + [limit])
                 return cur.fetchall()
     except Exception as e:
-        print("FIND_AREAS_SQL_ERROR:", repr(e))
+        print("FIND_AREAS_ERROR:", repr(e))
         return []
 
 
@@ -917,45 +897,52 @@ def get_latest_deals(scope, name, prop=None, period=None, deal_type=None, limit=
 
 
 def get_top_active():
-    with db() as conn:
-        with conn.cursor() as cur:
-            cur.execute(f"""
-                SELECT
-                    {BUILDING_NAME} AS building_name_en,
-                    area_name_en,
-                    COUNT(*) AS deals,
-                    AVG({PRICE}) AS avg_price,
-                    AVG({METER_PRICE}) AS avg_meter
-                {base_from()}
-                  AND {BUILDING_NAME} IS NOT NULL
-                  AND {PRICE} IS NOT NULL
-                GROUP BY {BUILDING_NAME}, area_name_en
-                ORDER BY deals DESC
-                LIMIT 10
-            """)
-            return cur.fetchall()
+    try:
+        with db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT
+                        COALESCE(building_name_en::text, '') AS building_name_en,
+                        COALESCE(area_name_en::text, '') AS area_name_en,
+                        COUNT(*) AS deals,
+                        AVG({PRICE}) AS avg_price,
+                        AVG({METER_PRICE}) AS avg_meter
+                    {base_from()}
+                      AND COALESCE(building_name_en::text, '') <> ''
+                      AND {PRICE} IS NOT NULL
+                    GROUP BY COALESCE(building_name_en::text, ''), COALESCE(area_name_en::text, '')
+                    ORDER BY deals DESC
+                    LIMIT 10
+                """)
+                return cur.fetchall()
+    except Exception as e:
+        print("GET_TOP_ACTIVE_ERROR:", repr(e))
+        return []
 
 
 def get_top_price():
-    with db() as conn:
-        with conn.cursor() as cur:
-            cur.execute(f"""
-                SELECT
-                    {BUILDING_NAME} AS building_name_en,
-                    area_name_en,
-                    COUNT(*) AS deals,
-                    AVG({PRICE}) AS avg_price,
-                    AVG({METER_PRICE}) AS avg_meter
-                {base_from()}
-                  AND {BUILDING_NAME} IS NOT NULL
-                  AND {PRICE} IS NOT NULL
-                GROUP BY {BUILDING_NAME}, area_name_en
-                HAVING COUNT(*) >= 5
-                ORDER BY avg_price DESC
-                LIMIT 10
-            """)
-            return cur.fetchall()
-
+    try:
+        with db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT
+                        COALESCE(building_name_en::text, '') AS building_name_en,
+                        COALESCE(area_name_en::text, '') AS area_name_en,
+                        COUNT(*) AS deals,
+                        AVG({PRICE}) AS avg_price,
+                        AVG({METER_PRICE}) AS avg_meter
+                    {base_from()}
+                      AND COALESCE(building_name_en::text, '') <> ''
+                      AND {PRICE} IS NOT NULL
+                    GROUP BY COALESCE(building_name_en::text, ''), COALESCE(area_name_en::text, '')
+                    HAVING COUNT(*) >= 5
+                    ORDER BY avg_price DESC NULLS LAST
+                    LIMIT 10
+                """)
+                return cur.fetchall()
+    except Exception as e:
+        print("GET_TOP_PRICE_ERROR:", repr(e))
+        return []
 
 
 def get_top_buildings_in_scope(scope="dubai", name=None, period=None, deal_type=None, limit=7):
@@ -1161,7 +1148,7 @@ def smart_pick_candidates(goal, budget_text, risk, timing):
         with conn:
             with conn.cursor() as cur:
                 for display_area, real_areas in areas:
-                    area_conditions = " OR ".join(["area_name_en ILIKE %s"] * len(real_areas))
+                    area_conditions = " OR ".join(["COALESCE(area_name_en::text, '') ILIKE %s"] * len(real_areas))
                     area_params = [f"%{a}%" for a in real_areas]
 
                     best_type_rows = []
@@ -1300,6 +1287,36 @@ def show_smart_recommendation(goal, budget, timing, risk, rows):
         text += f"{i}. <b>{r['area']}</b> · {r['property']}\n   💰 {format_money(r['avg_price'])} · 📊 {format_int(r['deals'])} сделок\n"
     text += "\n⚠️ Это аналитический ориентир по DLD, не финальная рекомендация к покупке. Перед сделкой нужно проверить конкретный юнит, вид, этаж, сервис-чардж, состояние и срочность продавца."
     return text
+
+def get_latest_deals_smart(scope, name, prop=None, period=None, deal_type=None, limit=5):
+    attempts = [
+        (prop, period, deal_type),
+        (prop, None, deal_type),
+        (None, period, deal_type),
+        (None, None, deal_type),
+        (None, None, None),
+    ]
+    for p, per, dt in attempts:
+        rows = get_latest_deals(scope, name, p, per, dt, limit)
+        if rows:
+            return rows, p, per, dt
+    return [], prop, period, deal_type
+
+
+def get_stats_smart(scope="dubai", name=None, prop=None, period=None, deal_type=None):
+    attempts = [
+        (prop, period, deal_type),
+        (prop, None, deal_type),
+        (None, period, deal_type),
+        (None, None, deal_type),
+        (None, None, None),
+    ]
+    for p, per, dt in attempts:
+        row = get_stats(scope, name, p, per, dt)
+        if row and row.get("deals"):
+            return row, p, per, dt
+    return None, prop, period, deal_type
+
 
 def pct_change(current, previous):
     if previous is None or float(previous) == 0 or current is None:
@@ -1869,14 +1886,21 @@ async def main_handler(message: Message):
 
             if text == tr(user_id, "full_report"):
                 await message.answer(tr(user_id, "loading"))
-                row = get_stats(scope, name, prop, period, deal_type)
+                row, used_prop, used_period, used_deal_type = get_stats_smart(scope, name, prop, period, deal_type)
                 title = "🌆 <b>Статистика Дубая</b>"
                 if scope == "building":
                     title = f"🏢 <b>{name}</b>"
                 elif scope == "area":
                     title = f"🏙 <b>{name}</b>"
 
-                await message.answer(show_stats(title, row, prop, period, deal_type), reply_markup=report_menu(user_id))
+                if not row:
+                    await message.answer(no_data_message("Полная аналитика"), reply_markup=report_menu(user_id))
+                    return
+
+                note = ""
+                if (used_prop, used_period, used_deal_type) != (prop, period, deal_type):
+                    note = "\n\nℹ️ По выбранным фильтрам данных мало, поэтому показал ближайшую доступную выборку."
+                await message.answer(show_stats(title, row, used_prop, used_period, used_deal_type) + note, reply_markup=report_menu(user_id))
                 return
 
             if text == "💼 Экономическое резюме":
@@ -1910,9 +1934,9 @@ async def main_handler(message: Message):
 
             if text == tr(user_id, "last_deals"):
                 await message.answer(tr(user_id, "loading"))
-                rows = get_latest_deals(scope, name, prop, period, deal_type)
+                rows, used_prop, used_period, used_deal_type = get_latest_deals_smart(scope, name, prop, period, deal_type)
                 if not rows:
-                    await message.answer("❌ Нет сделок по выбранным фильтрам.", reply_markup=report_menu(user_id))
+                    await message.answer(no_data_message("Последние сделки"), reply_markup=report_menu(user_id))
                     return
 
                 response = "🧾 <b>Последние сделки</b>\n"
@@ -2017,7 +2041,7 @@ async def main_handler(message: Message):
                 reply_markup=back_menu(user_id)
             )
         else:
-            await message.answer("⚠️ Не удалось выполнить расчёт. Попробуйте другой запрос или вернитесь в главное меню.", reply_markup=main_menu(user_id))
+            await message.answer("⚠️ По этому узкому фильтру нет стабильной выборки. Попробуйте «Всё время», другой тип комнат или нажмите «Назад».", reply_markup=main_menu(user_id))
 
 
 async def main():
