@@ -512,9 +512,11 @@ def is_sale_deal_type(deal_type):
 
 def deal_value_expr(deal_type):
     # Продажа: actual_worth.
-    # Аренда: rent_value, если оно есть; иначе actual_worth только у строк, где процедура явно rental/lease.
+    # Аренда: ТОЛЬКО rent_value.
+    # Важно: actual_worth — это цена продажи. Его нельзя использовать как fallback для аренды,
+    # иначе при выборе «Аренда» бот показывает продажные сделки как арендные.
     if is_rent_deal_type(deal_type):
-        return f"COALESCE(NULLIF({RENT_VALUE}, 0), NULLIF({PRICE}, 0))"
+        return RENT_VALUE
     return PRICE
 
 
@@ -538,9 +540,11 @@ def make_deal_type_condition(deal_type):
             OR COALESCE(procedure_name_en::text, '') ILIKE %s
             OR COALESCE(procedure_name_en::text, '') ILIKE %s
             OR COALESCE(procedure_name_en::text, '') ILIKE %s
+            OR COALESCE(procedure_name_en::text, '') ILIKE %s
+            OR COALESCE(procedure_name_en::text, '') ILIKE %s
         )
     """
-    rent_args = ["%rent%", "%lease%", "%tenancy%", "%ejari%", "%rental%"]
+    rent_args = ["%rent%", "%lease%", "%tenancy%", "%ejari%", "%rental%", "%rental contract%", "%lease contract%"]
 
     if is_sale_deal_type(deal_type):
         return f"""
@@ -550,12 +554,12 @@ def make_deal_type_condition(deal_type):
         """, rent_args
 
     if is_rent_deal_type(deal_type):
+        # ЖЁСТКИЙ ФИКС: аренда = только строки, где процедура похожа на rent/lease
+        # и есть rent_value. actual_worth больше НЕ используется, чтобы не показывать продажи.
         return f"""
         AND {rent_proc}
-        AND (
-            ({RENT_VALUE} IS NOT NULL AND {RENT_VALUE} > 0)
-            OR ({PRICE} IS NOT NULL AND {PRICE} > 0)
-        )
+        AND {RENT_VALUE} IS NOT NULL
+        AND {RENT_VALUE} > 0
         """, rent_args
 
     return "", []
@@ -1800,6 +1804,8 @@ def no_data_message(title="Аналитика"):
     return (
         f"⚠️ <b>{title}</b>\n\n"
         "По выбранным фильтрам не удалось получить стабильную выборку DLD.\n\n"
+        "Важно: если выбрана «Аренда», бот больше не подставляет продажи вместо аренды. "
+        "Если в текущей таблице нет rent/lease строк с rent_value, результат будет пустым — это корректнее, чем показывать продажные цены.\n\n"
         "Что можно сделать:\n"
         "• выбрать «Всё время»;\n"
         "• выбрать «Пропустить» в типе юнита;\n"
