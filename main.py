@@ -639,76 +639,91 @@ def building_exact_condition_for_name(name):
     return """
     AND (
         building_name_en = %s
-        OR project_name_en = %s
-        OR master_project_en = %s
         OR LOWER(building_name_en) = LOWER(%s)
-        OR LOWER(project_name_en) = LOWER(%s)
-        OR LOWER(master_project_en) = LOWER(%s)
+        OR building_name_en ILIKE %s
     )
-    """, [name, name, name, name, name, name]
+    """, [name, name, f"%{name}%"]
+
 
 
 def find_buildings(query, limit=10):
+    """
+    Stable building search.
+    Uses only columns that already worked in your DB: building_name_en + area_name_en.
+    Also has aliases for common broker input: Grande, Address Opera, Corner.
+    """
     q = normalize_search_text(query)
     tokens = smart_query_tokens(query)
+
+    aliases = {
+        "grande": ["grande", "grande signature"],
+        "grande signature residences": ["grande", "signature"],
+        "address opera": ["address", "opera"],
+        "the address opera": ["address", "opera"],
+        "address residences dubai opera": ["address", "opera"],
+        "corner": ["corner", "binghatti corner"],
+        "binghatti corner": ["binghatti", "corner"],
+    }
+
+    if q in aliases:
+        tokens = aliases[q]
 
     if not tokens:
         return []
 
-    expr = """
-    LOWER(
-        COALESCE(building_name_en, '') || ' ' ||
-        COALESCE(project_name_en, '') || ' ' ||
-        COALESCE(master_project_en, '') || ' ' ||
-        COALESCE(area_name_en, '')
-    )
-    """
-
+    expr = "LOWER(COALESCE(building_name_en, '') || ' ' || COALESCE(area_name_en, ''))"
     token_conditions = " AND ".join([f"{expr} ILIKE %s" for _ in tokens])
-    token_params = [f"%{t}%" for t in tokens]
+    token_score_sql = " + ".join([f"CASE WHEN {expr} ILIKE %s THEN 1 ELSE 0 END" for _ in tokens])
 
-    token_score_sql = " + ".join([f"CASE WHEN {expr} ILIKE %s THEN 1 ELSE 0 END" for _ in tokens]) or "0"
-
-    alias_bonus = 0
-    if q in ["grande", "grande signature", "grande signature residences"]:
-        tokens = ["grande"]
-        token_conditions = f"{expr} ILIKE %s"
-        token_params = ["%grande%"]
-        token_score_sql = f"CASE WHEN {expr} ILIKE %s THEN 1 ELSE 0 END"
-        alias_bonus = 500
-    elif q in ["address opera", "the address opera", "address residences dubai opera"]:
-        tokens = ["address", "opera"]
-        token_conditions = f"{expr} ILIKE %s AND {expr} ILIKE %s"
-        token_params = ["%address%", "%opera%"]
-        token_score_sql = f"CASE WHEN {expr} ILIKE %s THEN 1 ELSE 0 END + CASE WHEN {expr} ILIKE %s THEN 1 ELSE 0 END"
-        alias_bonus = 500
-
-    rank_params = [q, f"{q}%"] + [f"%{t}%" for t in tokens] + token_params + [limit]
+    rank_params = [q, f"{q}%"] + [f"%{t}%" for t in tokens] + [f"%{t}%" for t in tokens] + [limit]
 
     try:
         with db() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"""
                     SELECT
-                        COALESCE(NULLIF(building_name_en, ''), NULLIF(project_name_en, ''), NULLIF(master_project_en, '')) AS building_name_en,
+                        building_name_en,
                         area_name_en,
                         COUNT(*) AS deals,
                         CASE
-                            WHEN {expr} = %s THEN 1000
-                            WHEN {expr} ILIKE %s THEN 700
+                            WHEN LOWER(building_name_en) = %s THEN 1000
+                            WHEN LOWER(building_name_en) ILIKE %s THEN 700
                             ELSE 0
                         END
                         + ({token_score_sql}) * 100
-                        + {alias_bonus}
                         + LEAST(COUNT(*), 500) AS relevance_score
                     {base_from()}
-                      AND COALESCE(building_name_en, project_name_en, master_project_en) IS NOT NULL
+                      AND building_name_en IS NOT NULL
+                      AND building_name_en <> ''
                       AND ({token_conditions})
-                    GROUP BY COALESCE(NULLIF(building_name_en, ''), NULLIF(project_name_en, ''), NULLIF(master_project_en, '')), area_name_en
+                    GROUP BY building_name_en, area_name_en
                     ORDER BY relevance_score DESC, deals DESC
                     LIMIT %s
                 """, rank_params)
-                return cur.fetchall()
+                rows = cur.fetchall()
+
+        # Extra fallback: if strict AND search is empty, try OR search.
+        if not rows and len(tokens) > 1:
+            or_conditions = " OR ".join([f"{expr} ILIKE %s" for _ in tokens])
+            params = [f"%{t}%" for t in tokens] + [limit]
+            with db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(f"""
+                        SELECT
+                            building_name_en,
+                            area_name_en,
+                            COUNT(*) AS deals
+                        {base_from()}
+                          AND building_name_en IS NOT NULL
+                          AND building_name_en <> ''
+                          AND ({or_conditions})
+                        GROUP BY building_name_en, area_name_en
+                        ORDER BY deals DESC
+                        LIMIT %s
+                    """, params)
+                    rows = cur.fetchall()
+
+        return rows
     except Exception as e:
         print("FIND BUILDINGS ERROR:", repr(e))
         return []
@@ -1468,9 +1483,6 @@ async def main_handler(message: Message):
     state = user_states.get(user_id, {})
 
     try:
-        if text == "/version":
-            await message.answer("✅ Работает файл: <code>" + BOT_VERSION + "</code>")
-            return
         if text == tr(user_id, "main"):
             reset_to_main(user_id)
             await message.answer(tr(user_id, "main_menu"), reply_markup=main_menu(user_id))
