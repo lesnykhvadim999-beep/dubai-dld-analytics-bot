@@ -12,8 +12,6 @@ import re
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-BOT_VERSION = "v7_no_railway_debug_2026_05_13"
-
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -61,7 +59,7 @@ COALESCE(
 
 TEXTS = {
     "ru": {
-        "choose_lang": "🏙 <b>Dubai DLD Analytics Bot</b>\n\nВыберите язык:",
+        "choose_lang": '🏙 <b>Dubai DLD Analytics Bot</b>\n\nВаш аналитический помощник по рынку недвижимости Дубая.\n\nЧто умеет бот:\n• искать здания и похожие названия;\n• показывать статистику по районам;\n• анализировать сделки DLD;\n• сравнивать периоды;\n• оценивать выгодность конкретной сделки;\n• подбирать район и формат юнита под бюджет и цель.\n\nВыберите язык:',
         "lang_selected": "✅ Язык выбран: <b>Русский</b>\n\nГлавное меню:",
         "main_menu": "🏠 <b>Главное меню</b>\n\nВыберите раздел:",
         "view_deals": "📊 Смотреть сделки",
@@ -94,7 +92,7 @@ TEXTS = {
         "enter_price": "💰 Введите цену объекта в AED.\n\nНапример: 2500000",
         "enter_size": "📐 Введите площадь объекта в sq.ft.\n\nНапример: 850",
         "loading": "⏳ Считаю аналитику по DLD базе...",
-        "error": "⚠️ Не удалось посчитать этот запрос. Попробуйте другое название или вернитесь в главное меню.",
+        "error": '⚠️ Не удалось выполнить расчёт по этим фильтрам. Попробуйте расширить период, выбрать «Всё время» или другой тип юнита.',
         "choose_deal_type": "📊 Выберите тип сделки:",
         "sale": "🏠 Продажа",
         "rent": "🔑 Аренда",
@@ -134,7 +132,7 @@ TEXTS = {
         "enter_price": "💰 Enter price in AED.\n\nExample: 2500000",
         "enter_size": "📐 Enter size in sq.ft.\n\nExample: 850",
         "loading": "⏳ Calculating DLD analytics...",
-        "error": "⚠️ Could not calculate this request. Please try another name or return to the main menu.",
+        "error": '⚠️ Не удалось выполнить расчёт по этим фильтрам. Попробуйте расширить период, выбрать «Всё время» или другой тип юнита.',
         "choose_deal_type": "📊 Choose deal type:",
         "sale": "🏠 Sale",
         "rent": "🔑 Rent",
@@ -174,7 +172,7 @@ TEXTS = {
         "enter_price": "💰 أدخل السعر بالدرهم.\n\nمثال: 2500000",
         "enter_size": "📐 أدخل المساحة بالقدم المربع.\n\nمثال: 850",
         "loading": "⏳ يتم حساب تحليلات DLD...",
-        "error": "⚠️ تعذر حساب هذا الطلب. جرّب اسماً آخر أو ارجع إلى القائمة الرئيسية.",
+        "error": '⚠️ Не удалось выполнить расчёт по этим фильтрам. Попробуйте расширить период, выбрать «Всё время» или другой тип юнита.',
         "choose_deal_type": "📊 اختر نوع الصفقة:",
         "sale": "🏠 بيع",
         "rent": "🔑 إيجار",
@@ -1100,7 +1098,7 @@ def smart_area_universe(goal):
 def smart_fallback_candidates(goal, budget_text, risk, timing):
     """
     Fallback без SQL, чтобы бот никогда не падал в умном подборе.
-    Используется только если Railway/Postgres вернул ошибку или DLD выборка пустая.
+    Используется только если Postgres вернул ошибку или DLD выборка пустая.
     """
     if not budget_text:
         budget_text = "1–2M AED"
@@ -1457,10 +1455,32 @@ async def start_building_search_from_text(message, text):
     await message.answer(response, reply_markup=kb(buttons))
 
 
+
+
+def safe_call(fn, *args, default=None):
+    try:
+        return fn(*args)
+    except Exception as e:
+        print("SAFE_CALL_ERROR:", fn.__name__, repr(e))
+        return default
+
+
+def no_data_message(title="Аналитика"):
+    return (
+        f"⚠️ <b>{title}</b>\n\n"
+        "По выбранным фильтрам не удалось получить стабильную выборку DLD.\n\n"
+        "Что можно сделать:\n"
+        "• выбрать «Всё время»;\n"
+        "• выбрать «Пропустить» в типе юнита;\n"
+        "• попробовать 1 BR / 2 BR / Studio;\n"
+        "• проверить другое здание или район."
+    )
+
+
 @dp.message(CommandStart())
 async def start_handler(message: Message):
     user_states[message.from_user.id] = {}
-    await message.answer(TEXTS["ru"]["choose_lang"] + "\n\n<code>" + BOT_VERSION + "</code>", reply_markup=language_menu())
+    await message.answer(TEXTS["ru"]["choose_lang"], reply_markup=language_menu())
 
 
 @dp.message(lambda m: m.text in ["🇷🇺 Русский", "🇬🇧 English", "🇦🇪 العربية"])
@@ -1533,7 +1553,7 @@ async def main_handler(message: Message):
 
         if text == tr(user_id, "top_active"):
             await message.answer(tr(user_id, "loading"))
-            rows = get_top_active()
+            rows = safe_call(get_top_active, default=[])
             response = "🚀 <b>Топ активных зданий</b>\n\n"
             for i, r in enumerate(rows, 1):
                 response += (
@@ -1548,7 +1568,7 @@ async def main_handler(message: Message):
 
         if text == tr(user_id, "top_price"):
             await message.answer(tr(user_id, "loading"))
-            rows = get_top_price()
+            rows = safe_call(get_top_price, default=[])
             response = "💰 <b>Топ зданий по средней цене</b>\n\n"
             for i, r in enumerate(rows, 1):
                 response += (
