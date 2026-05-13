@@ -51,8 +51,8 @@ RENT_VALUE = num_sql("rent_value")
 BUILDING_NAME = """
 COALESCE(
     NULLIF(building_name_en, ''),
-    NULLIF(project_name_en, ''),
-    NULLIF(master_project_en, '')
+    NULLIF(building_name_en, ''),
+    NULLIF(building_name_en, '')
 )
 """
 
@@ -484,8 +484,8 @@ def building_search_expression():
     return f"""
     LOWER(
         COALESCE(building_name_en, '') || ' ' ||
-        COALESCE(project_name_en, '') || ' ' ||
-        COALESCE(master_project_en, '') || ' ' ||
+        COALESCE(building_name_en, '') || ' ' ||
+        COALESCE(building_name_en, '') || ' ' ||
         COALESCE(area_name_en, '')
     )
     """
@@ -627,53 +627,59 @@ def safe_building_label(row):
         return ""
     return (
         row.get("building_name_en")
-        or row.get("project_name_en")
-        or row.get("master_project_en")
+        or row.get("building_name_en")
+        or row.get("building_name_en")
         or ""
     )
 
 
-def building_exact_condition_for_name(name):
-    return """
-    AND (
-        building_name_en = %s
-        OR LOWER(building_name_en) = LOWER(%s)
-        OR building_name_en ILIKE %s
-    )
-    """, [name, name, f"%{name}%"]
+def building_aliases(name):
+    q = normalize_search_text(name)
+    aliases = {
+        "grande": ["Grande", "Grande Signature Residences"],
+        "grande signature": ["Grande", "Grande Signature Residences"],
+        "grande signature residences": ["Grande", "Grande Signature Residences"],
+        "address opera": ["Address", "Address Residences Dubai Opera", "The Address Residences Dubai Opera"],
+        "the address opera": ["Address", "Address Residences Dubai Opera", "The Address Residences Dubai Opera"],
+        "address residences dubai opera": ["Address", "Address Residences Dubai Opera", "The Address Residences Dubai Opera"],
+        "corner": ["Corner", "Binghatti Corner"],
+        "binghatti corner": ["Corner", "Binghatti Corner"],
+    }
+    return aliases.get(q, [name])
 
+def building_exact_condition_for_name(name):
+    name = (name or "").strip()
+    aliases = building_aliases(name)
+
+    conditions = []
+    params = []
+
+    for alias in aliases:
+        conditions.append("LOWER(building_name_en) = LOWER(%s)")
+        params.append(alias)
+
+    conditions.append("building_name_en ILIKE %s")
+    params.append(f"%{name}%")
+
+    return "AND (" + " OR ".join(conditions) + ")", params
 
 
 def find_buildings(query, limit=10):
-    """
-    Stable building search.
-    Uses only columns that already worked in your DB: building_name_en + area_name_en.
-    Also has aliases for common broker input: Grande, Address Opera, Corner.
-    """
     q = normalize_search_text(query)
-    tokens = smart_query_tokens(query)
+    aliases = building_aliases(query)
 
-    aliases = {
-        "grande": ["grande", "grande signature"],
-        "grande signature residences": ["grande", "signature"],
-        "address opera": ["address", "opera"],
-        "the address opera": ["address", "opera"],
-        "address residences dubai opera": ["address", "opera"],
-        "corner": ["corner", "binghatti corner"],
-        "binghatti corner": ["binghatti", "corner"],
-    }
+    words = []
+    for a in aliases:
+        words.extend([w for w in normalize_search_text(a).split() if len(w) >= 2])
+    words.extend([w for w in q.split() if len(w) >= 2])
+    words = list(dict.fromkeys(words))
 
-    if q in aliases:
-        tokens = aliases[q]
-
-    if not tokens:
+    if not words:
         return []
 
     expr = "LOWER(COALESCE(building_name_en, '') || ' ' || COALESCE(area_name_en, ''))"
-    token_conditions = " AND ".join([f"{expr} ILIKE %s" for _ in tokens])
-    token_score_sql = " + ".join([f"CASE WHEN {expr} ILIKE %s THEN 1 ELSE 0 END" for _ in tokens])
-
-    rank_params = [q, f"{q}%"] + [f"%{t}%" for t in tokens] + [f"%{t}%" for t in tokens] + [limit]
+    conditions = " OR ".join([f"{expr} ILIKE %s" for _ in words])
+    params = [f"%{w}%" for w in words] + [limit]
 
     try:
         with db() as conn:
@@ -682,90 +688,56 @@ def find_buildings(query, limit=10):
                     SELECT
                         building_name_en,
                         area_name_en,
-                        COUNT(*) AS deals,
-                        CASE
-                            WHEN LOWER(building_name_en) = %s THEN 1000
-                            WHEN LOWER(building_name_en) ILIKE %s THEN 700
-                            ELSE 0
-                        END
-                        + ({token_score_sql}) * 100
-                        + LEAST(COUNT(*), 500) AS relevance_score
+                        COUNT(*) AS deals
                     {base_from()}
                       AND building_name_en IS NOT NULL
                       AND building_name_en <> ''
-                      AND ({token_conditions})
+                      AND ({conditions})
                     GROUP BY building_name_en, area_name_en
-                    ORDER BY relevance_score DESC, deals DESC
+                    ORDER BY deals DESC
                     LIMIT %s
-                """, rank_params)
-                rows = cur.fetchall()
-
-        # Extra fallback: if strict AND search is empty, try OR search.
-        if not rows and len(tokens) > 1:
-            or_conditions = " OR ".join([f"{expr} ILIKE %s" for _ in tokens])
-            params = [f"%{t}%" for t in tokens] + [limit]
-            with db() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(f"""
-                        SELECT
-                            building_name_en,
-                            area_name_en,
-                            COUNT(*) AS deals
-                        {base_from()}
-                          AND building_name_en IS NOT NULL
-                          AND building_name_en <> ''
-                          AND ({or_conditions})
-                        GROUP BY building_name_en, area_name_en
-                        ORDER BY deals DESC
-                        LIMIT %s
-                    """, params)
-                    rows = cur.fetchall()
-
-        return rows
+                """, params)
+                return cur.fetchall()
     except Exception as e:
-        print("FIND BUILDINGS ERROR:", repr(e))
+        print("FIND_BUILDINGS_SQL_ERROR:", repr(e))
         return []
 
 
 def find_areas(query, limit=10):
-    q = clean_query(query).lower()
-    area_sql, params = make_area_exact_condition(query)
+    q = normalize_search_text(query)
+    aliases = {
+        "jvc": ["jumeirah village circle", "al hebiah", "al barsha south"],
+        "downtown": ["downtown", "burj khalifa"],
+        "downtown dubai": ["downtown", "burj khalifa"],
+        "business bay": ["business bay"],
+        "marina": ["marina", "marsa dubai"],
+        "dubai marina": ["dubai marina", "marsa dubai"],
+    }
+    words = aliases.get(q, [q])
+    expr = "LOWER(COALESCE(area_name_en, ''))"
+    conditions = " OR ".join([f"{expr} ILIKE %s" for _ in words])
+    params = [f"%{w}%" for w in words] + [limit]
 
-    # Known market names should return one friendly virtual area, not technical DLD areas.
-    if q in AREA_ALIASES:
+    try:
         with db() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"""
                     SELECT
-                        %s AS area_name_en,
+                        area_name_en,
                         COUNT(*) AS deals,
-                        COUNT(DISTINCT {BUILDING_NAME}) AS buildings
+                        COUNT(DISTINCT building_name_en) AS buildings
                     {base_from()}
-                      {area_sql}
                       AND area_name_en IS NOT NULL
                       AND area_name_en <> ''
-                    LIMIT 1
-                """, [virtual_area_name(query)] + params)
-                row = cur.fetchone()
-                return [row] if row and row.get("deals") else []
-
-    params.append(limit)
-    with db() as conn:
-        with conn.cursor() as cur:
-            cur.execute(f"""
-                SELECT
-                    area_name_en,
-                    COUNT(*) AS deals,
-                    COUNT(DISTINCT {BUILDING_NAME}) AS buildings
-                {base_from()}
-                  {area_sql}
-                  AND area_name_en IS NOT NULL
-                  AND area_name_en <> ''
-                GROUP BY area_name_en
-                ORDER BY deals DESC
-                LIMIT %s
-            """, params)
-            return cur.fetchall()
+                      AND ({conditions})
+                    GROUP BY area_name_en
+                    ORDER BY deals DESC
+                    LIMIT %s
+                """, params)
+                return cur.fetchall()
+    except Exception as e:
+        print("FIND_AREAS_SQL_ERROR:", repr(e))
+        return []
 
 
 def get_stats(scope="dubai", name=None, prop=None, period=None, deal_type=None):
