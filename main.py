@@ -631,27 +631,26 @@ def make_deal_type_condition(deal_type):
     rent_val = rent_amount_expr()
 
     if is_sale_deal_type(deal_type):
-        # Продажа: цена продажи есть, и строка не выглядит как rental/lease.
-        # Если арендная колонка заполнена реальной арендой, тоже исключаем такую строку.
+        # Продажа: берём только продажные процедуры и цену actual_worth.
+        # Важно: НЕ исключаем строки только из-за заполненной rent_value, потому что
+        # в некоторых выгрузках DLD rent_value/contract_amount может быть заполнен
+        # техническим числом даже у продаж. Главное разделение — текст процедуры.
         return f"""
         AND {PRICE} IS NOT NULL
         AND {PRICE} > 0
         AND NOT {rent_text_sql}
-        AND {rent_val} IS NULL
         """, rent_keywords
 
     if is_rent_deal_type(deal_type):
-        # Аренда: показываем только строки с реальной арендной суммой.
-        # Текст процедуры используем как плюс, но не как единственное условие:
-        # в некоторых выгрузках rental type лежит в другой колонке или не заполнен.
+        # Аренда: строго только rental/lease/tenancy/Ejari процедуры.
+        # Больше НЕЛЬЗЯ использовать условие PRICE IS NULL или rent_val < PRICE*0.20,
+        # потому что в базе встречаются продажные строки, где rent_value/contract_amount
+        # фактически дублирует продажную цену. Из-за этого кнопка «Аренда» показывала
+        # продажи 650k/750k/800k AED.
         return f"""
+        AND {rent_text_sql}
         AND {rent_val} IS NOT NULL
-        AND (
-            {rent_text_sql}
-            OR {PRICE} IS NULL
-            OR {PRICE} <= 0
-            OR {rent_val} < ({PRICE} * 0.20)
-        )
+        AND {rent_val} > 0
         """, rent_keywords
 
     return "", []
@@ -2498,8 +2497,8 @@ def selftest_deal_type_logic():
     sale_sql, sale_params = make_deal_type_condition("🏠 Продажа")
     rent_sql, rent_params = make_deal_type_condition("🔑 Аренда")
     assert deal_value_expr("🏠 Продажа") == PRICE
-    assert deal_value_expr("🔑 Аренда") == RENT_VALUE
-    assert "actual_worth" not in rent_sql.lower() or "0.20" in rent_sql
+    assert "actual_worth" not in deal_value_expr("🔑 Аренда").lower()
+    assert "actual_worth" not in rent_sql.lower() and "0.20" not in rent_sql
     assert "actual_worth" in sale_sql
     assert "%rent%" in sale_params
     return True
