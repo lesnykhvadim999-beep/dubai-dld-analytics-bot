@@ -41,7 +41,7 @@ def db():
 
 
 def num_sql(column):
-    return f"NULLIF(regexp_replace({column}, '[^0-9.]', '', 'g'), '')::numeric"
+    return f"NULLIF(regexp_replace(COALESCE({column}::text, ''), '[^0-9.]', '', 'g'), '')::numeric"
 
 
 PRICE = num_sql("actual_worth")
@@ -92,7 +92,7 @@ TEXTS = {
         "enter_price": "💰 Введите цену объекта в AED.\n\nНапример: 2500000",
         "enter_size": "📐 Введите площадь объекта в sq.ft.\n\nНапример: 850",
         "loading": "⏳ Считаю аналитику по DLD базе...",
-        "error": '⚠️ Не удалось выполнить расчёт по этим фильтрам. Попробуйте расширить период, выбрать «Всё время» или другой тип юнита.',
+        "error": '⚠️ По этим фильтрам DLD не вернул стабильную выборку. Нажмите «Назад» и попробуйте: «Всё время», «Пропустить» тип юнита или другой формат комнат.',
         "choose_deal_type": "📊 Выберите тип сделки:",
         "sale": "🏠 Продажа",
         "rent": "🔑 Аренда",
@@ -132,7 +132,7 @@ TEXTS = {
         "enter_price": "💰 Enter price in AED.\n\nExample: 2500000",
         "enter_size": "📐 Enter size in sq.ft.\n\nExample: 850",
         "loading": "⏳ Calculating DLD analytics...",
-        "error": '⚠️ Не удалось выполнить расчёт по этим фильтрам. Попробуйте расширить период, выбрать «Всё время» или другой тип юнита.',
+        "error": '⚠️ По этим фильтрам DLD не вернул стабильную выборку. Нажмите «Назад» и попробуйте: «Всё время», «Пропустить» тип юнита или другой формат комнат.',
         "choose_deal_type": "📊 Choose deal type:",
         "sale": "🏠 Sale",
         "rent": "🔑 Rent",
@@ -172,7 +172,7 @@ TEXTS = {
         "enter_price": "💰 أدخل السعر بالدرهم.\n\nمثال: 2500000",
         "enter_size": "📐 أدخل المساحة بالقدم المربع.\n\nمثال: 850",
         "loading": "⏳ يتم حساب تحليلات DLD...",
-        "error": '⚠️ Не удалось выполнить расчёт по этим фильтрам. Попробуйте расширить период, выбрать «Всё время» или другой тип юнита.',
+        "error": '⚠️ По этим фильтрам DLD не вернул стабильную выборку. Нажмите «Назад» и попробуйте: «Всё время», «Пропустить» тип юнита или другой формат комнат.',
         "choose_deal_type": "📊 اختر نوع الصفقة:",
         "sale": "🏠 بيع",
         "rent": "🔑 إيجار",
@@ -850,36 +850,55 @@ def get_comparison(scope="dubai", name=None, prop=None, period=None, deal_type=N
     return current, previous
 
 
-def get_latest_deals(scope="building", name=None, prop=None, period=None, deal_type=None, limit=7):
-    where, params = scope_condition(scope, name, original_query=name)
-
+def get_latest_deals(scope, name, prop=None, period=None, limit=5):
     prop_sql, prop_args = property_condition(prop)
-    deal_sql, deal_args = make_deal_type_condition(deal_type)
-    params += prop_args + deal_args + [limit]
+    p_sql = period_condition(period)
 
-    with db() as conn:
-        with conn.cursor() as cur:
-            cur.execute(f"""
-                SELECT
-                    safe_date,
-                    procedure_name_en,
-                    rooms_en,
-                    property_type_en,
-                    property_sub_type_en,
-                    {PRICE} AS price,
-                    {METER_PRICE} AS meter_price,
-                    {BUILDING_NAME} AS building_name_en,
-                    area_name_en
-                {base_from()}
-                  {where}
-                  {prop_sql}
-                  {deal_sql}
-                  {period_condition(period)}
-                  AND {PRICE} IS NOT NULL
-                ORDER BY safe_date DESC NULLS LAST
-                LIMIT %s
-            """, params)
-            return cur.fetchall()
+    if scope == "area":
+        q = normalize_search_text(name)
+        area_aliases = {
+            "jvc": ["jumeirah village circle", "al hebiah", "al barsha south", "jvc"],
+            "downtown": ["downtown", "burj khalifa"],
+            "downtown dubai": ["downtown", "burj khalifa"],
+            "business bay": ["business bay"],
+            "marina": ["marina", "marsa dubai"],
+            "dubai marina": ["dubai marina", "marsa dubai"],
+        }
+        words = area_aliases.get(q, [q])
+        expr = "LOWER(COALESCE(area_name_en, ''))"
+        scope_sql = "AND (" + " OR ".join([f"{expr} ILIKE %s" for _ in words]) + ")"
+        scope_args = [f"%{w}%" for w in words]
+    else:
+        scope_sql, scope_args = building_exact_condition_for_name(name)
+
+    params = scope_args + prop_args + [limit]
+
+    try:
+        with db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT
+                        safe_date,
+                        procedure_name_en,
+                        rooms_en,
+                        property_type_en,
+                        property_sub_type_en,
+                        {PRICE} AS price,
+                        {METER_PRICE} AS meter_price,
+                        building_name_en,
+                        area_name_en
+                    {base_from()}
+                      {scope_sql}
+                      AND {PRICE} IS NOT NULL
+                      {prop_sql}
+                      {p_sql}
+                    ORDER BY safe_date DESC NULLS LAST
+                    LIMIT %s
+                """, params)
+                return cur.fetchall()
+    except Exception as e:
+        print("GET_LATEST_DEALS_ERROR:", repr(e))
+        return []
 
 
 def get_top_active():
