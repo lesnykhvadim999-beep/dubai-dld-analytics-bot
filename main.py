@@ -513,6 +513,29 @@ def make_deal_type_condition(deal_type):
     if not deal_type:
         return "", []
 
+    d = str(deal_type).lower().strip()
+
+    if "sale" in d or "прод" in d or "🏠" in d:
+        return """
+        AND (
+            procedure_name_en ILIKE %s
+            OR procedure_name_en ILIKE %s
+            OR procedure_name_en ILIKE %s
+        )
+        """, ["%sale%", "%sell%", "%sales%"]
+
+    if "rent" in d or "lease" in d or "аренд" in d or "🔑" in d:
+        return """
+        AND (
+            procedure_name_en ILIKE %s
+            OR procedure_name_en ILIKE %s
+            OR procedure_name_en ILIKE %s
+        )
+        """, ["%rent%", "%lease%", "%rental%"]
+
+    return "", []
+
+
 def property_condition(prop):
     if not prop:
         return "", []
@@ -740,6 +763,21 @@ def find_areas(query, limit=10):
         return []
 
 
+def scope_condition(scope="dubai", name=None, original_query=None):
+    scope = scope or "dubai"
+
+    if scope == "dubai" or not name:
+        return "", []
+
+    if scope == "area":
+        return make_area_exact_condition(original_query or name)
+
+    if scope == "building":
+        return building_exact_condition_for_name(original_query or name)
+
+    return "", []
+
+
 def get_stats(scope="dubai", name=None, prop=None, period=None, deal_type=None):
     where, params = scope_condition(scope, name, original_query=name)
 
@@ -748,31 +786,34 @@ def get_stats(scope="dubai", name=None, prop=None, period=None, deal_type=None):
 
     params += prop_args + deal_args
 
-    with db() as conn:
-        with conn.cursor() as cur:
-            cur.execute(f"""
-                SELECT
-                    COUNT(*) AS deals,
-                    COUNT(DISTINCT {BUILDING_NAME}) AS buildings,
-                    COUNT(DISTINCT area_name_en) AS areas,
-                    AVG({PRICE}) AS avg_price,
-                    MIN({PRICE}) AS min_price,
-                    MAX({PRICE}) AS max_price,
-                    AVG({METER_PRICE}) AS avg_meter,
-                    MIN(safe_date) AS first_deal,
-                    MAX(safe_date) AS last_deal,
-                    STRING_AGG(DISTINCT NULLIF(rooms_en, ''), ', ') AS rooms_list,
-                    STRING_AGG(DISTINCT NULLIF(property_type_en, ''), ', ') AS property_types,
-                    STRING_AGG(DISTINCT NULLIF(property_sub_type_en, ''), ', ') AS property_sub_types
-                {base_from()}
-                  {where}
-                  {prop_sql}
-                  {deal_sql}
-                  {period_condition(period)}
-                  AND {PRICE} IS NOT NULL
-            """, params)
-            return cur.fetchone()
-
+    try:
+        with db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT
+                        COUNT(*) AS deals,
+                        COUNT(DISTINCT {BUILDING_NAME}) AS buildings,
+                        COUNT(DISTINCT area_name_en) AS areas,
+                        AVG({PRICE}) AS avg_price,
+                        MIN({PRICE}) AS min_price,
+                        MAX({PRICE}) AS max_price,
+                        AVG({METER_PRICE}) AS avg_meter,
+                        MIN(safe_date) AS first_deal,
+                        MAX(safe_date) AS last_deal,
+                        STRING_AGG(DISTINCT NULLIF(rooms_en, ''), ', ') AS rooms_list,
+                        STRING_AGG(DISTINCT NULLIF(property_type_en, ''), ', ') AS property_types,
+                        STRING_AGG(DISTINCT NULLIF(property_sub_type_en, ''), ', ') AS property_sub_types
+                    {base_from()}
+                      {where}
+                      {prop_sql}
+                      {deal_sql}
+                      {period_condition(period)}
+                      AND {PRICE} IS NOT NULL
+                """, params)
+                return cur.fetchone()
+    except Exception as e:
+        print("GET_STATS_ERROR:", repr(e))
+        return None
 
 
 def get_unit_summary(scope="building", name=None, prop=None, period=None, deal_type=None):
@@ -781,97 +822,93 @@ def get_unit_summary(scope="building", name=None, prop=None, period=None, deal_t
     deal_sql, deal_args = make_deal_type_condition(deal_type)
     params += prop_args + deal_args
 
-    with db() as conn:
-        with conn.cursor() as cur:
-            cur.execute(f"""
-                SELECT
-                    COUNT(*) AS deals,
-                    AVG({PRICE}) AS avg_price,
-                    MIN({PRICE}) AS min_price,
-                    MAX({PRICE}) AS max_price,
-                    AVG({METER_PRICE}) AS avg_meter,
-                    percentile_cont(0.25) WITHIN GROUP (ORDER BY {PRICE}) AS p25_price,
-                    percentile_cont(0.50) WITHIN GROUP (ORDER BY {PRICE}) AS median_price,
-                    percentile_cont(0.75) WITHIN GROUP (ORDER BY {PRICE}) AS p75_price
-                {base_from()}
-                  {where}
-                  {prop_sql}
-                  {deal_sql}
-                  {period_condition(period)}
-                  AND {PRICE} IS NOT NULL
-            """, params)
-            return cur.fetchone()
+    try:
+        with db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT
+                        COUNT(*) AS deals,
+                        AVG({PRICE}) AS avg_price,
+                        MIN({PRICE}) AS min_price,
+                        MAX({PRICE}) AS max_price,
+                        AVG({METER_PRICE}) AS avg_meter,
+                        percentile_cont(0.25) WITHIN GROUP (ORDER BY {PRICE}) AS p25_price,
+                        percentile_cont(0.50) WITHIN GROUP (ORDER BY {PRICE}) AS median_price,
+                        percentile_cont(0.75) WITHIN GROUP (ORDER BY {PRICE}) AS p75_price
+                    {base_from()}
+                      {where}
+                      {prop_sql}
+                      {deal_sql}
+                      {period_condition(period)}
+                      AND {PRICE} IS NOT NULL
+                """, params)
+                return cur.fetchone()
+    except Exception as e:
+        print("GET_UNIT_SUMMARY_ERROR:", repr(e))
+        return None
+
 
 def get_comparison(scope="dubai", name=None, prop=None, period=None, deal_type=None):
     if not period:
         return None
 
     where, base_params = scope_condition(scope, name, original_query=name)
-
-    params_current = list(base_params)
-    params_previous = list(base_params)
-
     prop_sql, prop_args = property_condition(prop)
     deal_sql, deal_args = make_deal_type_condition(deal_type)
 
-    params_current += prop_args + deal_args
-    params_previous += prop_args + deal_args
+    params_current = list(base_params) + prop_args + deal_args
+    params_previous = list(base_params) + prop_args + deal_args
 
-    with db() as conn:
-        with conn.cursor() as cur:
-            cur.execute(f"""
-                SELECT
-                    COUNT(*) AS deals,
-                    AVG({PRICE}) AS avg_price,
-                    AVG({METER_PRICE}) AS avg_meter
-                {base_from()}
-                  {where}
-                  {prop_sql}
-                  {deal_sql}
-                  {period_condition(period)}
-                  AND {PRICE} IS NOT NULL
-            """, params_current)
-            current = cur.fetchone()
+    try:
+        with db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT
+                        COUNT(*) AS deals,
+                        AVG({PRICE}) AS avg_price,
+                        AVG({METER_PRICE}) AS avg_meter
+                    {base_from()}
+                      {where}
+                      {prop_sql}
+                      {deal_sql}
+                      {period_condition(period)}
+                      AND {PRICE} IS NOT NULL
+                """, params_current)
+                current = cur.fetchone()
 
-            cur.execute(f"""
-                SELECT
-                    COUNT(*) AS deals,
-                    AVG({PRICE}) AS avg_price,
-                    AVG({METER_PRICE}) AS avg_meter
-                {base_from()}
-                  {where}
-                  {prop_sql}
-                  {deal_sql}
-                  {period_previous_condition(period)}
-                  AND {PRICE} IS NOT NULL
-            """, params_previous)
-            previous = cur.fetchone()
+                cur.execute(f"""
+                    SELECT
+                        COUNT(*) AS deals,
+                        AVG({PRICE}) AS avg_price,
+                        AVG({METER_PRICE}) AS avg_meter
+                    {base_from()}
+                      {where}
+                      {prop_sql}
+                      {deal_sql}
+                      {period_previous_condition(period)}
+                      AND {PRICE} IS NOT NULL
+                """, params_previous)
+                previous = cur.fetchone()
 
-    return current, previous
+        return current, previous
+    except Exception as e:
+        print("GET_COMPARISON_ERROR:", repr(e))
+        return None
 
 
-def get_latest_deals(scope, name, prop=None, period=None, limit=5):
+def get_latest_deals(scope, name, prop=None, period=None, deal_type=None, limit=5):
     prop_sql, prop_args = property_condition(prop)
+    deal_sql, deal_args = make_deal_type_condition(deal_type)
     p_sql = period_condition(period)
 
     if scope == "area":
-        q = normalize_search_text(name)
-        area_aliases = {
-            "jvc": ["jumeirah village circle", "al hebiah", "al barsha south", "jvc"],
-            "downtown": ["downtown", "burj khalifa"],
-            "downtown dubai": ["downtown", "burj khalifa"],
-            "business bay": ["business bay"],
-            "marina": ["marina", "marsa dubai"],
-            "dubai marina": ["dubai marina", "marsa dubai"],
-        }
-        words = area_aliases.get(q, [q])
-        expr = "LOWER(COALESCE(area_name_en, ''))"
-        scope_sql = "AND (" + " OR ".join([f"{expr} ILIKE %s" for _ in words]) + ")"
-        scope_args = [f"%{w}%" for w in words]
-    else:
+        scope_sql, scope_args = make_area_exact_condition(name)
+    elif scope == "building":
         scope_sql, scope_args = building_exact_condition_for_name(name)
+    else:
+        scope_sql, scope_args = "", []
 
-    params = scope_args + prop_args + [limit]
+    params = scope_args + prop_args + deal_args + [limit]
 
     try:
         with db() as conn:
@@ -891,6 +928,7 @@ def get_latest_deals(scope, name, prop=None, period=None, limit=5):
                       {scope_sql}
                       AND {PRICE} IS NOT NULL
                       {prop_sql}
+                      {deal_sql}
                       {p_sql}
                     ORDER BY safe_date DESC NULLS LAST
                     LIMIT %s
@@ -948,27 +986,30 @@ def get_top_buildings_in_scope(scope="dubai", name=None, period=None, deal_type=
     deal_sql, deal_args = make_deal_type_condition(deal_type)
     params += deal_args + [limit]
 
-    with db() as conn:
-        with conn.cursor() as cur:
-            cur.execute(f"""
-                SELECT
-                    {BUILDING_NAME} AS building_name_en,
-                    area_name_en,
-                    COUNT(*) AS deals,
-                    AVG({PRICE}) AS avg_price,
-                    AVG({METER_PRICE}) AS avg_meter
-                {base_from()}
-                  {where}
-                  {deal_sql}
-                  {period_condition(period)}
-                  AND {BUILDING_NAME} IS NOT NULL
-                  AND {PRICE} IS NOT NULL
-                GROUP BY {BUILDING_NAME}, area_name_en
-                ORDER BY deals DESC
-                LIMIT %s
-            """, params)
-            return cur.fetchall()
-
+    try:
+        with db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT
+                        {BUILDING_NAME} AS building_name_en,
+                        area_name_en,
+                        COUNT(*) AS deals,
+                        AVG({PRICE}) AS avg_price,
+                        AVG({METER_PRICE}) AS avg_meter
+                    {base_from()}
+                      {where}
+                      {deal_sql}
+                      {period_condition(period)}
+                      AND {BUILDING_NAME} IS NOT NULL
+                      AND {PRICE} IS NOT NULL
+                    GROUP BY {BUILDING_NAME}, area_name_en
+                    ORDER BY deals DESC
+                    LIMIT %s
+                """, params)
+                return cur.fetchall()
+    except Exception as e:
+        print("GET_TOP_BUILDINGS_SCOPE_ERROR:", repr(e))
+        return []
 
 
 def show_unit_summary(title, row, prop=None, period=None):
@@ -1721,6 +1762,10 @@ async def main_handler(message: Message):
                 comparison = get_comparison("area", selected_name, None, "12", None)
                 top_buildings = get_top_buildings_in_scope("area", selected_name, "12", None)
 
+                if not stats or not stats.get("deals"):
+                    await message.answer(no_data_message("Статистика района"), reply_markup=report_menu(user_id))
+                    return
+
                 await message.answer(
                     quick_area_report(selected_name, stats, comparison, top_buildings),
                     reply_markup=report_menu(user_id)
@@ -1875,7 +1920,11 @@ async def main_handler(message: Message):
                     return
 
                 await message.answer(tr(user_id, "loading"))
-                current, previous = get_comparison(scope, name, prop, period, deal_type)
+                comparison = get_comparison(scope, name, prop, period, deal_type)
+                if not comparison:
+                    await message.answer(no_data_message("Сравнение периодов"), reply_markup=report_menu(user_id))
+                    return
+                current, previous = comparison
                 title = "📈 <b>Сравнение периодов</b>"
                 if name:
                     title += f"\n{name}"
