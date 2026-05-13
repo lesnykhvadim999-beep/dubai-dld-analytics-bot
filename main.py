@@ -48,6 +48,34 @@ PRICE = num_sql("actual_worth")
 METER_PRICE = num_sql("meter_sale_price")
 RENT_VALUE = num_sql("rent_value")
 
+
+def rent_value_strict_sql():
+    """
+    Возвращает годовую аренду только если значение похоже на аренду,
+    а не на цену продажи. В некоторых выгрузках DLD rent_value может
+    дублировать actual_worth, поэтому дополнительно отсекаем строки,
+    где rent_value слишком близок к actual_worth.
+    """
+    rv = RENT_VALUE
+    aw = PRICE
+    return f"""
+        CASE
+            WHEN {rv} IS NOT NULL
+             AND {rv} > 0
+             AND {rv} < 2000000
+             AND (
+                 {aw} IS NULL
+                 OR {aw} <= 0
+                 OR {rv} < ({aw} * 0.30)
+             )
+            THEN {rv}
+            ELSE NULL
+        END
+    """
+
+
+RENT_VALUE_STRICT = rent_value_strict_sql()
+
 BUILDING_NAME = "COALESCE(building_name_en::text, '')"
 
 
@@ -512,11 +540,10 @@ def is_sale_deal_type(deal_type):
 
 def deal_value_expr(deal_type):
     # Продажа: actual_worth.
-    # Аренда: ТОЛЬКО rent_value.
-    # Важно: actual_worth — это цена продажи. Его нельзя использовать как fallback для аренды,
-    # иначе при выборе «Аренда» бот показывает продажные сделки как арендные.
+    # Аренда: только строгая годовая аренда из rent_value, без fallback на actual_worth.
+    # Если rent_value выглядит как цена продажи, строка отсекается.
     if is_rent_deal_type(deal_type):
-        return RENT_VALUE
+        return RENT_VALUE_STRICT
     return PRICE
 
 
@@ -554,12 +581,20 @@ def make_deal_type_condition(deal_type):
         """, rent_args
 
     if is_rent_deal_type(deal_type):
-        # ЖЁСТКИЙ ФИКС: аренда = только строки, где процедура похожа на rent/lease
-        # и есть rent_value. actual_worth больше НЕ используется, чтобы не показывать продажи.
+        # ЖЁСТКИЙ ФИКС v22:
+        # аренда не должна показывать продажные цены.
+        # Берём только строки, где rent_value прошёл проверку как реальная годовая аренда.
+        # Процедура rent/lease помогает, но не является единственным источником истины,
+        # потому что в разных DLD-выгрузках названия процедур отличаются.
+        rv = RENT_VALUE_STRICT
         return f"""
-        AND {rent_proc}
-        AND {RENT_VALUE} IS NOT NULL
-        AND {RENT_VALUE} > 0
+        AND {rv} IS NOT NULL
+        AND (
+            {rent_proc}
+            OR {PRICE} IS NULL
+            OR {PRICE} <= 0
+            OR {rv} < ({PRICE} * 0.30)
+        )
         """, rent_args
 
     return "", []
