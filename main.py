@@ -511,37 +511,52 @@ def is_sale_deal_type(deal_type):
 
 
 def deal_value_expr(deal_type):
-    # Для продажи считаем по actual_worth.
-    # Для аренды считаем по rent_value, иначе бот смешивает рынок продаж и аренды.
+    # Продажа: actual_worth.
+    # Аренда: rent_value, если оно есть; иначе actual_worth только у строк, где процедура явно rental/lease.
     if is_rent_deal_type(deal_type):
-        return RENT_VALUE
+        return f"COALESCE(NULLIF({RENT_VALUE}, 0), NULLIF({PRICE}, 0))"
     return PRICE
 
 
 def make_deal_type_condition(deal_type):
     """
     Жёстко разделяет продажу и аренду.
-    Продажа = actual_worth. Аренда = rent_value.
-    Не полагаемся только на procedure_name_en, потому что в DLD названия процедур бывают разные.
+
+    Важно: в некоторых импортированных DLD-таблицах поле rent_value может быть заполнено
+    даже у строк продажи или содержать не годовую аренду, поэтому для аренды больше
+    нельзя ориентироваться только на rent_value. Главный фильтр аренды — название процедуры.
+    Если в базе нет настоящих rental/lease строк, бот должен честно сказать, что аренды нет,
+    а не показывать продажи как аренду.
     """
     if not deal_type:
         return "", []
 
+    rent_proc = """
+        (
+            COALESCE(procedure_name_en::text, '') ILIKE %s
+            OR COALESCE(procedure_name_en::text, '') ILIKE %s
+            OR COALESCE(procedure_name_en::text, '') ILIKE %s
+            OR COALESCE(procedure_name_en::text, '') ILIKE %s
+            OR COALESCE(procedure_name_en::text, '') ILIKE %s
+        )
+    """
+    rent_args = ["%rent%", "%lease%", "%tenancy%", "%ejari%", "%rental%"]
+
     if is_sale_deal_type(deal_type):
         return f"""
         AND {PRICE} IS NOT NULL
-        AND (
-            {RENT_VALUE} IS NULL
-            OR {RENT_VALUE} = 0
-            OR COALESCE(procedure_name_en::text, '') NOT ILIKE %s
-        )
-        """, ["%rent%"]
+        AND {PRICE} > 0
+        AND NOT {rent_proc}
+        """, rent_args
 
     if is_rent_deal_type(deal_type):
         return f"""
-        AND {RENT_VALUE} IS NOT NULL
-        AND {RENT_VALUE} > 0
-        """, []
+        AND {rent_proc}
+        AND (
+            ({RENT_VALUE} IS NOT NULL AND {RENT_VALUE} > 0)
+            OR ({PRICE} IS NOT NULL AND {PRICE} > 0)
+        )
+        """, rent_args
 
     return "", []
 
@@ -1539,6 +1554,63 @@ def period_label(period):
     }.get(period, "всё время")
 
 
+
+def economic_takeaway(row, prop=None, period=None, deal_type=None, comparison=None):
+    if not row or not row.get("deals"):
+        return ""
+
+    deals = int(row.get("deals") or 0)
+    avg_price = row.get("avg_price")
+    min_price = row.get("min_price")
+    max_price = row.get("max_price")
+    avg_meter = row.get("avg_meter")
+    is_rent = is_rent_deal_type(deal_type)
+
+    if is_rent:
+        base = (
+            f"🧠 <b>Экономический вывод:</b> по аренде ориентир рынка — около "
+            f"<b>{format_money(avg_price)}</b>. Интересная арендная сделка начинается ниже среднего рынка; "
+            f"если объект по состоянию и виду не хуже конкурентов, всё что ближе к нижней границе "
+            f"<b>{format_money(min_price)}</b> выглядит сильнее для переговоров."
+        )
+    else:
+        good_buy = None
+        strong_buy = None
+        try:
+            good_buy = float(avg_price) * 0.95 if avg_price is not None else None
+            strong_buy = float(avg_price) * 0.90 if avg_price is not None else None
+        except Exception:
+            pass
+        base = (
+            f"🧠 <b>Экономический вывод:</b> средний ориентир покупки — <b>{format_money(avg_price)}</b>. "
+            f"Для перепродажи интереснее входить не выше <b>{format_money(good_buy)}</b>, "
+            f"а сильная точка входа — около <b>{format_money(strong_buy)}</b> или ниже. "
+            f"Потенциал торга смотрите от минимума <b>{format_money(min_price)}</b> до среднего рынка."
+        )
+
+    if comparison:
+        try:
+            current, previous = comparison
+            price_change = pct_change(current.get("avg_price"), previous.get("avg_price"))
+            meter_change = pct_change(current.get("avg_meter"), previous.get("avg_meter"))
+            if price_change is not None or meter_change is not None:
+                base += (
+                    f"\n📌 Динамика периода: средний чек {format_pct(price_change)}, "
+                    f"цена за метр {format_pct(meter_change)}. "
+                )
+                if (price_change or 0) > 0 and (meter_change or 0) > 0:
+                    base += "Рынок растёт — вход лучше искать через торг или ниже среднего."
+                elif (price_change or 0) < 0 and (meter_change or 0) < 0:
+                    base += "Рынок просел — это может быть хорошим окном для покупки."
+                else:
+                    base += "Картина смешанная — нужно проверять последние сделки и конкретный юнит."
+        except Exception:
+            pass
+
+    if deals < 5:
+        base += "\n⚠️ Выборка маленькая, поэтому вывод использовать как предварительный ориентир."
+    return base
+
 def show_stats(title, row, prop=None, period=None, deal_type=None):
     if not row or not row.get("deals"):
         return "❌ Нет данных по выбранным фильтрам."
@@ -1560,7 +1632,8 @@ def show_stats(title, row, prop=None, period=None, deal_type=None):
         f"🗓 Последняя сделка: <b>{row['last_deal']}</b>\n\n"
         f"🛏 Комнаты: {row.get('rooms_list') or 'нет данных'}\n"
         f"🏗 Типы: {row.get('property_types') or 'нет данных'}\n"
-        f"🏘 Подтипы: {row.get('property_sub_types') or 'нет данных'}"
+        f"🏘 Подтипы: {row.get('property_sub_types') or 'нет данных'}\n\n"
+        f"{economic_takeaway(row, prop, period, deal_type)}"
     )
 
 
@@ -2216,6 +2289,11 @@ async def main_handler(message: Message):
                         f"💰 {format_money(r['price'])}\n"
                         f"📐 {format_money(r['meter_price'])} за метр\n\n"
                     )
+
+                summary_row = get_stats(scope, name, used_prop, used_period, used_deal_type)
+                if summary_row and summary_row.get('deals'):
+                    response += economic_takeaway(summary_row, used_prop, used_period, used_deal_type)
+
                 await message.answer(response, reply_markup=report_menu(user_id))
                 return
 
