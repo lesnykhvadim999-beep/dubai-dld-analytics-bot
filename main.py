@@ -497,20 +497,44 @@ def coalesce_numeric_expr(candidates, max_value=None):
 
 def rent_amount_expr():
     # Только реальные арендные колонки. actual_worth здесь специально не используется.
-    # Верхняя граница защищает от продажных цен, случайно попавших в rent_value.
+    # Важно: contract_amount часто дублирует продажную цену, поэтому он используется
+    # только вместе с жёсткой проверкой rent/lease процедуры в make_deal_type_condition().
     return coalesce_numeric_expr([
-        "rent_value", "annual_rent", "rent_amount", "annual_amount",
-        "contract_amount", "rent_contract_amount", "rental_value",
-        "lease_value", "lease_amount", "yearly_rent", "ejari_value",
-        "actual_rent", "contract_rent"
+        "rent_value", "annual_rent", "annual_rental_value", "rent_amount", "annual_amount",
+        "rental_amount", "rental_value", "lease_value", "lease_amount",
+        "yearly_rent", "yearly_rental", "ejari_value", "actual_rent", "contract_rent",
+        "contract_amount", "rent_contract_amount", "lease_contract_amount",
+        "annual_contract_amount", "amount_of_annual_rent"
     ], max_value=1500000)
+
+def area_amount_expr():
+    # Площадь для расчёта арендной ставки за sq.ft, если в базе нет отдельной rent meter колонки.
+    return coalesce_numeric_expr([
+        "procedure_area", "actual_area", "property_size", "property_area", "area_sqft",
+        "area_sq_ft", "built_up_area", "unit_area", "size_sqft", "rooms_area"
+    ])
+
+
+def deal_meter_expr(deal_type):
+    if is_rent_deal_type(deal_type):
+        rent_meter = coalesce_numeric_expr([
+            "rent_meter_price", "rent_price_per_sqft", "rental_price_per_sqft",
+            "annual_rent_per_sqft", "lease_price_per_sqft"
+        ], max_value=10000)
+        area_expr = area_amount_expr()
+        rent_expr = rent_amount_expr()
+        return f"COALESCE({rent_meter}, CASE WHEN {area_expr} IS NOT NULL AND {area_expr} > 0 THEN {rent_expr} / {area_expr} ELSE NULL END)"
+    return METER_PRICE
 
 
 def rent_text_expr():
     candidates = [
         "procedure_name_en", "procedure_name_ar", "procedure_name",
-        "transaction_type_en", "transaction_type", "transaction_sub_type_en",
-        "registration_type_en", "registration_type", "instance_procedure_en"
+        "procedure_type_en", "procedure_type", "procedure_group_en", "procedure_group",
+        "transaction_type_en", "transaction_type", "transaction_sub_type_en", "transaction_sub_type",
+        "registration_type_en", "registration_type", "instance_procedure_en", "instance_procedure",
+        "contract_type_en", "contract_type", "group_name_en", "group_name", "transaction_group_en", "transaction_group",
+        "record_type", "deal_type", "category", "transaction_category"
     ]
     existing = first_existing_columns(candidates)
     if not existing:
@@ -616,25 +640,41 @@ def deal_value_expr(deal_type):
 def make_deal_type_condition(deal_type):
     """Жёстко разделяет продажу и аренду.
 
-    Для аренды нельзя показывать actual_worth. Если в выбранном здании/периоде нет
-    реальных арендных значений в арендных колонках, бот честно вернёт пустую выборку.
+    v26 HARD FIX:
+    • Аренда никогда не берёт actual_worth.
+    • Продажа никогда не берёт rental/lease/tenancy/Ejari процедуры.
+    • Если в rent_value/contract_amount случайно лежит продажная цена, строка отсекается.
     """
     if not deal_type:
         return "", []
 
     rt = rent_text_expr()
     rent_keywords = [
-        "%rent%", "%lease%", "%tenancy%", "%ejari%", "%rental%",
-        "%rental contract%", "%lease contract%", "%аренд%"
+        "%rent%", "%rental%", "%lease%", "%leasing%", "%tenancy%", "%ejari%",
+        "%rental contract%", "%lease contract%", "%tenancy contract%", "%new lease%",
+        "%renewal%", "%renewed%", "%аренд%"
+    ]
+    sale_keywords = [
+        "%sale%", "%sell%", "%sold%", "%transfer%", "%property sale%", "%sales%",
+        "%mortgage%", "%gift%", "%grant%", "%прод%"
     ]
     rent_text_sql = "(" + " OR ".join([f"{rt} ILIKE %s" for _ in rent_keywords]) + ")"
+    sale_text_sql = "(" + " OR ".join([f"{rt} ILIKE %s" for _ in sale_keywords]) + ")"
     rent_val = rent_amount_expr()
 
+    # Защита от продажных строк, где contract_amount/rent_value = actual_worth.
+    # Если actual_worth заполнен как продажная цена, реальная годовая аренда обычно
+    # существенно ниже цены продажи. Если текст процедуры rent/lease — пропускаем,
+    # но всё равно не допускаем явное совпадение rent_val с actual_worth.
+    rent_not_sale_amount = f"""
+        (
+            {PRICE} IS NULL
+            OR {PRICE} <= 0
+            OR {rent_val} < ({PRICE} * 0.35)
+        )
+    """
+
     if is_sale_deal_type(deal_type):
-        # Продажа: берём только продажные процедуры и цену actual_worth.
-        # Важно: НЕ исключаем строки только из-за заполненной rent_value, потому что
-        # в некоторых выгрузках DLD rent_value/contract_amount может быть заполнен
-        # техническим числом даже у продаж. Главное разделение — текст процедуры.
         return f"""
         AND {PRICE} IS NOT NULL
         AND {PRICE} > 0
@@ -642,16 +682,14 @@ def make_deal_type_condition(deal_type):
         """, rent_keywords
 
     if is_rent_deal_type(deal_type):
-        # Аренда: строго только rental/lease/tenancy/Ejari процедуры.
-        # Больше НЕЛЬЗЯ использовать условие PRICE IS NULL или rent_val < PRICE*0.20,
-        # потому что в базе встречаются продажные строки, где rent_value/contract_amount
-        # фактически дублирует продажную цену. Из-за этого кнопка «Аренда» показывала
-        # продажи 650k/750k/800k AED.
         return f"""
         AND {rent_text_sql}
+        AND NOT {sale_text_sql}
         AND {rent_val} IS NOT NULL
         AND {rent_val} > 0
-        """, rent_keywords
+        AND {rent_val} <= 1500000
+        AND {rent_not_sale_amount}
+        """, rent_keywords + sale_keywords
 
     return "", []
 
@@ -983,7 +1021,7 @@ def get_stats(scope="dubai", name=None, prop=None, period=None, deal_type=None):
                         AVG({value_expr}) AS avg_price,
                         MIN({value_expr}) AS min_price,
                         MAX({value_expr}) AS max_price,
-                        AVG({METER_PRICE}) AS avg_meter,
+                        AVG({deal_meter_expr(deal_type)}) AS avg_meter,
                         MIN(safe_date) AS first_deal,
                         MAX(safe_date) AS last_deal,
                         STRING_AGG(DISTINCT NULLIF(COALESCE(rooms_en::text, ''), ''), ', ') AS rooms_list,
@@ -1017,7 +1055,7 @@ def get_unit_summary(scope="building", name=None, prop=None, period=None, deal_t
                         AVG({PRICE}) AS avg_price,
                         MIN({PRICE}) AS min_price,
                         MAX({PRICE}) AS max_price,
-                        AVG({METER_PRICE}) AS avg_meter,
+                        AVG({deal_meter_expr(deal_type)}) AS avg_meter,
                         percentile_cont(0.25) WITHIN GROUP (ORDER BY {PRICE}) AS p25_price,
                         percentile_cont(0.50) WITHIN GROUP (ORDER BY {PRICE}) AS median_price,
                         percentile_cont(0.75) WITHIN GROUP (ORDER BY {PRICE}) AS p75_price
@@ -1053,7 +1091,7 @@ def get_comparison(scope="dubai", name=None, prop=None, period=None, deal_type=N
                     SELECT
                         COUNT(*) AS deals,
                         AVG({value_expr}) AS avg_price,
-                        AVG({METER_PRICE}) AS avg_meter
+                        AVG({deal_meter_expr(deal_type)}) AS avg_meter
                     {base_from()}
                       {where}
                       {prop_sql}
@@ -1067,7 +1105,7 @@ def get_comparison(scope="dubai", name=None, prop=None, period=None, deal_type=N
                     SELECT
                         COUNT(*) AS deals,
                         AVG({value_expr}) AS avg_price,
-                        AVG({METER_PRICE}) AS avg_meter
+                        AVG({deal_meter_expr(deal_type)}) AS avg_meter
                     {base_from()}
                       {where}
                       {prop_sql}
@@ -1166,7 +1204,7 @@ def get_latest_deals(scope, name, prop=None, period=None, deal_type=None, limit=
                         COALESCE(property_type_en::text, '') AS property_type_en,
                         COALESCE(property_sub_type_en::text, '') AS property_sub_type_en,
                         {value_expr} AS price,
-                        {METER_PRICE} AS meter_price,
+                        {deal_meter_expr(deal_type)} AS meter_price,
                         COALESCE(building_name_en::text, '') AS building_name_en,
                         COALESCE(area_name_en::text, '') AS area_name_en
                     {base_from()}
@@ -1253,7 +1291,7 @@ def get_top_buildings_in_scope(scope="dubai", name=None, period=None, deal_type=
                         COALESCE(area_name_en::text, '') AS area_name_en,
                         COUNT(*) AS deals,
                         AVG({value_expr}) AS avg_price,
-                        AVG({METER_PRICE}) AS avg_meter
+                        AVG({deal_meter_expr(deal_type)}) AS avg_meter
                     {base_from()}
                       {where}
                       {deal_sql}
@@ -2501,6 +2539,7 @@ def selftest_deal_type_logic():
     assert "actual_worth" not in rent_sql.lower() and "0.20" not in rent_sql
     assert "actual_worth" in sale_sql
     assert "%rent%" in sale_params
+    assert "%sale%" in rent_params
     return True
 
 
