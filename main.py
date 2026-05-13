@@ -233,6 +233,134 @@ def property_condition(prop):
     return "", []
 
 
+
+
+# =========================
+# UI TEXTS / MENUS — RESTORED
+# =========================
+TEXTS = {
+    "ru": {
+        "choose_lang": "🏙 <b>Dubai DLD Analytics Bot</b>\n\nВыберите язык:",
+        "lang_selected": "✅ Язык выбран: <b>Русский</b>\n\n🏠 <b>Главное меню</b>\n\nВыберите раздел:",
+        "main_menu": "🏠 <b>Главное меню</b>\n\nВыберите раздел:",
+        "main": "🏠 Главное меню",
+        "back": "⬅️ Назад",
+        "settings": "⚙️ Настройки",
+        "building_search": "🏢 Поиск здания",
+        "area_stats": "🏙️ Статистика района",
+        "dubai_stats": "🌇 Статистика по Дубаю",
+        "view_deals": "📊 Смотреть сделки",
+        "top_active": "🚀 Топ активных зданий",
+        "top_price": "💰 Топ по средней цене",
+        "full_report": "📊 Полная аналитика",
+        "period_compare": "📈 Сравнение периодов",
+        "last_deals": "🧾 Последние сделки",
+        "undervalued": "📉 Проверить выгодность объекта",
+        "sale": "🏠 Продажа",
+        "rent": "🔑 Аренда",
+        "both": "📊 Все сделки",
+        "skip": "⏭️ Пропустить",
+        "all_time": "📅 Всё время",
+        "p3": "3 месяца",
+        "p6": "6 месяцев",
+        "p12": "1 год",
+        "p36": "3 года",
+        "enter_building": "🏢 <b>Введите название здания</b>\n\nМожно полностью или частично:\n• Grande\n• Marina\n• Sobha\n• Anantara",
+        "enter_area": "🏙️ <b>Введите название района</b>\n\nНапример:\n• JVC\n• Downtown\n• Business Bay\n• Dubai Marina",
+        "choose_deal_type": "📊 Выберите тип сделки:",
+        "choose_property": "🏠 Выберите тип недвижимости / комнатность:",
+        "choose_period": "📅 Выберите период:",
+        "choose_report": "📊 Что показать?",
+        "choose_building": "🔎 <b>Выберите нужное здание:</b>",
+        "choose_area": "🔎 <b>Выберите нужный район:</b>",
+        "loading": "⏳ Считаю аналитику по DLD базе...",
+        "not_found": "❌ Ничего не найдено. Попробуйте другое название.",
+        "enter_price": "💰 Введите цену объекта в AED:",
+        "enter_size": "📐 Введите площадь объекта в sqft:",
+    },
+    "en": {},
+    "ar": {},
+}
+TEXTS["en"] = TEXTS["ru"]
+TEXTS["ar"] = TEXTS["ru"]
+
+PROPERTY_OPTIONS = [
+    "Studio", "1 BR", "2 BR", "3 BR", "4 BR", "5 BR+",
+    "Villa", "Townhouse", "Penthouse", "Apartment", "Office", "Shop",
+]
+
+
+def tr(user_id, key):
+    lang = user_languages.get(user_id, "ru")
+    return TEXTS.get(lang, TEXTS["ru"]).get(key, TEXTS["ru"].get(key, key))
+
+
+def kb(rows, resize=True):
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=str(x)) for x in row] for row in rows],
+        resize_keyboard=resize,
+        one_time_keyboard=False,
+        input_field_placeholder="Выберите действие"
+    )
+
+
+def language_menu():
+    return kb([["🇷🇺 Русский"], ["🇬🇧 English", "🇦🇪 العربية"]])
+
+
+def main_menu(user_id):
+    return kb([
+        ["🧠 Инвестиционный подбор"],
+        [tr(user_id, "building_search")],
+        [tr(user_id, "area_stats"), tr(user_id, "dubai_stats")],
+        [tr(user_id, "view_deals"), "📉 Проверить сделку"],
+        [tr(user_id, "top_active"), tr(user_id, "top_price")],
+        [tr(user_id, "settings")],
+    ])
+
+
+def back_menu(user_id):
+    return kb([[tr(user_id, "back"), tr(user_id, "main")]])
+
+
+def deal_type_menu(user_id):
+    return kb([
+        [tr(user_id, "sale"), tr(user_id, "rent")],
+        [tr(user_id, "both")],
+        [tr(user_id, "back"), tr(user_id, "main")],
+    ])
+
+
+def property_menu(user_id):
+    return kb([
+        ["Studio", "1 BR", "2 BR"],
+        ["3 BR", "4 BR", "5 BR+"],
+        ["Villa", "Townhouse"],
+        ["Penthouse", "Apartment"],
+        ["Office", "Shop"],
+        [tr(user_id, "skip")],
+        [tr(user_id, "back"), tr(user_id, "main")],
+    ])
+
+
+def period_menu(user_id):
+    return kb([
+        [tr(user_id, "p3"), tr(user_id, "p6")],
+        [tr(user_id, "p12"), tr(user_id, "p36")],
+        [tr(user_id, "all_time")],
+        [tr(user_id, "back"), tr(user_id, "main")],
+    ])
+
+
+def report_menu(user_id):
+    return kb([
+        [tr(user_id, "full_report")],
+        ["💼 Экономическое резюме"],
+        [tr(user_id, "period_compare"), tr(user_id, "last_deals")],
+        [tr(user_id, "undervalued")],
+        [tr(user_id, "back"), tr(user_id, "main")],
+    ])
+
 def get_period_key(user_id, text):
     if text == tr(user_id, "p3"):
         return "3"
@@ -1164,6 +1292,7 @@ def no_data_message(title="Аналитика"):
 @dp.message(CommandStart())
 async def start_handler(message: Message):
     user_states[message.from_user.id] = {}
+    user_languages.setdefault(message.from_user.id, "ru")
     await message.answer(TEXTS["ru"]["choose_lang"], reply_markup=language_menu())
 
 
@@ -1697,7 +1826,10 @@ async def main_handler(message: Message):
 
 async def main():
     print("Dubai DLD Analytics Bot started")
-    await dp.start_polling(bot)
+    # На Railway после перезагрузок у Telegram иногда остаётся старый webhook/очередь.
+    # Это гарантирует, что /start сразу попадёт в polling.
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
 
 if __name__ == "__main__":
