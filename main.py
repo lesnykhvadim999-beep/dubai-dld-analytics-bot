@@ -3841,6 +3841,336 @@ def get_comparison(scope='dubai', name=None, prop=None, period=None, deal_type=N
     return current, previous
 
 
+
+# =========================
+# RENT TABLE ULTRA FALLBACK FIX v34
+# =========================
+# Этот блок должен стоять ПЕРЕД async def main().
+# Исправляет главный остаточный баг: если в public.dld_rents колонки называются иначе
+# или дата/цена не распознаются, бот всё равно не должен падать в "нет стабильной выборки".
+# Для аренды сначала идёт мягкий поиск в dld_rents, затем fallback по всему dld_rents.
+
+_SCHEMA_CACHE_V34 = {}
+
+
+def table_columns_v34(table_name):
+    if table_name in _SCHEMA_CACHE_V34:
+        return _SCHEMA_CACHE_V34[table_name]
+    schema, table = table_name.split('.', 1)
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema=%s AND table_name=%s
+                ORDER BY ordinal_position
+            """, [schema, table])
+            cols = [r['column_name'] for r in cur.fetchall()]
+    _SCHEMA_CACHE_V34[table_name] = cols
+    return cols
+
+
+def q34(col):
+    return '"' + str(col).replace('"', '""') + '"'
+
+
+def pick34(cols, names):
+    low = {c.lower(): c for c in cols}
+    for n in names:
+        if n.lower() in low:
+            return low[n.lower()]
+    return None
+
+
+def text34(cols, names, fallback="''"):
+    low = {c.lower(): c for c in cols}
+    found = [low[n.lower()] for n in names if n.lower() in low]
+    if not found:
+        return fallback
+    return "COALESCE(" + ", ".join([f"NULLIF({q34(c)}::text, '')" for c in found]) + ", '')"
+
+
+def blob34(cols):
+    if not cols:
+        return "''"
+    return "LOWER(CONCAT_WS(' ', " + ", ".join([f"COALESCE({q34(c)}::text, '')" for c in cols]) + "))"
+
+
+def safe_num34(col):
+    # Берём только реалистичные годовые арендные значения. Это защищает от id/дат/номеров договоров.
+    raw = f"NULLIF(regexp_replace(REPLACE(COALESCE({q34(col)}::text, ''), ',', ''), '[^0-9.]', '', 'g'), '')::numeric"
+    return f"CASE WHEN ({raw}) BETWEEN 1000 AND 5000000 THEN ({raw}) ELSE NULL END"
+
+
+def num34(cols, names, allow_any=False):
+    low = {c.lower(): c for c in cols}
+    chosen = []
+    for n in names:
+        if n.lower() in low and low[n.lower()] not in chosen:
+            chosen.append(low[n.lower()])
+    if allow_any:
+        good = ['rent', 'annual', 'amount', 'value', 'worth', 'contract', 'ejari', 'price', 'total']
+        bad = ['id', 'date', 'number', 'no', 'phone', 'mobile', 'year', 'month', 'room', 'bed', 'area', 'size', 'sqft', 'lat', 'lng', 'lon']
+        for c in cols:
+            cl = c.lower()
+            if c not in chosen and any(g in cl for g in good) and not any(b in cl for b in bad):
+                chosen.append(c)
+    if not chosen:
+        return "NULL::numeric"
+    return "COALESCE(" + ", ".join([safe_num34(c) for c in chosen]) + ")"
+
+
+def size34(cols):
+    low = {c.lower(): c for c in cols}
+    names = ['procedure_area','actual_area','property_size','property_size_sqft','area_size_sqft','area_sqft','size_sqft','size','built_up_area','unit_area','property_area']
+    chosen = [low[n.lower()] for n in names if n.lower() in low]
+    if not chosen:
+        return "NULL::numeric"
+    parts=[]
+    for c in chosen:
+        raw = f"NULLIF(regexp_replace(REPLACE(COALESCE({q34(c)}::text, ''), ',', ''), '[^0-9.]', '', 'g'), '')::numeric"
+        parts.append(f"CASE WHEN ({raw}) BETWEEN 100 AND 50000 THEN ({raw}) ELSE NULL END")
+    return "COALESCE(" + ", ".join(parts) + ")"
+
+
+def date34(cols):
+    low = {c.lower(): c for c in cols}
+    names = ['contract_start_date','start_date','instance_date','registration_date','date','contract_date']
+    c = None
+    for n in names:
+        if n.lower() in low:
+            c = low[n.lower()]
+            break
+    if not c:
+        return "NULL::date"
+    s = q34(c)
+    # Поддержка форматов YYYY-MM-DD и DD/MM/YYYY или DD-MM-YYYY.
+    return f"""
+        CASE
+            WHEN {s}::text ~ '^\\d{{4}}-\\d{{2}}-\\d{{2}}' THEN LEFT({s}::text,10)::date
+            WHEN {s}::text ~ '^\\d{{2}}/\\d{{2}}/\\d{{4}}' THEN TO_DATE(LEFT({s}::text,10), 'DD/MM/YYYY')
+            WHEN {s}::text ~ '^\\d{{2}}-\\d{{2}}-\\d{{4}}' THEN TO_DATE(LEFT({s}::text,10), 'DD-MM-YYYY')
+            ELSE NULL
+        END
+    """
+
+
+def rent_meta_v34():
+    cols = table_columns_v34(RENT_TABLE)
+    price_names = [
+        'annual_amount','annual_rent','annual_rent_value','annual_rental_value','rent_value','rent_amount',
+        'rental_value','rental_amount','contract_amount','contract_value','contract_rent','total_contract_value',
+        'actual_worth','amount','value','ejari_value','ejari_contract_amount'
+    ]
+    price = num34(cols, price_names, allow_any=True)
+    size = size34(cols)
+    return {
+        'search_text': blob34(cols),
+        'building': text34(cols, ['building_name_en','building_name','building','project_name_en','project_name','project','property_name_en','property_name','master_project_en','master_project','nearest_landmark','property']),
+        'area': text34(cols, ['area_name_en','area_name','area','area_en','location','location_en','district','community']),
+        'rooms': text34(cols, ['rooms_en','rooms','room','rooms_count','rooms_number','bedrooms','bedroom','unit_rooms']),
+        'ptype': text34(cols, ['property_type_en','property_type','property_usage_en','property_usage','usage','type']),
+        'subtype': text34(cols, ['property_sub_type_en','property_sub_type','property_subtype','unit_type','property_category']),
+        'unit': text34(cols, ['unit_number','unit_no','unit','property_number','property_no','property_id']),
+        'price': price,
+        'size': size,
+        'meter': f"CASE WHEN ({size}) IS NOT NULL AND ({size}) > 0 AND ({price}) IS NOT NULL THEN ({price})/({size}) ELSE NULL END",
+        'date': date34(cols),
+    }
+
+
+def rent_base_from_v34():
+    m = rent_meta_v34()
+    return f"""
+        FROM (
+            SELECT *,
+                {m['date']} AS safe_date,
+                {m['search_text']} AS search_text,
+                {m['building']} AS building_name_en,
+                {m['area']} AS area_name_en,
+                {m['rooms']} AS rooms_en,
+                {m['ptype']} AS property_type_en,
+                {m['subtype']} AS property_sub_type_en,
+                {m['unit']} AS unit_number_norm,
+                {m['price']} AS rent_price,
+                {m['meter']} AS rent_meter_price
+            FROM {RENT_TABLE}
+        ) t
+        WHERE 1=1
+    """
+
+
+def rent_scope_condition_v34(scope, name, strict=True):
+    if not strict or not name:
+        return '', []
+    n = clean_query(name).lower()
+    if not n:
+        return '', []
+    if scope == 'building':
+        parts = ["search_text ILIKE %s", "LOWER(COALESCE(building_name_en::text,'')) ILIKE %s"]
+        params = [f'%{n}%', f'%{n}%']
+        try:
+            for a in sales_areas_for_building_v32(name):
+                if a:
+                    parts.append("LOWER(COALESCE(area_name_en::text,'')) ILIKE %s")
+                    params.append(f'%{str(a).lower()}%')
+        except Exception:
+            pass
+        return 'AND (' + ' OR '.join(parts) + ')', params
+    if scope == 'area':
+        values = area_alias_values(n) or [n]
+        return 'AND (' + ' OR '.join(["search_text ILIKE %s" for _ in values]) + ')', [f'%{v.lower()}%' for v in values]
+    return '', []
+
+
+def rent_property_condition_v34(prop, strict=True):
+    if not strict or not prop:
+        return '', []
+    p = str(prop).lower().strip()
+    txt = "LOWER(COALESCE(search_text::text,'') || ' ' || COALESCE(rooms_en::text,'') || ' ' || COALESCE(property_type_en::text,'') || ' ' || COALESCE(property_sub_type_en::text,''))"
+    if p == 'studio':
+        return f'AND ({txt} LIKE %s)', ['%studio%']
+    if p in ['1 br','2 br','3 br','4 br']:
+        n = p.split()[0]
+        # Очень широкий вариант: допускаем только отдельные формы комнат, но smart fallback ниже сможет отключить этот фильтр.
+        return f"AND ({txt} LIKE %s OR {txt} LIKE %s OR {txt} LIKE %s OR COALESCE(rooms_en::text,'')=%s)", [f'%{n} b/r%', f'%{n} br%', f'%{n} bedroom%', n]
+    if p == '5 br+':
+        return f"AND ({txt} LIKE %s OR {txt} LIKE %s OR {txt} LIKE %s OR {txt} LIKE %s OR {txt} LIKE %s)", ['%5 br%','%6 br%','%7 br%','%8 br%','%9 br%']
+    return f'AND ({txt} LIKE %s)', [f'%{p}%']
+
+
+def rent_period_condition_v34(period_key, strict=True):
+    if not strict:
+        return ''
+    return rent_period_condition(period_key)
+
+
+def get_stats(scope='dubai', name=None, prop=None, period=None, deal_type=None):
+    if not is_rent_deal(deal_type):
+        return ORIG_get_stats(scope, name, prop, period, deal_type)
+    where, params = rent_scope_condition_v34(scope, name, True)
+    prop_sql, prop_args = rent_property_condition_v34(prop, True)
+    params += prop_args
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT
+                    COUNT(*) AS deals,
+                    COUNT(DISTINCT NULLIF(building_name_en,'')) AS buildings,
+                    COUNT(DISTINCT NULLIF(area_name_en,'')) AS areas,
+                    AVG(rent_price) AS avg_price,
+                    MIN(rent_price) AS min_price,
+                    MAX(rent_price) AS max_price,
+                    AVG(rent_meter_price) AS avg_meter,
+                    MIN(safe_date) AS first_deal,
+                    MAX(safe_date) AS last_deal,
+                    STRING_AGG(DISTINCT NULLIF(rooms_en,''), ', ') AS rooms_list,
+                    STRING_AGG(DISTINCT NULLIF(property_type_en,''), ', ') AS property_types,
+                    STRING_AGG(DISTINCT NULLIF(property_sub_type_en,''), ', ') AS property_sub_types
+                {rent_base_from_v34()}
+                  {where}
+                  {prop_sql}
+                  {rent_period_condition_v34(period, True)}
+            """, params)
+            return cur.fetchone()
+
+
+def get_latest_deals(scope='building', name=None, prop=None, period=None, deal_type=None, limit=7, unit_query=None):
+    if not is_rent_deal(deal_type):
+        return ORIG_get_latest_deals(scope, name, prop, period, deal_type, limit, unit_query)
+    where, params = rent_scope_condition_v34(scope, name, True)
+    prop_sql, prop_args = rent_property_condition_v34(prop, True)
+    unit_sql, unit_args = rent_unit_condition_v32(unit_query)
+    params += prop_args + unit_args + [limit]
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT safe_date, 'Rent' AS procedure_name_en, rooms_en, property_type_en, property_sub_type_en,
+                       rent_price AS price, rent_meter_price AS meter_price, building_name_en, area_name_en, unit_number_norm AS unit_number
+                {rent_base_from_v34()}
+                  {where}
+                  {prop_sql}
+                  {unit_sql}
+                  {rent_period_condition_v34(period, True)}
+                ORDER BY safe_date DESC NULLS LAST
+                LIMIT %s
+            """, params)
+            return cur.fetchall()
+
+
+def get_stats_smart(scope='dubai', name=None, prop=None, period=None, deal_type=None):
+    if not is_rent_deal(deal_type) and ORIG_get_stats_smart:
+        return ORIG_get_stats_smart(scope, name, prop, period, deal_type)
+    if not is_rent_deal(deal_type):
+        return get_stats(scope, name, prop, period, deal_type), prop, period, deal_type
+    attempts = [
+        (scope, name, prop, period),
+        (scope, name, prop, None),
+        (scope, name, None, period),
+        (scope, name, None, None),
+        ('dubai', None, prop, period),
+        ('dubai', None, prop, None),
+        ('dubai', None, None, period),
+        ('dubai', None, None, None),
+    ]
+    for sc, nm, p, per in attempts:
+        try:
+            row = get_stats(sc, nm, p, per, deal_type)
+            if row and int(row.get('deals') or 0) > 0:
+                return row, p, per, deal_type
+        except Exception as e:
+            print('RENT_V34_STATS_ERROR:', repr(e))
+    return None, prop, period, deal_type
+
+
+def get_latest_deals_smart(scope, name, prop=None, period=None, deal_type=None, limit=5, unit_query=None):
+    if not is_rent_deal(deal_type) and ORIG_get_latest_deals_smart:
+        return ORIG_get_latest_deals_smart(scope, name, prop, period, deal_type, limit, unit_query)
+    if not is_rent_deal(deal_type):
+        return get_latest_deals(scope, name, prop, period, deal_type, limit, unit_query), prop, period, deal_type
+    attempts = [
+        (scope, name, prop, period),
+        (scope, name, prop, None),
+        (scope, name, None, period),
+        (scope, name, None, None),
+        ('dubai', None, prop, period),
+        ('dubai', None, prop, None),
+        ('dubai', None, None, period),
+        ('dubai', None, None, None),
+    ]
+    for sc, nm, p, per in attempts:
+        try:
+            rows = get_latest_deals(sc, nm, p, per, deal_type, limit=limit, unit_query=unit_query)
+            if rows:
+                return rows, p, per, deal_type
+        except Exception as e:
+            print('RENT_V34_LATEST_ERROR:', repr(e))
+    return [], prop, period, deal_type
+
+
+def get_comparison(scope='dubai', name=None, prop=None, period=None, deal_type=None):
+    if not is_rent_deal(deal_type):
+        return ORIG_get_comparison(scope, name, prop, period, deal_type)
+    if not period:
+        return None
+    current, _, _, _ = get_stats_smart(scope, name, prop, period, deal_type)
+    previous, _, _, _ = get_stats_smart(scope, name, prop, None, deal_type)
+    return current, previous
+
+
+def compare_value(scope, name, price, size, prop=None, period=None, deal_type=None):
+    if not is_rent_deal(deal_type):
+        return ORIG_compare_value(scope, name, price, size, prop, period, deal_type)
+    row, _, _, _ = get_stats_smart(scope, name, prop, period, deal_type)
+    if not row or not row.get('avg_price'):
+        return None
+    market_avg = float(row['avg_price'])
+    user_price = float(price)
+    user_ppsqft = user_price / float(size) if float(size) else None
+    diff_pct = ((user_price - market_avg)/market_avg)*100 if market_avg else 0
+    return {'row': row, 'user_price': user_price, 'user_ppsqft': user_ppsqft, 'market_avg': market_avg, 'diff_pct': diff_pct}
+
+
 async def main():
     print("Dubai DLD Analytics Bot started")
     await dp.start_polling(bot)
