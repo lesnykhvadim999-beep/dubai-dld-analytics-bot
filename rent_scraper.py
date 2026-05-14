@@ -3,7 +3,6 @@ import pandas as pd
 from sqlalchemy import create_engine
 from datetime import datetime, timedelta
 import os
-import json
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -36,6 +35,8 @@ response = requests.get(
 print("Status:", response.status_code)
 
 if response.status_code != 200:
+    print("RESPONSE TEXT:")
+    print(response.text)
     raise RuntimeError(f"Request failed: {response.status_code}")
 
 try:
