@@ -1,84 +1,128 @@
 import os
+import re
+import json
 import time
+import glob
 import pandas as pd
-from sqlalchemy import create_engine
+import psycopg2
+from psycopg2.extras import execute_values
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is not set")
 
-FILE_NAME = "rent_contracts_2026-05-14_01-00-56_1.csv"
 TABLE_NAME = "rent_contracts"
+PROGRESS_FILE = "rent_import_progress.json"
+CHUNK_SIZE = 10000
 
-engine = create_engine(DATABASE_URL)
+csv_files = glob.glob("rent_contracts*.csv")
+
+if not csv_files:
+    raise RuntimeError("CSV file not found")
+
+FILE_NAME = max(csv_files, key=os.path.getsize)
+
+print("Using CSV:", FILE_NAME)
+
+def clean_column(name):
+    name = str(name).strip().lower()
+    name = re.sub(r"[^a-zA-Z0-9_]+", "_", name)
+    name = re.sub(r"_+", "_", name).strip("_")
+    if not name:
+        name = "column"
+    if name[0].isdigit():
+        name = "col_" + name
+    return name
+
+def load_progress():
+    if os.path.exists(PROGRESS_FILE):
+        with open(PROGRESS_FILE, "r") as f:
+            return json.load(f).get("last_done_row", 0)
+    return 0
+
+def save_progress(row_number):
+    with open(PROGRESS_FILE, "w") as f:
+        json.dump({"last_done_row": row_number}, f)
 
 print("Counting rows...")
 with open(FILE_NAME, "r", encoding="utf-8", errors="ignore") as f:
     total_rows = sum(1 for _ in f) - 1
 
-print(f"Total rows: {total_rows}")
+print("Total rows:", total_rows)
 
-# 30% этапами
-stage_size = max(int(total_rows * 0.30), 1)
+last_done_row = load_progress()
+print("Resume from row:", last_done_row)
 
-# внутри этапа грузим маленькими пачками, чтобы не падало
-inner_chunk_size = 5000
+reader = pd.read_csv(
+    FILE_NAME,
+    chunksize=CHUNK_SIZE,
+    low_memory=False,
+    on_bad_lines="skip"
+)
 
-uploaded_rows = 0
-first_chunk = True
-stage_number = 1
+conn = psycopg2.connect(DATABASE_URL)
+conn.autocommit = False
+cur = conn.cursor()
 
-while uploaded_rows < total_rows:
-    stage_end = min(uploaded_rows + stage_size, total_rows)
+table_created = False
+current_row = 0
 
-    print(f"\n=== STAGE {stage_number}: {uploaded_rows} -> {stage_end} rows ===")
+for chunk in reader:
+    chunk_start = current_row
+    chunk_end = current_row + len(chunk)
+    current_row = chunk_end
 
-    rows_in_stage = 0
+    if chunk_end <= last_done_row:
+        print(f"Skipping already uploaded rows: {chunk_end}/{total_rows}")
+        continue
 
-    reader = pd.read_csv(
-        FILE_NAME,
-        skiprows=range(1, uploaded_rows + 1),
-        nrows=stage_end - uploaded_rows,
-        chunksize=inner_chunk_size,
-        low_memory=False,
-        on_bad_lines="skip"
-    )
+    chunk.columns = [clean_column(c) for c in chunk.columns]
 
-    for chunk in reader:
-        while True:
-            try:
-                chunk.to_sql(
-                    TABLE_NAME,
-                    engine,
-                    if_exists="replace" if first_chunk else "append",
-                    index=False,
-                    chunksize=1000,
-                    method="multi"
-                )
+    chunk.insert(0, "source_row_number", range(chunk_start + 1, chunk_end + 1))
 
-                first_chunk = False
+    if not table_created:
+        columns_sql = ", ".join([f'"{col}" TEXT' for col in chunk.columns if col != "source_row_number"])
+        cur.execute(f'''
+            CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
+                source_row_number BIGINT PRIMARY KEY,
+                {columns_sql}
+            );
+        ''')
+        conn.commit()
+        table_created = True
 
-                rows_uploaded_now = len(chunk)
-                uploaded_rows += rows_uploaded_now
-                rows_in_stage += rows_uploaded_now
+    chunk = chunk.astype(str).replace({"nan": None, "NaT": None})
 
-                percent = uploaded_rows / total_rows * 100
+    columns = list(chunk.columns)
+    values = [tuple(row) for row in chunk.to_numpy()]
 
-                print(
-                    f"Uploaded: {uploaded_rows}/{total_rows} "
-                    f"({percent:.2f}%)"
-                )
+    insert_sql = f'''
+        INSERT INTO {TABLE_NAME} ({",".join([f'"{c}"' for c in columns])})
+        VALUES %s
+        ON CONFLICT (source_row_number) DO NOTHING;
+    '''
 
-                break
+    while True:
+        try:
+            execute_values(cur, insert_sql, values, page_size=1000)
+            conn.commit()
 
-            except Exception as e:
-                print("ERROR during upload:")
-                print(e)
-                print("Retrying in 10 seconds...")
-                time.sleep(10)
+            save_progress(chunk_end)
 
-    print(f"Stage {stage_number} completed.")
-    stage_number += 1
+            percent = chunk_end / total_rows * 100
+            print(f"Uploaded: {chunk_end}/{total_rows} ({percent:.2f}%)")
 
-print("\nDONE. Full CSV uploaded successfully.")
+            break
+
+        except Exception as e:
+            conn.rollback()
+            print("ERROR:")
+            print(e)
+            print("Retrying in 15 seconds...")
+            time.sleep(15)
+
+cur.close()
+conn.close()
+
+print("DONE. Full import completed without duplicates.")
