@@ -1,4 +1,3 @@
-import requests
 import pandas as pd
 from sqlalchemy import create_engine
 import os
@@ -10,58 +9,26 @@ if not DATABASE_URL:
 
 engine = create_engine(DATABASE_URL)
 
-url = "https://www.dubaipulse.gov.ae/api/dataset/download/json"
+FILE_NAME = "rent_contracts_2026-05-14_01-00-56_1.csv"
 
-params = {
-    "dataset": "rental-contracts"
-}
+print("Reading CSV...")
 
-headers = {
-    "User-Agent": "Mozilla/5.0"
-}
-
-print("Downloading data from Dubai Pulse...")
-
-response = requests.get(
-    url,
-    params=params,
-    headers=headers,
-    timeout=120
+df = pd.read_csv(
+    FILE_NAME,
+    low_memory=False
 )
 
-print("Status:", response.status_code)
+print("Rows in CSV:", len(df))
 
-text = response.text
-
-if "<!DOCTYPE html>" in text:
-    print("Dubai Pulse returned HTML instead of JSON")
-    print(text[:500])
-    exit()
-
-data = response.json()
-
-rows = []
-
-for item in data[:5000]:
-    try:
-        rows.append({
-            "contract_amount": item.get("contract_amount"),
-            "tenant_type": item.get("tenant_type"),
-            "start_date": item.get("start_date"),
-            "end_date": item.get("end_date")
-        })
-    except Exception as e:
-        print("ROW ERROR:", e)
-
-df = pd.DataFrame(rows)
-
-print("Rows:", len(df))
+print("Uploading to PostgreSQL...")
 
 df.to_sql(
-    "rent_contracts_90d",
+    "rent_contracts",
     engine,
     if_exists="replace",
-    index=False
+    index=False,
+    chunksize=5000,
+    method="multi"
 )
 
 print("DONE")
