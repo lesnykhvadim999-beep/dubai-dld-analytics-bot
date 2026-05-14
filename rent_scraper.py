@@ -11,7 +11,7 @@ if not DATABASE_URL:
 
 engine = create_engine(DATABASE_URL)
 
-cutoff_date = datetime.now() - timedelta(days=365)
+cutoff_date = datetime.now() - timedelta(days=90)
 
 url = "https://www.dubaipulse.gov.ae/api/dataset/download/json"
 
