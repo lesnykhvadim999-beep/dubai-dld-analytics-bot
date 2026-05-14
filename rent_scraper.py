@@ -1,7 +1,6 @@
 import requests
 import pandas as pd
 from sqlalchemy import create_engine
-from datetime import datetime, timedelta
 import os
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -41,7 +40,12 @@ with open("rent_data.csv", "wb") as f:
 
 print("CSV downloaded")
 
-df = pd.read_csv("rent_data.csv")
+df = pd.read_csv(
+    "rent_data.csv",
+    sep=None,
+    engine="python",
+    on_bad_lines="skip"
+)
 
 print("Rows in CSV:", len(df))
 
