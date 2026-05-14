@@ -1,81 +1,75 @@
-from playwright.sync_api import sync_playwright
+import requests
 import pandas as pd
 from sqlalchemy import create_engine
 from datetime import datetime, timedelta
 import os
-import time
+import json
 
 DATABASE_URL = os.getenv("DATABASE_URL")
+
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL is not set")
 
 engine = create_engine(DATABASE_URL)
 
 cutoff_date = datetime.now() - timedelta(days=90)
 
+url = "https://www.dubaipulse.gov.ae/api/dataset/download/json"
+
+params = {
+    "dataset": "rental-contracts"
+}
+
+headers = {
+    "User-Agent": "Mozilla/5.0"
+}
+
+print("Downloading data from Dubai Pulse...")
+
+response = requests.get(
+    url,
+    params=params,
+    headers=headers,
+    timeout=120
+)
+
+print("Status:", response.status_code)
+
+if response.status_code != 200:
+    raise RuntimeError(f"Request failed: {response.status_code}")
+
+data = response.json()
+
 rows = []
 
-with sync_playwright() as p:
+for item in data:
 
-    browser = p.chromium.launch(
-        headless=True,
-        args=[
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-gpu"
-        ]
-    )
+    try:
+        start_date = item.get("start_date")
 
-    page = browser.new_page()
+        if not start_date:
+            continue
 
-    page.goto(
-        "https://data.dubai/en/web/guest/468586",
-        wait_until="networkidle"
-    )
+        dt = datetime.strptime(start_date[:10], "%Y-%m-%d")
 
-    page.click("text=Data Table")
+        if dt < cutoff_date:
+            continue
 
-    time.sleep(8)
+        rows.append({
+            "contract_amount": item.get("contract_amount"),
+            "tenant_type": item.get("tenant_type"),
+            "start_date": item.get("start_date"),
+            "end_date": item.get("end_date")
+        })
 
-    for _ in range(50):
-
-        table_rows = page.locator("tbody tr")
-        count = table_rows.count()
-
-        for i in range(count):
-
-            cols = table_rows.nth(i).locator("td")
-
-            try:
-
-                contract_amount = cols.nth(0).inner_text().strip()
-                tenant_type = cols.nth(4).inner_text().strip()
-                start_date = cols.nth(5).inner_text().strip()
-                end_date = cols.nth(6).inner_text().strip()
-
-                dt = datetime.strptime(start_date, "%Y-%m-%d")
-
-                if dt < cutoff_date:
-                    continue
-
-                rows.append({
-                    "contract_amount": contract_amount,
-                    "tenant_type": tenant_type,
-                    "start_date": start_date,
-                    "end_date": end_date
-                })
-
-            except Exception:
-                pass
-
-        page.mouse.wheel(0, 6000)
-
-        time.sleep(2)
-
-    browser.close()
+    except Exception as e:
+        print("ROW ERROR:", e)
 
 df = pd.DataFrame(rows)
 
 df.drop_duplicates(inplace=True)
+
+print("Rows collected:", len(df))
 
 df.to_sql(
     "rent_contracts_90d",
@@ -84,4 +78,4 @@ df.to_sql(
     index=False
 )
 
-print(f"Inserted {len(df)} rows")
+print(f"Inserted {len(df)} rows successfully")
