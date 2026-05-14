@@ -17,16 +17,24 @@ with sync_playwright() as p:
 
     browser = p.chromium.launch(
         headless=True,
-        args=["--no-sandbox", "--disable-setuid-sandbox"]
+        args=[
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu"
+        ]
     )
 
     page = browser.new_page()
 
-    page.goto("https://data.dubai/en/web/guest/468586")
+    page.goto(
+        "https://data.dubai/en/web/guest/468586",
+        wait_until="networkidle"
+    )
 
     page.click("text=Data Table")
 
-    time.sleep(5)
+    time.sleep(8)
 
     for _ in range(50):
 
@@ -38,10 +46,11 @@ with sync_playwright() as p:
             cols = table_rows.nth(i).locator("td")
 
             try:
-                contract_amount = cols.nth(0).inner_text()
-                tenant_type = cols.nth(4).inner_text()
-                start_date = cols.nth(5).inner_text()
-                end_date = cols.nth(6).inner_text()
+
+                contract_amount = cols.nth(0).inner_text().strip()
+                tenant_type = cols.nth(4).inner_text().strip()
+                start_date = cols.nth(5).inner_text().strip()
+                end_date = cols.nth(6).inner_text().strip()
 
                 dt = datetime.strptime(start_date, "%Y-%m-%d")
 
@@ -55,10 +64,10 @@ with sync_playwright() as p:
                     "end_date": end_date
                 })
 
-            except:
+            except Exception:
                 pass
 
-        page.mouse.wheel(0, 5000)
+        page.mouse.wheel(0, 6000)
 
         time.sleep(2)
 
