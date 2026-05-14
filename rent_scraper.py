@@ -1,7 +1,6 @@
 import requests
 import pandas as pd
 from sqlalchemy import create_engine
-from datetime import datetime, timedelta
 import os
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -10,8 +9,6 @@ if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is not set")
 
 engine = create_engine(DATABASE_URL)
-
-cutoff_date = datetime.now() - timedelta(days=90)
 
 url = "https://www.dubaipulse.gov.ae/api/dataset/download/json"
 
@@ -23,7 +20,7 @@ headers = {
     "User-Agent": "Mozilla/5.0"
 }
 
-print("Downloading CSV from Dubai Pulse...")
+print("Downloading data from Dubai Pulse...")
 
 response = requests.get(
     url,
@@ -34,40 +31,31 @@ response = requests.get(
 
 print("Status:", response.status_code)
 
-if response.status_code != 200:
-    raise RuntimeError(f"Request failed: {response.status_code}")
+text = response.text
 
-with open("rent_data.csv", "wb") as f:
-    f.write(response.content)
+if "<!DOCTYPE html>" in text:
+    print("Dubai Pulse returned HTML instead of JSON")
+    print(text[:500])
+    exit()
 
-print("CSV downloaded")
+data = response.json()
 
-df = pd.read_csv(
-    "rent_data.csv",
-    sep=";",
-    engine="python",
-    on_bad_lines="skip"
-)
+rows = []
 
-print("Rows in CSV:", len(df))
+for item in data[:5000]:
+    try:
+        rows.append({
+            "contract_amount": item.get("contract_amount"),
+            "tenant_type": item.get("tenant_type"),
+            "start_date": item.get("start_date"),
+            "end_date": item.get("end_date")
+        })
+    except Exception as e:
+        print("ROW ERROR:", e)
 
-# Пробуем найти колонку с датой
-date_column = None
+df = pd.DataFrame(rows)
 
-for col in df.columns:
-    if "date" in col.lower():
-        date_column = col
-        break
-
-if date_column:
-    df[date_column] = pd.to_datetime(
-        df[date_column],
-        errors="coerce"
-    )
-
-    df = df[df[date_column] >= cutoff_date]
-
-print("Rows after filter:", len(df))
+print("Rows:", len(df))
 
 df.to_sql(
     "rent_contracts_90d",
