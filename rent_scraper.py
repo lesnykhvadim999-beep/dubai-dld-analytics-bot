@@ -1,180 +1,147 @@
 import os
-import re
-import json
 import time
-import glob
 import pandas as pd
-import psycopg2
-from psycopg2.extras import execute_values
+from sqlalchemy import create_engine, text
+
+# =========================
+# CONFIG
+# =========================
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL is not set")
+    raise RuntimeError("DATABASE_URL not set")
 
-TABLE_NAME = "rent_residential"
-PROGRESS_FILE = "rent_progress_residential.json"
-CHUNK_SIZE = 10000
+CSV_FILE = "rent_contracts_2026-05-14_01-00-56_1.csv"
 
-csv_files = glob.glob("rent_contracts*.csv")
+TABLE_NAME = "rent_residential_365d"
 
-if not csv_files:
-    raise RuntimeError("CSV file not found")
+CHUNK_SIZE = 5000
 
-FILE_NAME = max(csv_files, key=os.path.getsize)
+# =========================
+# CONNECT DB
+# =========================
 
-print("Using CSV:", FILE_NAME)
+engine = create_engine(DATABASE_URL)
 
-IMPORTANT_COLUMNS = [
-    "contract_amount",
-    "property_type_en",
-    "property_sub_type_en",
-    "nearest_landmark_en",
-    "nearest_metro_en",
-    "nearest_mall_en",
-    "area_en",
-    "usage_en",
-    "contract_start_date",
-    "contract_end_date",
-    "year"
-]
+# =========================
+# CREATE TABLE
+# =========================
 
-def clean_column(name):
-    name = str(name).strip().lower()
-    name = re.sub(r"[^a-zA-Z0-9_]+", "_", name)
-    name = re.sub(r"_+", "_", name).strip("_")
-    return name
+create_sql = f"""
+CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
+    contract_id TEXT,
+    contract_date TEXT,
+    property_type TEXT,
+    property_sub_type TEXT,
+    area TEXT,
+    building TEXT,
+    project TEXT,
+    annual_amount DOUBLE PRECISION,
+    contract_amount DOUBLE PRECISION,
+    rooms TEXT,
+    procedure_area DOUBLE PRECISION,
+    registration_date TEXT
+);
+"""
 
-def load_progress():
-    if os.path.exists(PROGRESS_FILE):
-        with open(PROGRESS_FILE, "r") as f:
-            return json.load(f).get("last_done_row", 0)
-    return 0
+with engine.begin() as conn:
+    conn.execute(text(create_sql))
 
-def save_progress(row_number):
-    with open(PROGRESS_FILE, "w") as f:
-        json.dump({"last_done_row": row_number}, f)
+print("TABLE READY")
 
-with open(FILE_NAME, "r", encoding="utf-8", errors="ignore") as f:
-    total_rows = sum(1 for _ in f) - 1
+# =========================
+# COUNT ROWS
+# =========================
 
-print("Total rows:", total_rows)
+print("Counting rows...")
 
-last_done_row = load_progress()
+total_rows = sum(1 for _ in open(CSV_FILE, encoding="utf-8")) - 1
+
+print(f"Total rows: {total_rows}")
+
+# =========================
+# LOAD CSV
+# =========================
 
 reader = pd.read_csv(
-    FILE_NAME,
+    CSV_FILE,
     chunksize=CHUNK_SIZE,
-    low_memory=False,
-    on_bad_lines="skip"
+    low_memory=False
 )
 
-conn = psycopg2.connect(DATABASE_URL)
-cur = conn.cursor()
-
-table_created = False
-current_row = 0
+uploaded = 0
 
 for chunk in reader:
 
-    chunk_start = current_row
-    chunk_end = current_row + len(chunk)
-    current_row = chunk_end
+    try:
 
-    if chunk_end <= last_done_row:
-        continue
+        # =========================
+        # FILTER RESIDENTIAL ONLY
+        # =========================
 
-    chunk.columns = [clean_column(c) for c in chunk.columns]
+        if "property_type_en" in chunk.columns:
+            chunk = chunk[
+                chunk["property_type_en"]
+                .astype(str)
+                .str.contains("Residential", case=False, na=False)
+            ]
 
-    available_cols = [c for c in IMPORTANT_COLUMNS if c in chunk.columns]
+        # =========================
+        # KEEP ONLY IMPORTANT COLUMNS
+        # =========================
 
-    chunk = chunk[available_cols]
+        columns_map = {
+            "contract_id": "contract_id",
+            "contract_date": "contract_date",
+            "property_type_en": "property_type",
+            "property_sub_type_en": "property_sub_type",
+            "area_name_en": "area",
+            "building_name_en": "building",
+            "project_name_en": "project",
+            "annual_amount": "annual_amount",
+            "contract_amount": "contract_amount",
+            "rooms_en": "rooms",
+            "procedure_area": "procedure_area",
+            "registration_date": "registration_date"
+        }
 
-    if "usage_en" in chunk.columns:
-        chunk = chunk[
-            chunk["usage_en"]
-            .astype(str)
-            .str.contains("Residential", case=False, na=False)
+        existing_cols = [
+            col for col in columns_map.keys()
+            if col in chunk.columns
         ]
 
-    if len(chunk) == 0:
-        continue
+        chunk = chunk[existing_cols]
 
-    chunk.insert(
-        0,
-        "source_row_number",
-        range(chunk_start + 1, chunk_start + 1 + len(chunk))
-    )
+        chunk.rename(columns=columns_map, inplace=True)
 
-    if not table_created:
+        # =========================
+        # SAVE TO POSTGRES
+        # =========================
 
-        columns_sql = ", ".join([
-            f'"{col}" TEXT'
-            for col in chunk.columns
-            if col != "source_row_number"
-        ])
+        chunk.to_sql(
+            TABLE_NAME,
+            engine,
+            if_exists="append",
+            index=False,
+            method="multi"
+        )
 
-        cur.execute(f"""
-            CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
-                source_row_number BIGINT PRIMARY KEY,
-                {columns_sql}
-            );
-        """)
+        uploaded += len(chunk)
 
-        conn.commit()
-        table_created = True
+        percent = (uploaded / total_rows) * 100
 
-    chunk = chunk.astype(str).replace({
-        "nan": None,
-        "NaT": None
-    })
+        print(
+            f"Uploaded: {uploaded}/{total_rows} ({percent:.2f}%)"
+        )
 
-    columns = list(chunk.columns)
+    except Exception as e:
 
-    values = [tuple(row) for row in chunk.to_numpy()]
+        print("ERROR:")
+        print(e)
 
-    insert_sql = f"""
-        INSERT INTO {TABLE_NAME}
-        ({",".join([f'"{c}"' for c in columns])})
-        VALUES %s
-        ON CONFLICT (source_row_number) DO NOTHING;
-    """
+        print("Retrying in 15 seconds...")
 
-    while True:
-
-        try:
-
-            execute_values(
-                cur,
-                insert_sql,
-                values,
-                page_size=1000
-            )
-
-            conn.commit()
-
-            save_progress(chunk_end)
-
-            percent = chunk_end / total_rows * 100
-
-            print(
-                f"Uploaded: {chunk_end}/{total_rows} ({percent:.2f}%)"
-            )
-
-            break
-
-        except Exception as e:
-
-            conn.rollback()
-
-            print("ERROR:")
-            print(e)
-
-            print("Retrying in 15 seconds...")
-
-            time.sleep(15)
-
-cur.close()
-conn.close()
+        time.sleep(15)
 
 print("DONE")
