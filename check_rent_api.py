@@ -1,17 +1,12 @@
 import requests
 import json
 
-API_URL = "https://data.dubai/o/dda/data-services/dataset-download?datasetId=468586&page=1&pageSize=30&sortDir=desc"
+url = "https://data.dubai/o/dda/data-services/dataset-download?datasetId=468586&page=1&pageSize=30&sortDir=desc"
 
-headers = {
-    "User-Agent": "Mozilla/5.0"
-}
+r = requests.get(url)
 
-print("Checking Rent Contracts API...")
+print(r.status_code)
 
-response = requests.get(API_URL, headers=headers, timeout=60)
+data = r.json()
 
-print("Status:", response.status_code)
-print("Content-Type:", response.headers.get("content-type"))
-print("First 2000 chars:")
-print(response.text[:2000])
+print(json.dumps(data, indent=2)[:5000])
