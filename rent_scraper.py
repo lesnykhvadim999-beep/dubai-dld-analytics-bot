@@ -38,12 +38,16 @@ print("Status:", response.status_code)
 if response.status_code != 200:
     raise RuntimeError(f"Request failed: {response.status_code}")
 
-data = response.json()
+try:
+    data = response.json()
+except Exception:
+    print("RESPONSE TEXT:")
+    print(response.text)
+    raise
 
 rows = []
 
 for item in data:
-
     try:
         start_date = item.get("start_date")
 
