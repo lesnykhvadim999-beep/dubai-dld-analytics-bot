@@ -1,6 +1,7 @@
 import requests
 import pandas as pd
 from sqlalchemy import create_engine
+from datetime import datetime, timedelta
 import os
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -10,11 +11,12 @@ if not DATABASE_URL:
 
 engine = create_engine(DATABASE_URL)
 
-url = "https://www.dubaipulse.gov.ae/api/dataset/download/download_attachment"
+cutoff_date = datetime.now() - timedelta(days=90)
+
+url = "https://www.dubaipulse.gov.ae/api/dataset/download/json"
 
 params = {
-    "dataset": "rental-contracts",
-    "format": "csv"
+    "dataset": "rental-contracts"
 }
 
 headers = {
@@ -42,12 +44,30 @@ print("CSV downloaded")
 
 df = pd.read_csv(
     "rent_data.csv",
-    sep=None,
+    sep=";",
     engine="python",
     on_bad_lines="skip"
 )
 
 print("Rows in CSV:", len(df))
+
+# Пробуем найти колонку с датой
+date_column = None
+
+for col in df.columns:
+    if "date" in col.lower():
+        date_column = col
+        break
+
+if date_column:
+    df[date_column] = pd.to_datetime(
+        df[date_column],
+        errors="coerce"
+    )
+
+    df = df[df[date_column] >= cutoff_date]
+
+print("Rows after filter:", len(df))
 
 df.to_sql(
     "rent_contracts_90d",
