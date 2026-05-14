@@ -3,3 +3,5 @@ python-dotenv
 psycopg2-binary
 requests
 playwright
+pandas
+sqlalchemy
