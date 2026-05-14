@@ -6,6 +6,7 @@ import os
 import time
 
 DATABASE_URL = os.getenv("DATABASE_URL")
+
 engine = create_engine(DATABASE_URL)
 
 cutoff_date = datetime.now() - timedelta(days=90)
@@ -13,7 +14,12 @@ cutoff_date = datetime.now() - timedelta(days=90)
 rows = []
 
 with sync_playwright() as p:
-    browser = p.chromium.launch(headless=True)
+
+    browser = p.chromium.launch(
+        headless=True,
+        args=["--no-sandbox", "--disable-setuid-sandbox"]
+    )
+
     page = browser.new_page()
 
     page.goto("https://data.dubai/en/web/guest/468586")
@@ -25,7 +31,6 @@ with sync_playwright() as p:
     for _ in range(50):
 
         table_rows = page.locator("tbody tr")
-
         count = table_rows.count()
 
         for i in range(count):
