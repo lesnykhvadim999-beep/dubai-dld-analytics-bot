@@ -32,7 +32,7 @@ execute_values(
         ON CONFLICT (transaction_id) DO NOTHING
         """,
         values
-    )
+   )
 
     conn.commit()
 
