@@ -1,53 +1,102 @@
-import os
-import time
-import pandas as pd
-from sqlalchemy import create_engine
+is_free_hold,
+            is_offplan
+        ))
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-CSV_FILE = os.getenv("CSV_FILE", "Real_Estate_Transactions_2026-05-15.csv")
-TABLE_NAME = "dld_transactions_full"
+    execute_values(
+        cur,
+        """
+        INSERT INTO dld_transactions_full (
+            transaction_id,
+            transaction_number,
 
-if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL is not set")
+            transaction_date,
+            procedure_name,
 
-engine = create_engine(DATABASE_URL)
+            area_id,
+            area_en,
+            area_ar,
 
-print("Starting sales updater...")
+            project_en,
+            project_ar,
 
-if not os.path.exists(CSV_FILE):
-    print(f"CSV file not found: {CSV_FILE}")
-    print("Updater finished without changes.")
-    exit(0)
+            building_en,
+            building_ar,
 
-print("Loading CSV:", CSV_FILE)
+            prop_type_en,
+            prop_sub_type_en,
 
-df = pd.read_csv(CSV_FILE)
-print("Total rows in CSV:", len(df))
+            rooms_en,
 
-chunk_size = 5000
-uploaded = 0
-total_rows = len(df)
+            actual_worth,
+            meter_sale_price,
 
-for start in range(0, total_rows, chunk_size):
-    chunk = df.iloc[start:start + chunk_size]
+            actual_area,
+            procedure_area,
 
-    try:
-        chunk.to_sql(
-            TABLE_NAME,
-            engine,
-            if_exists="append",
-            index=False,
-            method="multi"
+            parking,
+
+            nearest_metro_en,
+            nearest_mall_en,
+            nearest_landmark_en,
+
+            usage_id,
+
+            is_free_hold,
+            is_offplan
+        )
+        VALUES %s
+        ON CONFLICT (transaction_id) DO NOTHING
+        """,
+        values
+    )
+
+    conn.commit()
+
+# =========================
+# MAIN PARSER
+# =========================
+
+def run_parser(from_date, to_date):
+
+    skip = 0
+    take = 1000
+    total = 0
+
+    while True:
+
+        print(f"Fetching skip={skip}")
+
+        data = fetch_transactions(
+            from_date=from_date,
+            to_date=to_date,
+            skip=skip,
+            take=take
         )
 
-        uploaded += len(chunk)
-        percent = uploaded / total_rows * 100
-        print(f"Uploaded: {uploaded}/{total_rows} ({percent:.2f}%)")
+        rows = data.get("response", {}).get("result", [])
 
-    except Exception as e:
-        print("ERROR:")
-        print(e)
-        print("Retrying in 15 seconds...")
-        time.sleep(15)
+        if not rows:
+            print("Finished.")
+            break
 
-print("DONE")
+        save_transactions(rows)
+
+        count = len(rows)
+
+        total += count
+
+        print(f"Saved: {count}")
+        print(f"Total: {total}")
+
+        skip += take
+
+        time.sleep(1)
+
+# =========================
+# RUN
+# =========================
+
+run_parser(
+    from_date="05/01/2026",
+    to_date="05/15/2026"
+)
