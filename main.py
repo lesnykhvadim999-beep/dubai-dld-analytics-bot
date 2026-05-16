@@ -6009,6 +6009,388 @@ def latest_deals_menu(user_id, total=0, offset=0):
 
 print(f"Loaded premium deal data patch {DEAL_PATCH_VERSION}")
 
+
+# =========================
+# PREMIUM DEAL FIELD NORMALIZATION PATCH v56
+# =========================
+# Fixes:
+# - no deal ID in cards;
+# - separate building/project fields;
+# - rent live table project_en support;
+# - smaller sqm areas (e.g. 40-90 m²) are accepted, so price/m² is calculated;
+# - wider candidate lists for unit/type/rooms/area/size/price.
+
+DEAL_PATCH_VERSION = "v56_deal_fields_full_normalization"
+
+
+def _v56_num_expr(cols, candidates, fallback="NULL::numeric", min_value=None, max_value=None):
+    low = {str(c).lower(): c for c in (cols or [])}
+    parts = []
+    for name in candidates:
+        c = low.get(str(name).lower())
+        if not c:
+            continue
+        raw = f"NULLIF(regexp_replace(REPLACE(COALESCE(\"{c}\"::text, ''), ',', ''), '[^0-9.]', '', 'g'), '')::numeric"
+        if min_value is not None or max_value is not None:
+            conds = []
+            if min_value is not None:
+                conds.append(f"({raw}) >= {min_value}")
+            if max_value is not None:
+                conds.append(f"({raw}) <= {max_value}")
+            raw = f"CASE WHEN {' AND '.join(conds)} THEN ({raw}) ELSE NULL::numeric END"
+        parts.append(raw)
+    if not parts:
+        return fallback
+    return "COALESCE(" + ", ".join(parts) + f", {fallback})"
+
+
+def _v56_sale_meta():
+    cols = _v44_sales_cols()
+    project = _v55_text_expr(cols, [
+        'project_en','project_name_en','project_name','project',
+        'master_project_en','master_project','property_name_en','property_name','development_name','development'
+    ])
+    building_only = _v55_text_expr(cols, [
+        'building_name_en','building_en','building_name','building',
+        'tower_name_en','tower_name','tower','sub_project_en','sub_project','property_name_en','property_name'
+    ])
+    building = f"COALESCE(NULLIF({building_only}, ''), NULLIF({project}, ''), '')"
+    area = _v55_text_expr(cols, [
+        'area_name_en','area_en','area_name','area','location_en','location','district','district_en',
+        'community','community_en','master_community','master_community_en','zone_en','zone'
+    ])
+    size = _v56_num_expr(cols, [
+        'actual_area','procedure_area','property_area','property_area_sqft','property_size','property_size_sqft',
+        'area_size_sqft','area_sqft','size_sqft','size_sq_ft','sqft','built_up_area','bua','unit_area',
+        'area_size','size','meter_area','unit_size','unit_size_sqft','net_area','gross_area'
+    ], min_value=10, max_value=100000)
+    price = _v56_num_expr(cols, [
+        'actual_worth','actual_value','transaction_value','transaction_amount','transaction_price','price','value','amount',
+        'sale_price','selling_price','worth','total_value','total_amount','property_value','deal_value','instance_value'
+    ], min_value=1000, max_value=10000000000)
+    meter = _v56_num_expr(cols, [
+        'meter_sale_price','price_per_meter','meter_price','price_per_sqm','price_sqm','sqm_price',
+        'price_per_sqft','price_sqft','sqft_price'
+    ], min_value=1, max_value=1000000)
+    return {
+        'transaction': _v55_text_expr(cols, ['transaction_number','transaction_id','instance_id','id','contract_id','procedure_id'], "''"),
+        'building': building,
+        'project': project,
+        'area': area,
+        'rooms': _v55_text_expr(cols, [
+            'rooms_en','rooms','room','rooms_count','rooms_number','bedrooms','bedroom','bedrooms_count',
+            'bedroom_count','beds','bedrooms_en','unit_rooms','rooms_description_en'
+        ]),
+        'ptype': _v55_text_expr(cols, [
+            'property_type_en','prop_type_en','property_type','prop_type','property_usage_en','property_usage',
+            'usage','usage_en','type','type_en','asset_type_en','asset_type'
+        ]),
+        'subtype': _v55_text_expr(cols, [
+            'property_sub_type_en','prop_sub_type_en','property_subtype','property_sub_type','prop_sb_type_en',
+            'unit_type','unit_type_en','property_category','unit_category','property_kind_en','property_kind'
+        ]),
+        'procedure': _v55_text_expr(cols, [
+            'procedure_name_en','procedure_name','procedure','transaction_type_en','transaction_type',
+            'transaction_group_en','procedure_group_en','reg_type_en','registration_type','deal_type'
+        ]),
+        'unit': _v55_text_expr(cols, [
+            'unit_number','unit_no','unit','property_number','property_no','property_id','parcel_number',
+            'unit_id','unit_number_en','unit_name','unit_name_en','property_unit_number','unit_reference','unit_ref'
+        ], "''"),
+        'price': price,
+        'meter': meter,
+        'size': size,
+        'date': _v55_date_expr(cols),
+    }
+
+
+def base_from():
+    m = _v56_sale_meta()
+    meter_expr = f"""
+        COALESCE(
+            {m['meter']},
+            CASE WHEN ({m['size']}) IS NOT NULL AND ({m['size']}) > 0 AND ({m['price']}) IS NOT NULL
+                 THEN ({m['price']}) / NULLIF(({m['size']}), 0)
+                 ELSE NULL::numeric END
+        )
+    """
+    return f"""
+        FROM (
+            SELECT
+                {m['transaction']} AS transaction_number,
+                {m['date']} AS safe_date,
+                {m['building']} AS building_name_en,
+                {m['building']} AS building_en,
+                {m['project']} AS project_name_en,
+                {m['project']} AS project_en,
+                {m['area']} AS area_name_en,
+                {m['area']} AS area_en,
+                {m['rooms']} AS rooms_en,
+                {m['ptype']} AS property_type_en,
+                {m['ptype']} AS prop_type_en,
+                {m['subtype']} AS property_sub_type_en,
+                {m['subtype']} AS prop_sub_type_en,
+                {m['procedure']} AS procedure_name_en,
+                {m['procedure']} AS procedure_name_norm,
+                {m['unit']} AS unit_number_norm,
+                {m['size']} AS area_size,
+                {m['price']} AS actual_worth_norm,
+                {meter_expr} AS meter_sale_price_norm,
+                LOWER(
+                    COALESCE({m['building']}, '') || ' ' ||
+                    COALESCE({m['project']}, '') || ' ' ||
+                    COALESCE({m['area']}, '') || ' ' ||
+                    COALESCE({m['rooms']}, '') || ' ' ||
+                    COALESCE({m['ptype']}, '') || ' ' ||
+                    COALESCE({m['subtype']}, '') || ' ' ||
+                    COALESCE({m['procedure']}, '') || ' ' ||
+                    COALESCE({m['unit']}, '') || ' ' ||
+                    COALESCE({m['transaction']}, '')
+                ) AS search_text
+            FROM {TABLE}
+        ) t
+        WHERE 1=1
+    """
+
+PRICE = "actual_worth_norm"
+METER_PRICE = "meter_sale_price_norm"
+BUILDING_NAME = "COALESCE(building_name_en::text, '')"
+AREA_TXT = "COALESCE(area_name_en::text, '')"
+BUILDING_TXT = "COALESCE(building_name_en::text, '')"
+ROOMS_TXT = "COALESCE(rooms_en::text, '')"
+PROPERTY_TYPE_TXT = "COALESCE(property_type_en::text, '')"
+PROPERTY_SUB_TYPE_TXT = "COALESCE(property_sub_type_en::text, '')"
+
+
+def size34(cols):
+    # v56: DLD rent often stores area in square meters. Studio/1BR can be 14-90 m²,
+    # so the old lower bound 100 incorrectly erased area and price/m².
+    low = {c.lower(): c for c in cols}
+    names = [
+        'actual_area','procedure_area','property_area','property_size','property_size_sqft','area_size_sqft',
+        'area_sqft','size_sqft','size_sq_ft','sqft','size','built_up_area','unit_area','property_area_sqft',
+        'net_area','gross_area','area_size','meter_area'
+    ]
+    chosen = [low[n.lower()] for n in names if n.lower() in low]
+    if not chosen:
+        return "NULL::numeric"
+    parts=[]
+    for c in chosen:
+        raw = f"NULLIF(regexp_replace(REPLACE(COALESCE({q34(c)}::text, ''), ',', ''), '[^0-9.]', '', 'g'), '')::numeric"
+        parts.append(f"CASE WHEN ({raw}) BETWEEN 10 AND 100000 THEN ({raw}) ELSE NULL END")
+    return "COALESCE(" + ", ".join(parts) + ")"
+
+
+def rent_meta_v34():
+    cols = table_columns_v34(RENT_TABLE)
+    project = text34(cols, [
+        'project_en','project_name_en','project_name','project','master_project_en','master_project',
+        'property_name_en','property_name','development_name','development'
+    ])
+    building_only = text34(cols, [
+        'building_name_en','building_name','building','building_en','tower_name_en','tower_name','tower',
+        'sub_project_en','sub_project'
+    ])
+    building = f"COALESCE(NULLIF({building_only}, ''), NULLIF({project}, ''), '')"
+    area = text34(cols, [
+        'area_name_en','area_name','area','area_en','location','location_en','district','district_en',
+        'community','community_en','master_community','master_community_en'
+    ])
+    rooms = text34(cols, [
+        'rooms_en','rooms','room','rooms_count','rooms_number','bedrooms','bedroom','bedroom_count','beds','unit_rooms'
+    ])
+    ptype = text34(cols, [
+        'property_type_en','property_type','property_usage_en','property_usage','usage','usage_en','type','type_en','prop_type_en'
+    ])
+    subtype = text34(cols, [
+        'property_sub_type_en','property_sub_type','property_subtype','unit_type','unit_type_en','property_category','prop_sub_type_en','prop_sub_type'
+    ])
+    unit = text34(cols, [
+        'unit_number','unit_no','unit','property_number','property_no','property_id','parcel_number','unit_id',
+        'unit_number_en','unit_name','unit_reference','unit_ref'
+    ])
+    contract_id = text34(cols, ['contract_id','rent_id','id','ejari_number','contract_number','registration_number'], "''")
+    price = num34(cols, [
+        'annual_amount','annual_rent','annual_rent_value','annual_rental_value','rent_value','rent_amount',
+        'rental_value','rental_amount','contract_amount','contract_value','contract_rent','total_contract_value',
+        'actual_worth','amount','value','ejari_value','ejari_contract_amount','total_price','price'
+    ], allow_any=True)
+    size = size34(cols)
+    return {
+        'contract_id': contract_id,
+        'search_text': blob34(cols),
+        'building': building,
+        'project': project,
+        'area': area,
+        'rooms': rooms,
+        'ptype': ptype,
+        'subtype': subtype,
+        'unit': unit,
+        'price': price,
+        'size': size,
+        'meter': f"CASE WHEN ({size}) IS NOT NULL AND ({size}) > 0 AND ({price}) IS NOT NULL THEN ({price})/({size}) ELSE NULL END",
+        'date': date34(cols),
+    }
+
+
+def rent_base_from_v34():
+    m = rent_meta_v34()
+    return f"""
+        FROM (
+            SELECT
+                {m['contract_id']} AS transaction_number,
+                {m['date']} AS safe_date,
+                {m['search_text']} AS source_blob,
+                LOWER(
+                    COALESCE({m['search_text']}, '') || ' ' ||
+                    COALESCE({m['building']}, '') || ' ' ||
+                    COALESCE({m['project']}, '') || ' ' ||
+                    COALESCE({m['area']}, '') || ' ' ||
+                    COALESCE({m['unit']}, '') || ' ' ||
+                    COALESCE({m['contract_id']}, '')
+                ) AS search_text,
+                {m['building']} AS building_name_en,
+                {m['project']} AS project_name_en,
+                {m['project']} AS project_en,
+                {m['area']} AS area_name_en,
+                {m['rooms']} AS rooms_en,
+                {m['ptype']} AS property_type_en,
+                {m['subtype']} AS property_sub_type_en,
+                {m['unit']} AS unit_number_norm,
+                {m['size']} AS area_size,
+                {m['price']} AS rent_price,
+                {m['meter']} AS rent_meter_price
+            FROM {RENT_TABLE}
+        ) t
+        WHERE 1=1
+    """
+
+
+def _missing_value(label="DLD не раскрывает"):
+    return f"<i>{label}</i>"
+
+
+def format_deal_cards(rows, start_index=1, deal_type=None):
+    text = ""
+    for i, r in enumerate(rows, start_index):
+        project = _safe_text(r.get("project_name_en") or r.get("project_en"), "")
+        building_raw = r.get("building_name_en") or r.get("building_en") or project
+        building = _safe_text(building_raw, "не указано в DLD")
+        area = _safe_text(r.get("area_name_en") or r.get("area_en"), "не указано")
+        unit = _safe_text(r.get("unit_number") or r.get("unit_number_norm"), "DLD не раскрывает")
+        rooms = _safe_text(r.get("rooms_en"), "DLD не раскрывает")
+        ptype = _safe_text(r.get("property_type_en"), "не указано")
+        subtype = _safe_text(r.get("property_sub_type_en"), "не указано")
+        proc = _safe_text(r.get("procedure_name_en"), "не указано")
+        price = format_money(r.get("price"))
+        meter = format_money(r.get("meter_price")) if r.get("meter_price") is not None else "DLD не раскрывает площадь"
+        size = _format_area_size(r.get("area_size"))
+        date = _safe_date(r.get("safe_date"))
+        kind = _deal_kind_label(r, deal_type)
+        project_line = f"\n🏗 <b>Проект:</b> {project}" if project and project.lower() != str(building_raw or '').lower() else ""
+        text += (
+            f"━━━━━━━━━━━━━━\n"
+            f"<b>#{i} · {kind}</b>\n"
+            f"🗓 <b>Дата:</b> {date}\n"
+            f"🏢 <b>Здание:</b> {building}{project_line}\n"
+            f"📍 <b>Район:</b> {area}\n"
+            f"🔢 <b>Юнит:</b> {unit}\n"
+            f"🏠 <b>Тип:</b> {ptype}\n"
+            f"🏷 <b>Подтип:</b> {subtype}\n"
+            f"🛏 <b>Комнаты:</b> {rooms}\n"
+            f"📐 <b>Площадь:</b> {size}\n"
+            f"💰 <b>Сумма:</b> {price}\n"
+            f"📏 <b>Цена за м²:</b> {meter}\n"
+            f"📄 <b>Процедура:</b> {proc}\n\n"
+        )
+    return text
+
+
+def get_latest_deals(scope="building", name=None, prop=None, period=None, deal_type=None, limit=60, unit_query=None):
+    if is_rent_deal_type(deal_type):
+        try:
+            where, params = rent_scope_condition_v55(scope, name, True)
+            prop_sql, prop_args = rent_property_condition_v34(prop, True)
+            unit_sql, unit_args = rent_unit_condition_v32(unit_query)
+            params += prop_args + unit_args + [limit]
+            with db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(f"""
+                        SELECT
+                            transaction_number,
+                            safe_date,
+                            'Rent' AS procedure_name_en,
+                            COALESCE(rooms_en::text, '') AS rooms_en,
+                            COALESCE(property_type_en::text, '') AS property_type_en,
+                            COALESCE(property_sub_type_en::text, '') AS property_sub_type_en,
+                            rent_price AS price,
+                            rent_meter_price AS meter_price,
+                            area_size,
+                            COALESCE(building_name_en::text, '') AS building_name_en,
+                            COALESCE(project_name_en::text, '') AS project_name_en,
+                            COALESCE(area_name_en::text, '') AS area_name_en,
+                            COALESCE(unit_number_norm::text, '') AS unit_number
+                        {rent_base_from_v34()}
+                          {where}
+                          {prop_sql}
+                          {unit_sql}
+                          {rent_period_condition_v34(period, True)}
+                          AND rent_price IS NOT NULL
+                        ORDER BY safe_date DESC NULLS LAST, price DESC NULLS LAST
+                        LIMIT %s
+                    """, params)
+                    return cur.fetchall()
+        except Exception as e:
+            print("GET_LATEST_RENT_DEALS_ERROR_V56:", repr(e))
+            return []
+
+    prop_sql, prop_args = property_condition(prop)
+    deal_sql, deal_args = make_deal_type_condition(deal_type)
+    p_sql = period_condition(period)
+    unit_sql, unit_args = make_unit_condition(unit_query)
+    value_expr = deal_value_expr(deal_type)
+    if scope == "area":
+        scope_sql, scope_args = make_area_exact_condition(name)
+    elif scope == "building":
+        scope_sql, scope_args = building_exact_condition_for_name(name)
+    else:
+        scope_sql, scope_args = "", []
+    params = scope_args + prop_args + deal_args + unit_args + [limit]
+    try:
+        with db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT
+                        transaction_number,
+                        safe_date,
+                        COALESCE(procedure_name_en::text, '') AS procedure_name_en,
+                        COALESCE(rooms_en::text, '') AS rooms_en,
+                        COALESCE(property_type_en::text, '') AS property_type_en,
+                        COALESCE(property_sub_type_en::text, '') AS property_sub_type_en,
+                        {value_expr} AS price,
+                        {METER_PRICE} AS meter_price,
+                        area_size,
+                        COALESCE(unit_number_norm::text, '') AS unit_number,
+                        COALESCE(building_name_en::text, '') AS building_name_en,
+                        COALESCE(project_name_en::text, '') AS project_name_en,
+                        COALESCE(area_name_en::text, '') AS area_name_en
+                    {base_from()}
+                      {scope_sql}
+                      AND {value_expr} IS NOT NULL
+                      {prop_sql}
+                      {deal_sql}
+                      {p_sql}
+                      {unit_sql}
+                    ORDER BY safe_date DESC NULLS LAST, price DESC NULLS LAST
+                    LIMIT %s
+                """, params)
+                return cur.fetchall()
+    except Exception as e:
+        print("GET_LATEST_SALE_DEALS_ERROR_V56:", repr(e))
+        return []
+
+print(f"Loaded premium deal field normalization patch {DEAL_PATCH_VERSION}")
+
 # =========================
 # SINGLE POLLING LOCK v52
 # PostgreSQL advisory lock prevents two Railway/local processes with the same DB
