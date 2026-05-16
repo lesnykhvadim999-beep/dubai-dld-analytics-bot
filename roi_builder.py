@@ -28,7 +28,7 @@ SELECT
     s.avg_area,
 
     r.avg_annual_rent,
-    r.avg_contract,
+    r.last_contract AS last_rent_contract,
 
     CASE
         WHEN s.avg_sale_price > 0
