@@ -19,7 +19,6 @@ CREATE TABLE roi_analytics AS
 WITH sales AS (
     SELECT
         area_en,
-        prop_type_en,
 
         COUNT(*) AS sales_deals,
 
@@ -33,14 +32,12 @@ WITH sales AS (
       AND actual_worth > 0
 
     GROUP BY
-        area_en,
-        prop_type_en
+        area_en
 ),
 
 rents AS (
     SELECT
         area_en,
-        prop_type_en,
 
         COUNT(*) AS rent_deals,
 
@@ -52,13 +49,11 @@ rents AS (
       AND annual_amount > 0
 
     GROUP BY
-        area_en,
-        prop_type_en
+        area_en
 )
 
 SELECT
     s.area_en,
-    s.prop_type_en,
 
     s.sales_deals,
     r.rent_deals,
@@ -85,10 +80,7 @@ FROM sales s
 
 LEFT JOIN rents r
 ON LOWER(TRIM(COALESCE(s.area_en, ''))) =
-   LOWER(TRIM(COALESCE(r.area_en, '')))
-
-AND LOWER(TRIM(COALESCE(s.prop_type_en, ''))) =
-    LOWER(TRIM(COALESCE(r.prop_type_en, '')));
+   LOWER(TRIM(COALESCE(r.area_en, '')));
 """)
 
 conn.commit()
