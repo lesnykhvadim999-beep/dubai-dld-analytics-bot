@@ -48,7 +48,7 @@ PRICE = num_sql("actual_worth")
 METER_PRICE = num_sql("meter_sale_price")
 RENT_VALUE = num_sql("rent_value")
 
-BUILDING_NAME = "COALESCE(NULLIF(building_en::text, ''), NULLIF(project_en::text, ''), '')"
+BUILDING_NAME = "COALESCE(building_name_en::text, '')"
 
 
 _COLUMN_CACHE = None
@@ -294,8 +294,8 @@ PROPERTY_OPTIONS = [
 
 
 AREA_ALIASES = {
-    "jvc": ["Jumeirah Village Circle", "JVC", "Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"],
-    "jumeirah village circle": ["Jumeirah Village Circle", "JVC", "Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"],
+    "jvc": ["Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"],
+    "jumeirah village circle": ["Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"],
 
     "downtown": ["Burj Khalifa"],
     "downtown dubai": ["Burj Khalifa"],
@@ -522,7 +522,7 @@ def make_area_exact_condition(query):
     parts = []
 
     for value in values:
-        parts.append("COALESCE(area_en::text, '') ILIKE %s")
+        parts.append("COALESCE(area_name_en::text, '') ILIKE %s")
         params.append(f"%{value}%")
 
     return "AND (" + " OR ".join(parts) + ")", params
@@ -537,11 +537,11 @@ def null_txt(column):
 
 
 ROOMS_TXT = txt("rooms_en")
-PROPERTY_TYPE_TXT = txt("prop_type_en")
-PROPERTY_SUB_TYPE_TXT = txt("prop_sub_type_en")
+PROPERTY_TYPE_TXT = txt("property_type_en")
+PROPERTY_SUB_TYPE_TXT = txt("property_sub_type_en")
 PROCEDURE_TXT = txt("procedure_name_en")
-AREA_TXT = txt("area_en")
-BUILDING_TXT = txt("building_en")
+AREA_TXT = txt("area_name_en")
+BUILDING_TXT = txt("building_name_en")
 
 # Служебные словари для умного поиска. В прошлой версии их не было — из-за этого
 # падал поиск зданий/районов после ввода JVC, Grande, Corner и т.д.
@@ -551,8 +551,8 @@ STOP_WORDS = {
 }
 
 BUILDING_ALIASES = {
-    "grande signature": ["grande"],
-    "grande signature residences": ["grande"],
+    "grande signature": ["grande", "signature"],
+    "grande signature residences": ["grande", "signature"],
     "address opera": ["address", "opera"],
     "the address opera": ["address", "opera"],
     "address residences dubai opera": ["address", "opera"],
@@ -586,10 +586,10 @@ def smart_query_tokens(query):
 def building_search_expression():
     return f"""
     LOWER(
-        COALESCE(NULLIF(building_en, ''), NULLIF(project_en, ''), '') || ' ' ||
-        COALESCE(NULLIF(building_en, ''), NULLIF(project_en, ''), '') || ' ' ||
-        COALESCE(NULLIF(building_en, ''), NULLIF(project_en, ''), '') || ' ' ||
-        COALESCE(area_en, '')
+        COALESCE(building_name_en, '') || ' ' ||
+        COALESCE(building_name_en, '') || ' ' ||
+        COALESCE(building_name_en, '') || ' ' ||
+        COALESCE(area_name_en, '')
     )
     """
 
@@ -656,8 +656,8 @@ def property_condition(prop):
         return """
         AND (
             COALESCE(rooms_en::text, '') ILIKE %s
-            OR COALESCE(prop_type_en::text, '') ILIKE %s
-            OR COALESCE(prop_sub_type_en::text, '') ILIKE %s
+            OR COALESCE(property_type_en::text, '') ILIKE %s
+            OR COALESCE(property_sub_type_en::text, '') ILIKE %s
         )
         """, ["%studio%", "%studio%", "%studio%"]
 
@@ -667,8 +667,8 @@ def property_condition(prop):
         AND (
             COALESCE(rooms_en::text, '') ILIKE %s
             OR COALESCE(rooms_en::text, '') ILIKE %s
-            OR COALESCE(prop_type_en::text, '') ILIKE %s
-            OR COALESCE(prop_sub_type_en::text, '') ILIKE %s
+            OR COALESCE(property_type_en::text, '') ILIKE %s
+            OR COALESCE(property_sub_type_en::text, '') ILIKE %s
         )
         """, [f"%{n}%", f"%{n} B/R%", f"%{n}%", f"%{n}%"]
 
@@ -677,27 +677,27 @@ def property_condition(prop):
         AND (
             COALESCE(rooms_en::text, '') ILIKE %s OR COALESCE(rooms_en::text, '') ILIKE %s OR COALESCE(rooms_en::text, '') ILIKE %s
             OR COALESCE(rooms_en::text, '') ILIKE %s OR COALESCE(rooms_en::text, '') ILIKE %s
-            OR COALESCE(prop_type_en::text, '') ILIKE %s OR COALESCE(prop_sub_type_en::text, '') ILIKE %s
+            OR COALESCE(property_type_en::text, '') ILIKE %s OR COALESCE(property_sub_type_en::text, '') ILIKE %s
         )
         """, ["%5%", "%6%", "%7%", "%8%", "%9%", "%5%", "%5%"]
 
     if p == "villa":
-        return "AND (COALESCE(prop_type_en::text, '') ILIKE %s OR COALESCE(prop_sub_type_en::text, '') ILIKE %s)", ["%villa%", "%villa%"]
+        return "AND (COALESCE(property_type_en::text, '') ILIKE %s OR COALESCE(property_sub_type_en::text, '') ILIKE %s)", ["%villa%", "%villa%"]
 
     if p == "townhouse":
-        return "AND (COALESCE(prop_type_en::text, '') ILIKE %s OR COALESCE(prop_sub_type_en::text, '') ILIKE %s)", ["%town%", "%town%"]
+        return "AND (COALESCE(property_type_en::text, '') ILIKE %s OR COALESCE(property_sub_type_en::text, '') ILIKE %s)", ["%town%", "%town%"]
 
     if p == "penthouse":
-        return "AND (COALESCE(prop_type_en::text, '') ILIKE %s OR COALESCE(prop_sub_type_en::text, '') ILIKE %s)", ["%penthouse%", "%penthouse%"]
+        return "AND (COALESCE(property_type_en::text, '') ILIKE %s OR COALESCE(property_sub_type_en::text, '') ILIKE %s)", ["%penthouse%", "%penthouse%"]
 
     if p == "apartment":
-        return "AND (COALESCE(prop_type_en::text, '') ILIKE %s OR COALESCE(prop_sub_type_en::text, '') ILIKE %s OR COALESCE(prop_sub_type_en::text, '') ILIKE %s)", ["%apartment%", "%apartment%", "%flat%"]
+        return "AND (COALESCE(property_type_en::text, '') ILIKE %s OR COALESCE(property_sub_type_en::text, '') ILIKE %s OR COALESCE(property_sub_type_en::text, '') ILIKE %s)", ["%apartment%", "%apartment%", "%flat%"]
 
     if p == "office":
-        return "AND (COALESCE(prop_type_en::text, '') ILIKE %s OR COALESCE(prop_sub_type_en::text, '') ILIKE %s)", ["%office%", "%office%"]
+        return "AND (COALESCE(property_type_en::text, '') ILIKE %s OR COALESCE(property_sub_type_en::text, '') ILIKE %s)", ["%office%", "%office%"]
 
     if p == "shop":
-        return "AND (COALESCE(prop_type_en::text, '') ILIKE %s OR COALESCE(prop_sub_type_en::text, '') ILIKE %s)", ["%shop%", "%shop%"]
+        return "AND (COALESCE(property_type_en::text, '') ILIKE %s OR COALESCE(property_sub_type_en::text, '') ILIKE %s)", ["%shop%", "%shop%"]
 
     return "", []
 
@@ -813,8 +813,8 @@ def base_from():
             SELECT
                 *,
                 CASE
-                    WHEN transaction_date ~ '^\\d{{4}}-\\d{{2}}-\\d{{2}}'
-                    THEN transaction_date::date
+                    WHEN instance_date ~ '^\\d{{4}}-\\d{{2}}-\\d{{2}}'
+                    THEN instance_date::date
                     ELSE NULL
                 END AS safe_date
             FROM {TABLE}
@@ -828,9 +828,9 @@ def safe_building_label(row):
     if not row:
         return ""
     return (
-        row.get("building_en")
-        or row.get("building_en")
-        or row.get("building_en")
+        row.get("building_name_en")
+        or row.get("building_name_en")
+        or row.get("building_name_en")
         or ""
     )
 
@@ -859,17 +859,14 @@ def building_exact_condition_for_name(name):
         return "AND 1=0", []
 
     aliases = building_aliases(name)
-    expr = "COALESCE(NULLIF(building_en::text, ''), NULLIF(project_en::text, ''), '')"
 
     conditions = []
     params = []
     for alias in aliases:
         alias = clean_query(alias)
         if alias:
-            # Production fix: exact match + partial fallback. This lets Grande/Corner work
-            # even when DLD stores the name as Grande Signature / Binghatti Corner.
-            conditions.append(f"(LOWER(TRIM({expr})) = LOWER(TRIM(%s)) OR {expr} ILIKE %s)")
-            params.extend([alias, f"%{alias}%"])
+            conditions.append("LOWER(TRIM(COALESCE(building_name_en::text, ''))) = LOWER(TRIM(%s))")
+            params.append(alias)
 
     if not conditions:
         return "AND 1=0", []
@@ -889,21 +886,21 @@ def find_buildings(query, limit=10):
             with conn.cursor() as cur:
                 cur.execute(f"""
                     SELECT
-                        COALESCE(NULLIF(building_en::text, ''), NULLIF(project_en::text, ''), '') AS building_en,
-                        COALESCE(area_en::text, '') AS area_en,
+                        COALESCE(building_name_en::text, '') AS building_name_en,
+                        COALESCE(area_name_en::text, '') AS area_name_en,
                         COUNT(*) AS deals,
                         CASE
-                            WHEN LOWER(TRIM(COALESCE(NULLIF(building_en::text, ''), NULLIF(project_en::text, ''), ''))) = LOWER(TRIM(%s)) THEN 0
-                            WHEN LOWER(TRIM(COALESCE(NULLIF(building_en::text, ''), NULLIF(project_en::text, ''), ''))) LIKE LOWER(TRIM(%s)) THEN 1
+                            WHEN LOWER(TRIM(COALESCE(building_name_en::text, ''))) = LOWER(TRIM(%s)) THEN 0
+                            WHEN LOWER(TRIM(COALESCE(building_name_en::text, ''))) LIKE LOWER(TRIM(%s)) THEN 1
                             ELSE 2
                         END AS rank
                     {base_from()}
-                      AND COALESCE(NULLIF(building_en::text, ''), NULLIF(project_en::text, ''), '') <> ''
+                      AND COALESCE(building_name_en::text, '') <> ''
                       AND (
-                            COALESCE(NULLIF(building_en::text, ''), NULLIF(project_en::text, ''), '') ILIKE %s
-                         OR COALESCE(area_en::text, '') ILIKE %s
+                            COALESCE(building_name_en::text, '') ILIKE %s
+                         OR COALESCE(area_name_en::text, '') ILIKE %s
                       )
-                    GROUP BY COALESCE(NULLIF(building_en::text, ''), NULLIF(project_en::text, ''), ''), COALESCE(area_en::text, '')
+                    GROUP BY COALESCE(building_name_en::text, ''), COALESCE(area_name_en::text, '')
                     ORDER BY rank ASC, deals DESC
                     LIMIT %s
                 """, (query, query + "%", f"%{query}%", f"%{query}%", limit))
@@ -925,13 +922,13 @@ def find_areas(query, limit=10):
             with conn.cursor() as cur:
                 cur.execute(f"""
                     SELECT
-                        COALESCE(area_en::text, '') AS area_en,
+                        COALESCE(area_name_en::text, '') AS area_name_en,
                         COUNT(*) AS deals,
-                        COUNT(DISTINCT COALESCE(NULLIF(building_en::text, ''), NULLIF(project_en::text, ''), '')) AS buildings
+                        COUNT(DISTINCT COALESCE(building_name_en::text, '')) AS buildings
                     {base_from()}
                       {where}
-                      AND COALESCE(area_en::text, '') <> ''
-                    GROUP BY COALESCE(area_en::text, '')
+                      AND COALESCE(area_name_en::text, '') <> ''
+                    GROUP BY COALESCE(area_name_en::text, '')
                     ORDER BY deals DESC
                     LIMIT %s
                 """, params + [limit])
@@ -971,8 +968,8 @@ def get_stats(scope="dubai", name=None, prop=None, period=None, deal_type=None):
                 cur.execute(f"""
                     SELECT
                         COUNT(*) AS deals,
-                        COUNT(DISTINCT COALESCE(NULLIF(building_en::text, ''), NULLIF(project_en::text, ''), '')) AS buildings,
-                        COUNT(DISTINCT COALESCE(area_en::text, '')) AS areas,
+                        COUNT(DISTINCT COALESCE(building_name_en::text, '')) AS buildings,
+                        COUNT(DISTINCT COALESCE(area_name_en::text, '')) AS areas,
                         AVG({value_expr}) AS avg_price,
                         MIN({value_expr}) AS min_price,
                         MAX({value_expr}) AS max_price,
@@ -980,8 +977,8 @@ def get_stats(scope="dubai", name=None, prop=None, period=None, deal_type=None):
                         MIN(safe_date) AS first_deal,
                         MAX(safe_date) AS last_deal,
                         STRING_AGG(DISTINCT NULLIF(COALESCE(rooms_en::text, ''), ''), ', ') AS rooms_list,
-                        STRING_AGG(DISTINCT NULLIF(COALESCE(prop_type_en::text, ''), ''), ', ') AS property_types,
-                        STRING_AGG(DISTINCT NULLIF(COALESCE(prop_sub_type_en::text, ''), ''), ', ') AS property_sub_types
+                        STRING_AGG(DISTINCT NULLIF(COALESCE(property_type_en::text, ''), ''), ', ') AS property_types,
+                        STRING_AGG(DISTINCT NULLIF(COALESCE(property_sub_type_en::text, ''), ''), ', ') AS property_sub_types
                     {base_from()}
                       {where}
                       {prop_sql}
@@ -1157,12 +1154,12 @@ def get_latest_deals(scope, name, prop=None, period=None, deal_type=None, limit=
                         safe_date,
                         COALESCE(procedure_name_en::text, '') AS procedure_name_en,
                         COALESCE(rooms_en::text, '') AS rooms_en,
-                        COALESCE(prop_type_en::text, '') AS prop_type_en,
-                        COALESCE(prop_sub_type_en::text, '') AS prop_sub_type_en,
+                        COALESCE(property_type_en::text, '') AS property_type_en,
+                        COALESCE(property_sub_type_en::text, '') AS property_sub_type_en,
                         {value_expr} AS price,
                         {METER_PRICE} AS meter_price,
-                        COALESCE(NULLIF(building_en::text, ''), NULLIF(project_en::text, ''), '') AS building_en,
-                        COALESCE(area_en::text, '') AS area_en
+                        COALESCE(building_name_en::text, '') AS building_name_en,
+                        COALESCE(area_name_en::text, '') AS area_name_en
                     {base_from()}
                       {scope_sql}
                       AND {value_expr} IS NOT NULL
@@ -1176,7 +1173,7 @@ def get_latest_deals(scope, name, prop=None, period=None, deal_type=None, limit=
                 rows = cur.fetchall()
                 if scope == "building" and name:
                     target = normalize_search_text(name)
-                    rows = [r for r in rows if normalize_search_text(r.get("building_en", "")) == target]
+                    rows = [r for r in rows if normalize_search_text(r.get("building_name_en", "")) == target]
                 return rows
     except Exception as e:
         print("GET_LATEST_DEALS_ERROR:", repr(e))
@@ -1189,15 +1186,15 @@ def get_top_active():
             with conn.cursor() as cur:
                 cur.execute(f"""
                     SELECT
-                        COALESCE(NULLIF(building_en::text, ''), NULLIF(project_en::text, ''), '') AS building_en,
-                        COALESCE(area_en::text, '') AS area_en,
+                        COALESCE(building_name_en::text, '') AS building_name_en,
+                        COALESCE(area_name_en::text, '') AS area_name_en,
                         COUNT(*) AS deals,
                         AVG({PRICE}) AS avg_price,
                         AVG({METER_PRICE}) AS avg_meter
                     {base_from()}
-                      AND COALESCE(NULLIF(building_en::text, ''), NULLIF(project_en::text, ''), '') <> ''
+                      AND COALESCE(building_name_en::text, '') <> ''
                       AND {PRICE} IS NOT NULL
-                    GROUP BY COALESCE(NULLIF(building_en::text, ''), NULLIF(project_en::text, ''), ''), COALESCE(area_en::text, '')
+                    GROUP BY COALESCE(building_name_en::text, ''), COALESCE(area_name_en::text, '')
                     ORDER BY deals DESC
                     LIMIT 10
                 """)
@@ -1213,15 +1210,15 @@ def get_top_price():
             with conn.cursor() as cur:
                 cur.execute(f"""
                     SELECT
-                        COALESCE(NULLIF(building_en::text, ''), NULLIF(project_en::text, ''), '') AS building_en,
-                        COALESCE(area_en::text, '') AS area_en,
+                        COALESCE(building_name_en::text, '') AS building_name_en,
+                        COALESCE(area_name_en::text, '') AS area_name_en,
                         COUNT(*) AS deals,
                         AVG({PRICE}) AS avg_price,
                         AVG({METER_PRICE}) AS avg_meter
                     {base_from()}
-                      AND COALESCE(NULLIF(building_en::text, ''), NULLIF(project_en::text, ''), '') <> ''
+                      AND COALESCE(building_name_en::text, '') <> ''
                       AND {PRICE} IS NOT NULL
-                    GROUP BY COALESCE(NULLIF(building_en::text, ''), NULLIF(project_en::text, ''), ''), COALESCE(area_en::text, '')
+                    GROUP BY COALESCE(building_name_en::text, ''), COALESCE(area_name_en::text, '')
                     HAVING COUNT(*) >= 5
                     ORDER BY avg_price DESC NULLS LAST
                     LIMIT 10
@@ -1243,8 +1240,8 @@ def get_top_buildings_in_scope(scope="dubai", name=None, period=None, deal_type=
             with conn.cursor() as cur:
                 cur.execute(f"""
                     SELECT
-                        COALESCE(NULLIF(building_en::text, ''), NULLIF(project_en::text, ''), '') AS building_en,
-                        COALESCE(area_en::text, '') AS area_en,
+                        COALESCE(building_name_en::text, '') AS building_name_en,
+                        COALESCE(area_name_en::text, '') AS area_name_en,
                         COUNT(*) AS deals,
                         AVG({value_expr}) AS avg_price,
                         AVG({METER_PRICE}) AS avg_meter
@@ -1252,9 +1249,9 @@ def get_top_buildings_in_scope(scope="dubai", name=None, period=None, deal_type=
                       {where}
                       {deal_sql}
                       {period_condition(period)}
-                      AND COALESCE(NULLIF(building_en::text, ''), NULLIF(project_en::text, ''), '') <> ''
+                      AND COALESCE(building_name_en::text, '') <> ''
                       AND {value_expr} IS NOT NULL
-                    GROUP BY COALESCE(NULLIF(building_en::text, ''), NULLIF(project_en::text, ''), ''), COALESCE(area_en::text, '')
+                    GROUP BY COALESCE(building_name_en::text, ''), COALESCE(area_name_en::text, '')
                     ORDER BY deals DESC
                     LIMIT %s
                 """, params)
@@ -1336,7 +1333,7 @@ def quick_area_report(display_name, row, comparison=None, top_buildings=None, de
         text += "\n🔥 <b>Самые активные здания:</b>\n"
         for i, b in enumerate(top_buildings[:5], 1):
             text += (
-                f"{i}. <b>{b['building_en']}</b>\n"
+                f"{i}. <b>{b['building_name_en']}</b>\n"
                 f"   📊 {b['deals']:,} сделок · 💰 {format_money(b['avg_price'])}\n"
             )
 
@@ -1436,7 +1433,7 @@ def smart_pick_candidates(goal, budget_text, risk, timing):
         with conn:
             with conn.cursor() as cur:
                 for display_area, real_areas in areas:
-                    area_conditions = " OR ".join(["COALESCE(area_en::text, '') ILIKE %s"] * len(real_areas))
+                    area_conditions = " OR ".join(["COALESCE(area_name_en::text, '') ILIKE %s"] * len(real_areas))
                     area_params = [f"%{a}%" for a in real_areas]
 
                     best_type_rows = []
@@ -1457,7 +1454,7 @@ def smart_pick_candidates(goal, budget_text, risk, timing):
                             cur.execute(f"""
                                 SELECT
                                     COUNT(*) AS deals,
-                                    COUNT(DISTINCT building_en) AS buildings,
+                                    COUNT(DISTINCT building_name_en) AS buildings,
                                     AVG({PRICE}) AS avg_price,
                                     MIN({PRICE}) AS min_price,
                                     MAX({PRICE}) AS max_price,
@@ -1819,7 +1816,7 @@ except NameError:
     ORIG_get_stats_smart = None
     ORIG_get_latest_deals_smart = None
 
-RENT_TABLE = "public.dld_rents_full"
+RENT_TABLE = "public.dld_rents"
 
 
 def is_rent_deal(deal_type):
@@ -1901,13 +1898,13 @@ def rent_meta():
     cols = table_columns(RENT_TABLE)
 
     building = text_expr(cols, [
-        "building_en", "building_name", "building", "property_name_en", "property_name",
+        "building_name_en", "building_name", "building", "property_name_en", "property_name",
         "project_name_en", "project_name", "project", "master_project_en", "master_project"
     ])
-    area = text_expr(cols, ["area_en", "area", "area_name", "area_en", "location", "location_en"])
+    area = text_expr(cols, ["area_name_en", "area", "area_name", "area_en", "location", "location_en"])
     rooms = text_expr(cols, ["rooms_en", "rooms", "room", "bedrooms", "bedroom", "rooms_count"])
-    property_type = text_expr(cols, ["prop_type_en", "property_type", "property_usage_en", "property_usage"])
-    property_sub_type = text_expr(cols, ["prop_sub_type_en", "property_sub_type", "property_subtype", "unit_type", "property_category"])
+    property_type = text_expr(cols, ["property_type_en", "property_type", "property_usage_en", "property_usage"])
+    property_sub_type = text_expr(cols, ["property_sub_type_en", "property_sub_type", "property_subtype", "unit_type", "property_category"])
     unit = text_expr(cols, ["unit_number", "unit_no", "unit", "property_number", "property_no"], "NULL")
 
     rent_price = numeric_expr_from_cols(cols, [
@@ -1918,7 +1915,7 @@ def rent_meta():
         "area_size_sqft", "property_size_sqft", "property_size", "actual_area", "size_sqft", "size", "area_sqft"
     ])
     rent_meter = f"CASE WHEN ({size}) > 0 THEN ({rent_price}) / ({size}) ELSE NULL END"
-    safe_date = date_expr_from_cols(cols, ["contract_start_date", "transaction_date", "date", "registration_date", "start_date"])
+    safe_date = date_expr_from_cols(cols, ["contract_start_date", "instance_date", "date", "registration_date", "start_date"])
 
     return {
         "cols": cols,
@@ -1941,11 +1938,11 @@ def rent_base_from():
             SELECT
                 *,
                 {m['safe_date']} AS safe_date,
-                {m['building']} AS building_en,
-                {m['area']} AS area_en,
+                {m['building']} AS building_name_en,
+                {m['area']} AS area_name_en,
                 {m['rooms']} AS rooms_en,
-                {m['property_type']} AS prop_type_en,
-                {m['property_sub_type']} AS prop_sub_type_en,
+                {m['property_type']} AS property_type_en,
+                {m['property_sub_type']} AS property_sub_type_en,
                 {m['unit']} AS unit_number_norm,
                 {m['price']} AS rent_price,
                 {m['meter']} AS rent_meter_price
@@ -1959,9 +1956,9 @@ def rent_scope_condition(scope, name):
     if not name:
         return "", []
     if scope == "building":
-        return " AND building_en ILIKE %s", [f"%{name}%"]
+        return " AND building_name_en ILIKE %s", [f"%{name}%"]
     if scope == "area":
-        return " AND area_en ILIKE %s", [f"%{name}%"]
+        return " AND area_name_en ILIKE %s", [f"%{name}%"]
     return "", []
 
 
@@ -1994,14 +1991,14 @@ def rent_property_condition(prop):
         return "", []
     p = str(prop).lower().strip()
     if p == "studio":
-        return "AND (rooms_en ILIKE %s OR prop_sub_type_en ILIKE %s)", ["%studio%", "%studio%"]
+        return "AND (rooms_en ILIKE %s OR property_sub_type_en ILIKE %s)", ["%studio%", "%studio%"]
     if p in ["1 br", "2 br", "3 br", "4 br"]:
         n = p.split()[0]
-        return "AND (rooms_en ILIKE %s OR rooms_en = %s OR prop_sub_type_en ILIKE %s)", [f"%{n}%", n, f"%{n}%"]
+        return "AND (rooms_en ILIKE %s OR rooms_en = %s OR property_sub_type_en ILIKE %s)", [f"%{n}%", n, f"%{n}%"]
     if p == "5 br+":
         return "AND (rooms_en ILIKE %s OR rooms_en ILIKE %s OR rooms_en ILIKE %s OR rooms_en ILIKE %s OR rooms_en ILIKE %s)", ["%5%", "%6%", "%7%", "%8%", "%9%"]
     val = f"%{prop}%"
-    return "AND (prop_type_en ILIKE %s OR prop_sub_type_en ILIKE %s)", [val, val]
+    return "AND (property_type_en ILIKE %s OR property_sub_type_en ILIKE %s)", [val, val]
 
 
 def rent_unit_condition(unit_query):
@@ -2026,8 +2023,8 @@ def get_stats(scope="dubai", name=None, prop=None, period=None, deal_type=None):
             cur.execute(f"""
                 SELECT
                     COUNT(*) AS deals,
-                    COUNT(DISTINCT building_en) AS buildings,
-                    COUNT(DISTINCT area_en) AS areas,
+                    COUNT(DISTINCT building_name_en) AS buildings,
+                    COUNT(DISTINCT area_name_en) AS areas,
                     AVG(rent_price) AS avg_price,
                     MIN(rent_price) AS min_price,
                     MAX(rent_price) AS max_price,
@@ -2035,8 +2032,8 @@ def get_stats(scope="dubai", name=None, prop=None, period=None, deal_type=None):
                     MIN(safe_date) AS first_deal,
                     MAX(safe_date) AS last_deal,
                     STRING_AGG(DISTINCT NULLIF(rooms_en, ''), ', ') AS rooms_list,
-                    STRING_AGG(DISTINCT NULLIF(prop_type_en, ''), ', ') AS property_types,
-                    STRING_AGG(DISTINCT NULLIF(prop_sub_type_en, ''), ', ') AS property_sub_types
+                    STRING_AGG(DISTINCT NULLIF(property_type_en, ''), ', ') AS property_types,
+                    STRING_AGG(DISTINCT NULLIF(property_sub_type_en, ''), ', ') AS property_sub_types
                 {rent_base_from()}
                   {where}
                   {prop_sql}
@@ -2097,12 +2094,12 @@ def get_latest_deals(scope="building", name=None, prop=None, period=None, deal_t
                     safe_date,
                     'Rent' AS procedure_name_en,
                     rooms_en,
-                    prop_type_en,
-                    prop_sub_type_en,
+                    property_type_en,
+                    property_sub_type_en,
                     rent_price AS price,
                     rent_meter_price AS meter_price,
-                    building_en,
-                    area_en,
+                    building_name_en,
+                    area_name_en,
                     unit_number_norm AS unit_number
                 {rent_base_from()}
                   {where}
@@ -2323,7 +2320,7 @@ async def start_building_search_from_text(message, text):
 
     suggestions = []
     for r in rows:
-        name = r.get("building_en")
+        name = r.get("building_name_en")
         if name and name not in suggestions:
             suggestions.append(name)
 
@@ -2340,8 +2337,8 @@ async def start_building_search_from_text(message, text):
     response = tr(user_id, "choose_building") + "\n\n"
     for i, r in enumerate(rows[:8], 1):
         response += (
-            f"{i}. <b>{r.get('building_en')}</b>\n"
-            f"   📍 {r.get('area_en') or '-'} · 📊 {format_int(r.get('deals') or 0)} сделок\n"
+            f"{i}. <b>{r.get('building_name_en')}</b>\n"
+            f"   📍 {r.get('area_name_en') or '-'} · 📊 {format_int(r.get('deals') or 0)} сделок\n"
         )
 
     await message.answer(response, reply_markup=kb(buttons))
@@ -2449,8 +2446,8 @@ async def main_handler(message: Message):
             response = "🚀 <b>Топ активных зданий</b>\n\n"
             for i, r in enumerate(rows, 1):
                 response += (
-                    f"{i}. 🏢 <b>{r['building_en']}</b>\n"
-                    f"📍 {r['area_en']}\n"
+                    f"{i}. 🏢 <b>{r['building_name_en']}</b>\n"
+                    f"📍 {r['area_name_en']}\n"
                     f"📊 Сделок: {r['deals']:,}\n"
                     f"💰 Средняя цена: {format_money(r['avg_price'])}\n"
                     f"📐 Цена за метр: {format_money(r['avg_meter'])}\n\n"
@@ -2464,8 +2461,8 @@ async def main_handler(message: Message):
             response = "💰 <b>Топ зданий по средней цене</b>\n\n"
             for i, r in enumerate(rows, 1):
                 response += (
-                    f"{i}. 🏢 <b>{r['building_en']}</b>\n"
-                    f"📍 {r['area_en']}\n"
+                    f"{i}. 🏢 <b>{r['building_name_en']}</b>\n"
+                    f"📍 {r['area_name_en']}\n"
                     f"📊 Сделок: {r['deals']:,}\n"
                     f"💰 Средняя цена: {format_money(r['avg_price'])}\n"
                     f"📐 Цена за метр: {format_money(r['avg_meter'])}\n\n"
@@ -2582,7 +2579,7 @@ async def main_handler(message: Message):
                 await message.answer(tr(user_id, "not_found"), reply_markup=back_menu(user_id))
                 return
 
-            suggestions = [r["building_en"] for r in rows if r["building_en"]]
+            suggestions = [r["building_name_en"] for r in rows if r["building_name_en"]]
             new_state = {
                 "step": "choose_building",
                 "scope": "building",
@@ -2596,7 +2593,7 @@ async def main_handler(message: Message):
 
             response = tr(user_id, "choose_building") + "\n\n"
             for i, r in enumerate(rows, 1):
-                response += f"{i}. {r['building_en']} — {r['area_en']} ({r['deals']:,} сделок)\n"
+                response += f"{i}. {r['building_name_en']} — {r['area_name_en']} ({r['deals']:,} сделок)\n"
 
             await message.answer(response, reply_markup=kb(buttons))
             return
@@ -2611,7 +2608,7 @@ async def main_handler(message: Message):
 
             q_lower = clean_query(text).lower()
             if len(rows) == 1 or q_lower in AREA_ALIASES:
-                selected_name = rows[0]["area_en"]
+                selected_name = rows[0]["area_name_en"]
                 state["scope"] = "area"
                 state["name"] = selected_name
                 state["step"] = "choose_report"
@@ -2632,7 +2629,7 @@ async def main_handler(message: Message):
                 )
                 return
 
-            suggestions = [r["area_en"] for r in rows if r["area_en"]]
+            suggestions = [r["area_name_en"] for r in rows if r["area_name_en"]]
             user_states[user_id] = {
                 "step": "choose_area",
                 "scope": "area",
@@ -2646,7 +2643,7 @@ async def main_handler(message: Message):
             response = tr(user_id, "choose_area") + "\n\n"
             for i, r in enumerate(rows, 1):
                 response += (
-                    f"{i}. <b>{r['area_en']}</b>\n"
+                    f"{i}. <b>{r['area_name_en']}</b>\n"
                     f"   📊 Сделок: {format_int(r['deals'])}\n"
                     f"   🏢 Зданий: {format_int(r['buildings'])}\n"
                 )
@@ -2844,9 +2841,9 @@ async def main_handler(message: Message):
                 for r in rows:
                     response += (
                         f"🗓 {r['safe_date']}\n"
-                        f"🏢 {r['building_en'] or '-'}\n"
-                        f"📍 {r['area_en'] or '-'}\n"
-                        f"🏠 {r['rooms_en'] or '-'} / {r['prop_sub_type_en'] or r['prop_type_en'] or '-'}\n"
+                        f"🏢 {r['building_name_en'] or '-'}\n"
+                        f"📍 {r['area_name_en'] or '-'}\n"
+                        f"🏠 {r['rooms_en'] or '-'} / {r['property_sub_type_en'] or r['property_type_en'] or '-'}\n"
                         f"💰 {format_money(r['price'])}\n"
                         f"📐 {format_money(r['meter_price'])} за метр\n\n"
                     )
@@ -2960,12 +2957,12 @@ async def main_handler(message: Message):
 
 def sales_area_subquery_for_building():
     return f"""
-        SELECT DISTINCT COALESCE(area_en::text, '')
+        SELECT DISTINCT COALESCE(area_name_en::text, '')
         FROM {TABLE}
-        WHERE COALESCE(area_en::text, '') <> ''
+        WHERE COALESCE(area_name_en::text, '') <> ''
           AND (
-              LOWER(COALESCE(NULLIF(building_en::text, ''), NULLIF(project_en::text, ''), '')) = LOWER(%s)
-              OR COALESCE(NULLIF(building_en::text, ''), NULLIF(project_en::text, ''), '') ILIKE %s
+              LOWER(COALESCE(building_name_en::text, '')) = LOWER(%s)
+              OR COALESCE(building_name_en::text, '') ILIKE %s
           )
         LIMIT 20
     """
@@ -2982,8 +2979,8 @@ def rent_scope_condition(scope, name):
         # найденному из sales DLD по выбранному зданию.
         return f"""
         AND (
-            COALESCE(NULLIF(building_en::text, ''), NULLIF(project_en::text, ''), '') ILIKE %s
-            OR COALESCE(area_en::text, '') IN ({sales_area_subquery_for_building()})
+            COALESCE(building_name_en::text, '') ILIKE %s
+            OR COALESCE(area_name_en::text, '') IN ({sales_area_subquery_for_building()})
         )
         """, [f"%{n}%", n, f"%{n}%"]
 
@@ -2992,7 +2989,7 @@ def rent_scope_condition(scope, name):
         parts = []
         params = []
         for v in values:
-            parts.append("COALESCE(area_en::text, '') ILIKE %s")
+            parts.append("COALESCE(area_name_en::text, '') ILIKE %s")
             params.append(f"%{v}%")
         if not parts:
             return "AND 1=0", []
@@ -3008,7 +3005,7 @@ def rent_property_condition(prop):
     if not prop:
         return "", []
     p = str(prop).lower().strip()
-    all_text = "LOWER(COALESCE(rooms_en::text, '') || ' ' || COALESCE(prop_type_en::text, '') || ' ' || COALESCE(prop_sub_type_en::text, ''))"
+    all_text = "LOWER(COALESCE(rooms_en::text, '') || ' ' || COALESCE(property_type_en::text, '') || ' ' || COALESCE(property_sub_type_en::text, ''))"
 
     if p == "studio":
         return f"AND ({all_text} LIKE %s OR {all_text} LIKE %s)", ["%studio%", "%0%"]
@@ -3098,7 +3095,7 @@ def selftest_deal_type_logic():
 # Если по зданию нет прямого совпадения в dld_rents, бот ищет аренду по району здания,
 # а если и это пусто — мягко расширяет фильтр, чтобы не отдавать ложное "нет сделок".
 
-RENT_TABLE = "public.dld_rents_full"
+RENT_TABLE = "public.dld_rents"
 
 
 def is_rent_deal(deal_type):
@@ -3179,21 +3176,21 @@ def _date_expr(cols, candidates):
 def rent_meta_v32():
     cols = table_columns_v32(RENT_TABLE)
     building = _text_expr(cols, [
-        "building_en", "building_name", "building", "property_name_en", "property_name",
+        "building_name_en", "building_name", "building", "property_name_en", "property_name",
         "project_name_en", "project_name", "project", "master_project_en", "master_project",
         "property", "location_name", "nearest_landmark"
     ])
     area = _text_expr(cols, [
-        "area_en", "area_name", "area", "area_en", "location", "location_en", "district", "community"
+        "area_name_en", "area_name", "area", "area_en", "location", "location_en", "district", "community"
     ])
     rooms = _text_expr(cols, [
         "rooms_en", "rooms", "room", "bedrooms", "bedroom", "rooms_count", "rooms_number", "unit_rooms"
     ])
     ptype = _text_expr(cols, [
-        "prop_type_en", "property_type", "property_usage_en", "property_usage", "usage", "type"
+        "property_type_en", "property_type", "property_usage_en", "property_usage", "usage", "type"
     ])
     subtype = _text_expr(cols, [
-        "prop_sub_type_en", "property_sub_type", "property_subtype", "unit_type", "property_category", "property_sub_type_ar"
+        "property_sub_type_en", "property_sub_type", "property_subtype", "unit_type", "property_category", "property_sub_type_ar"
     ])
     unit = _text_expr(cols, [
         "unit_number", "unit_no", "unit", "property_number", "property_no", "property_id", "property_number_en"
@@ -3210,7 +3207,7 @@ def rent_meta_v32():
     ])
     meter = f"CASE WHEN ({size}) IS NOT NULL AND ({size}) > 0 THEN ({rent_price}) / ({size}) ELSE NULL END"
     safe_date = _date_expr(cols, [
-        "contract_start_date", "start_date", "transaction_date", "registration_date", "date", "contract_date"
+        "contract_start_date", "start_date", "instance_date", "registration_date", "date", "contract_date"
     ])
     return {
         "building": building,
@@ -3232,11 +3229,11 @@ def rent_base_from_v32():
             SELECT
                 *,
                 {m['safe_date']} AS safe_date,
-                {m['building']} AS building_en,
-                {m['area']} AS area_en,
+                {m['building']} AS building_name_en,
+                {m['area']} AS area_name_en,
                 {m['rooms']} AS rooms_en,
-                {m['property_type']} AS prop_type_en,
-                {m['property_sub_type']} AS prop_sub_type_en,
+                {m['property_type']} AS property_type_en,
+                {m['property_sub_type']} AS property_sub_type_en,
                 {m['unit']} AS unit_number_norm,
                 {m['price']} AS rent_price,
                 {m['meter']} AS rent_meter_price
@@ -3254,12 +3251,12 @@ def sales_areas_for_building_v32(name):
         with db() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"""
-                    SELECT DISTINCT COALESCE(area_en::text, '') AS area
+                    SELECT DISTINCT COALESCE(area_name_en::text, '') AS area
                     FROM {TABLE}
-                    WHERE COALESCE(area_en::text, '') <> ''
+                    WHERE COALESCE(area_name_en::text, '') <> ''
                       AND (
-                          LOWER(COALESCE(NULLIF(building_en::text, ''), NULLIF(project_en::text, ''), '')) = LOWER(%s)
-                          OR COALESCE(NULLIF(building_en::text, ''), NULLIF(project_en::text, ''), '') ILIKE %s
+                          LOWER(COALESCE(building_name_en::text, '')) = LOWER(%s)
+                          OR COALESCE(building_name_en::text, '') ILIKE %s
                       )
                     LIMIT 25
                 """, [n, f"%{n}%"])
@@ -3275,17 +3272,17 @@ def rent_scope_condition_v32(scope, name, allow_scope=True):
     n = clean_query(name)
     if scope == "building":
         params = [f"%{n}%"]
-        parts = ["COALESCE(NULLIF(building_en::text, ''), NULLIF(project_en::text, ''), '') ILIKE %s"]
+        parts = ["COALESCE(building_name_en::text, '') ILIKE %s"]
         areas = sales_areas_for_building_v32(n)
         for a in areas:
-            parts.append("COALESCE(area_en::text, '') ILIKE %s")
+            parts.append("COALESCE(area_name_en::text, '') ILIKE %s")
             params.append(f"%{a}%")
         return "AND (" + " OR ".join(parts) + ")", params
     if scope == "area":
         values = area_alias_values(n)
         parts, params = [], []
         for v in values:
-            parts.append("COALESCE(area_en::text, '') ILIKE %s")
+            parts.append("COALESCE(area_name_en::text, '') ILIKE %s")
             params.append(f"%{v}%")
         return ("AND (" + " OR ".join(parts) + ")", params) if parts else ("", [])
     return "", []
@@ -3295,7 +3292,7 @@ def rent_property_condition_v32(prop, allow_prop=True):
     if not allow_prop or not prop:
         return "", []
     p = str(prop).lower().strip()
-    all_text = "LOWER(COALESCE(rooms_en::text, '') || ' ' || COALESCE(prop_type_en::text, '') || ' ' || COALESCE(prop_sub_type_en::text, ''))"
+    all_text = "LOWER(COALESCE(rooms_en::text, '') || ' ' || COALESCE(property_type_en::text, '') || ' ' || COALESCE(property_sub_type_en::text, ''))"
     if p == "studio":
         return f"AND ({all_text} LIKE %s)", ["%studio%"]
     if p in ["1 br", "2 br", "3 br", "4 br"]:
@@ -3335,8 +3332,8 @@ def get_stats(scope="dubai", name=None, prop=None, period=None, deal_type=None):
             cur.execute(f"""
                 SELECT
                     COUNT(*) AS deals,
-                    COUNT(DISTINCT NULLIF(building_en, '')) AS buildings,
-                    COUNT(DISTINCT NULLIF(area_en, '')) AS areas,
+                    COUNT(DISTINCT NULLIF(building_name_en, '')) AS buildings,
+                    COUNT(DISTINCT NULLIF(area_name_en, '')) AS areas,
                     AVG(rent_price) AS avg_price,
                     MIN(rent_price) AS min_price,
                     MAX(rent_price) AS max_price,
@@ -3344,8 +3341,8 @@ def get_stats(scope="dubai", name=None, prop=None, period=None, deal_type=None):
                     MIN(safe_date) AS first_deal,
                     MAX(safe_date) AS last_deal,
                     STRING_AGG(DISTINCT NULLIF(rooms_en, ''), ', ') AS rooms_list,
-                    STRING_AGG(DISTINCT NULLIF(prop_type_en, ''), ', ') AS property_types,
-                    STRING_AGG(DISTINCT NULLIF(prop_sub_type_en, ''), ', ') AS property_sub_types
+                    STRING_AGG(DISTINCT NULLIF(property_type_en, ''), ', ') AS property_types,
+                    STRING_AGG(DISTINCT NULLIF(property_sub_type_en, ''), ', ') AS property_sub_types
                 {rent_base_from_v32()}
                   {where}
                   {prop_sql}
@@ -3396,12 +3393,12 @@ def get_latest_deals(scope="building", name=None, prop=None, period=None, deal_t
                     safe_date,
                     'Rent' AS procedure_name_en,
                     rooms_en,
-                    prop_type_en,
-                    prop_sub_type_en,
+                    property_type_en,
+                    property_sub_type_en,
                     rent_price AS price,
                     rent_meter_price AS meter_price,
-                    building_en,
-                    area_en,
+                    building_name_en,
+                    area_name_en,
                     unit_number_norm AS unit_number
                 {rent_base_from_v32()}
                   {where}
@@ -3588,7 +3585,7 @@ def numeric_size_expr_v33(cols):
 
 
 def date_expr_v33(cols):
-    preferred = ['contract_start_date', 'start_date', 'transaction_date', 'registration_date', 'date', 'contract_date']
+    preferred = ['contract_start_date', 'start_date', 'instance_date', 'registration_date', 'date', 'contract_date']
     low = {c.lower(): c for c in cols}
     for c in preferred:
         if c.lower() in low:
@@ -3601,13 +3598,13 @@ def rent_meta_v33():
     cols = table_columns_v33(RENT_TABLE)
     search_text = text_blob_expr_v33(cols)
     building = text_first_expr_v33(cols, [
-        'building_en','building_name','building','project_name_en','project_name','project',
+        'building_name_en','building_name','building','project_name_en','project_name','project',
         'property_name_en','property_name','master_project_en','master_project','property','location_name','nearest_landmark'
     ])
-    area = text_first_expr_v33(cols, ['area_en','area_name','area','area_en','location','location_en','district','community'])
+    area = text_first_expr_v33(cols, ['area_name_en','area_name','area','area_en','location','location_en','district','community'])
     rooms = text_first_expr_v33(cols, ['rooms_en','rooms','room','bedrooms','bedroom','rooms_count','rooms_number','unit_rooms'])
-    ptype = text_first_expr_v33(cols, ['prop_type_en','property_type','property_usage_en','property_usage','usage','type'])
-    subtype = text_first_expr_v33(cols, ['prop_sub_type_en','property_sub_type','property_subtype','unit_type','property_category'])
+    ptype = text_first_expr_v33(cols, ['property_type_en','property_type','property_usage_en','property_usage','usage','type'])
+    subtype = text_first_expr_v33(cols, ['property_sub_type_en','property_sub_type','property_subtype','unit_type','property_category'])
     unit = text_first_expr_v33(cols, ['unit_number','unit_no','unit','property_number','property_no','property_id'])
     price = numeric_price_expr_v33(cols)
     size = numeric_size_expr_v33(cols)
@@ -3623,11 +3620,11 @@ def rent_base_from_v33():
                 *,
                 {m['safe_date']} AS safe_date,
                 {m['search_text']} AS search_text,
-                {m['building']} AS building_en,
-                {m['area']} AS area_en,
+                {m['building']} AS building_name_en,
+                {m['area']} AS area_name_en,
                 {m['rooms']} AS rooms_en,
-                {m['property_type']} AS prop_type_en,
-                {m['property_sub_type']} AS prop_sub_type_en,
+                {m['property_type']} AS property_type_en,
+                {m['property_sub_type']} AS property_sub_type_en,
                 {m['unit']} AS unit_number_norm,
                 {m['price']} AS rent_price,
                 {m['meter']} AS rent_meter_price
@@ -3645,17 +3642,17 @@ def rent_scope_condition_v33(scope, name, allow_scope=True):
         return '', []
     if scope == 'building':
         params = [f'%{n.lower()}%', f'%{n.lower()}%']
-        parts = ["LOWER(COALESCE(NULLIF(building_en::text, ''), NULLIF(project_en::text, ''), '')) ILIKE %s", 'search_text ILIKE %s']
+        parts = ["LOWER(COALESCE(building_name_en::text, '')) ILIKE %s", 'search_text ILIKE %s']
         for a in sales_areas_for_building_v32(n):
             if a:
-                parts.append("LOWER(COALESCE(area_en::text, '')) ILIKE %s")
+                parts.append("LOWER(COALESCE(area_name_en::text, '')) ILIKE %s")
                 params.append(f'%{str(a).lower()}%')
         return 'AND (' + ' OR '.join(parts) + ')', params
     if scope == 'area':
         values = area_alias_values(n)
         parts, params = [], []
         for v in values:
-            parts.append("LOWER(COALESCE(area_en::text, '')) ILIKE %s")
+            parts.append("LOWER(COALESCE(area_name_en::text, '')) ILIKE %s")
             params.append(f'%{str(v).lower()}%')
         if not parts:
             parts = ['search_text ILIKE %s']
@@ -3668,7 +3665,7 @@ def rent_property_condition_v33(prop, allow_prop=True):
     if not allow_prop or not prop:
         return '', []
     p = str(prop).lower().strip()
-    all_text = "LOWER(COALESCE(rooms_en::text, '') || ' ' || COALESCE(prop_type_en::text, '') || ' ' || COALESCE(prop_sub_type_en::text, '') || ' ' || COALESCE(search_text::text, ''))"
+    all_text = "LOWER(COALESCE(rooms_en::text, '') || ' ' || COALESCE(property_type_en::text, '') || ' ' || COALESCE(property_sub_type_en::text, '') || ' ' || COALESCE(search_text::text, ''))"
     if p == 'studio':
         return f'AND ({all_text} LIKE %s)', ['%studio%']
     if p in ['1 br','2 br','3 br','4 br']:
@@ -3694,8 +3691,8 @@ def get_stats(scope='dubai', name=None, prop=None, period=None, deal_type=None):
             cur.execute(f'''
                 SELECT
                     COUNT(*) AS deals,
-                    COUNT(DISTINCT NULLIF(building_en, '')) AS buildings,
-                    COUNT(DISTINCT NULLIF(area_en, '')) AS areas,
+                    COUNT(DISTINCT NULLIF(building_name_en, '')) AS buildings,
+                    COUNT(DISTINCT NULLIF(area_name_en, '')) AS areas,
                     AVG(rent_price) AS avg_price,
                     MIN(rent_price) AS min_price,
                     MAX(rent_price) AS max_price,
@@ -3703,8 +3700,8 @@ def get_stats(scope='dubai', name=None, prop=None, period=None, deal_type=None):
                     MIN(safe_date) AS first_deal,
                     MAX(safe_date) AS last_deal,
                     STRING_AGG(DISTINCT NULLIF(rooms_en, ''), ', ') AS rooms_list,
-                    STRING_AGG(DISTINCT NULLIF(prop_type_en, ''), ', ') AS property_types,
-                    STRING_AGG(DISTINCT NULLIF(prop_sub_type_en, ''), ', ') AS property_sub_types
+                    STRING_AGG(DISTINCT NULLIF(property_type_en, ''), ', ') AS property_types,
+                    STRING_AGG(DISTINCT NULLIF(property_sub_type_en, ''), ', ') AS property_sub_types
                 {rent_base_from_v33()}
                   {where}
                   {prop_sql}
@@ -3728,12 +3725,12 @@ def get_latest_deals(scope='building', name=None, prop=None, period=None, deal_t
                     safe_date,
                     'Rent' AS procedure_name_en,
                     rooms_en,
-                    prop_type_en,
-                    prop_sub_type_en,
+                    property_type_en,
+                    property_sub_type_en,
                     rent_price AS price,
                     rent_meter_price AS meter_price,
-                    building_en,
-                    area_en,
+                    building_name_en,
+                    area_name_en,
                     unit_number_norm AS unit_number
                 {rent_base_from_v33()}
                   {where}
@@ -3938,7 +3935,7 @@ def size34(cols):
 
 def date34(cols):
     low = {c.lower(): c for c in cols}
-    names = ['contract_start_date','start_date','transaction_date','registration_date','date','contract_date']
+    names = ['contract_start_date','start_date','instance_date','registration_date','date','contract_date']
     c = None
     for n in names:
         if n.lower() in low:
@@ -3969,11 +3966,11 @@ def rent_meta_v34():
     size = size34(cols)
     return {
         'search_text': blob34(cols),
-        'building': text34(cols, ['building_en','building_name','building','project_name_en','project_name','project','property_name_en','property_name','master_project_en','master_project','nearest_landmark','property']),
-        'area': text34(cols, ['area_en','area_name','area','area_en','location','location_en','district','community']),
+        'building': text34(cols, ['building_name_en','building_name','building','project_name_en','project_name','project','property_name_en','property_name','master_project_en','master_project','nearest_landmark','property']),
+        'area': text34(cols, ['area_name_en','area_name','area','area_en','location','location_en','district','community']),
         'rooms': text34(cols, ['rooms_en','rooms','room','rooms_count','rooms_number','bedrooms','bedroom','unit_rooms']),
-        'ptype': text34(cols, ['prop_type_en','property_type','property_usage_en','property_usage','usage','type']),
-        'subtype': text34(cols, ['prop_sub_type_en','property_sub_type','property_subtype','unit_type','property_category']),
+        'ptype': text34(cols, ['property_type_en','property_type','property_usage_en','property_usage','usage','type']),
+        'subtype': text34(cols, ['property_sub_type_en','property_sub_type','property_subtype','unit_type','property_category']),
         'unit': text34(cols, ['unit_number','unit_no','unit','property_number','property_no','property_id']),
         'price': price,
         'size': size,
@@ -3989,11 +3986,11 @@ def rent_base_from_v34():
             SELECT *,
                 {m['date']} AS safe_date,
                 {m['search_text']} AS search_text,
-                {m['building']} AS building_en,
-                {m['area']} AS area_en,
+                {m['building']} AS building_name_en,
+                {m['area']} AS area_name_en,
                 {m['rooms']} AS rooms_en,
-                {m['ptype']} AS prop_type_en,
-                {m['subtype']} AS prop_sub_type_en,
+                {m['ptype']} AS property_type_en,
+                {m['subtype']} AS property_sub_type_en,
                 {m['unit']} AS unit_number_norm,
                 {m['price']} AS rent_price,
                 {m['meter']} AS rent_meter_price
@@ -4010,12 +4007,12 @@ def rent_scope_condition_v34(scope, name, strict=True):
     if not n:
         return '', []
     if scope == 'building':
-        parts = ["search_text ILIKE %s", "LOWER(COALESCE(building_en::text,'')) ILIKE %s"]
+        parts = ["search_text ILIKE %s", "LOWER(COALESCE(building_name_en::text,'')) ILIKE %s"]
         params = [f'%{n}%', f'%{n}%']
         try:
             for a in sales_areas_for_building_v32(name):
                 if a:
-                    parts.append("LOWER(COALESCE(area_en::text,'')) ILIKE %s")
+                    parts.append("LOWER(COALESCE(area_name_en::text,'')) ILIKE %s")
                     params.append(f'%{str(a).lower()}%')
         except Exception:
             pass
@@ -4030,7 +4027,7 @@ def rent_property_condition_v34(prop, strict=True):
     if not strict or not prop:
         return '', []
     p = str(prop).lower().strip()
-    txt = "LOWER(COALESCE(search_text::text,'') || ' ' || COALESCE(rooms_en::text,'') || ' ' || COALESCE(prop_type_en::text,'') || ' ' || COALESCE(prop_sub_type_en::text,''))"
+    txt = "LOWER(COALESCE(search_text::text,'') || ' ' || COALESCE(rooms_en::text,'') || ' ' || COALESCE(property_type_en::text,'') || ' ' || COALESCE(property_sub_type_en::text,''))"
     if p == 'studio':
         return f'AND ({txt} LIKE %s)', ['%studio%']
     if p in ['1 br','2 br','3 br','4 br']:
@@ -4059,8 +4056,8 @@ def get_stats(scope='dubai', name=None, prop=None, period=None, deal_type=None):
             cur.execute(f"""
                 SELECT
                     COUNT(*) AS deals,
-                    COUNT(DISTINCT NULLIF(building_en,'')) AS buildings,
-                    COUNT(DISTINCT NULLIF(area_en,'')) AS areas,
+                    COUNT(DISTINCT NULLIF(building_name_en,'')) AS buildings,
+                    COUNT(DISTINCT NULLIF(area_name_en,'')) AS areas,
                     AVG(rent_price) AS avg_price,
                     MIN(rent_price) AS min_price,
                     MAX(rent_price) AS max_price,
@@ -4068,8 +4065,8 @@ def get_stats(scope='dubai', name=None, prop=None, period=None, deal_type=None):
                     MIN(safe_date) AS first_deal,
                     MAX(safe_date) AS last_deal,
                     STRING_AGG(DISTINCT NULLIF(rooms_en,''), ', ') AS rooms_list,
-                    STRING_AGG(DISTINCT NULLIF(prop_type_en,''), ', ') AS property_types,
-                    STRING_AGG(DISTINCT NULLIF(prop_sub_type_en,''), ', ') AS property_sub_types
+                    STRING_AGG(DISTINCT NULLIF(property_type_en,''), ', ') AS property_types,
+                    STRING_AGG(DISTINCT NULLIF(property_sub_type_en,''), ', ') AS property_sub_types
                 {rent_base_from_v34()}
                   {where}
                   {prop_sql}
@@ -4088,8 +4085,8 @@ def get_latest_deals(scope='building', name=None, prop=None, period=None, deal_t
     with db() as conn:
         with conn.cursor() as cur:
             cur.execute(f"""
-                SELECT safe_date, 'Rent' AS procedure_name_en, rooms_en, prop_type_en, prop_sub_type_en,
-                       rent_price AS price, rent_meter_price AS meter_price, building_en, area_en, unit_number_norm AS unit_number
+                SELECT safe_date, 'Rent' AS procedure_name_en, rooms_en, property_type_en, property_sub_type_en,
+                       rent_price AS price, rent_meter_price AS meter_price, building_name_en, area_name_en, unit_number_norm AS unit_number
                 {rent_base_from_v34()}
                   {where}
                   {prop_sql}
@@ -4174,272 +4171,275 @@ def compare_value(scope, name, price, size, prop=None, period=None, deal_type=No
     return {'row': row, 'user_price': user_price, 'user_ppsqft': user_ppsqft, 'market_avg': market_avg, 'diff_pct': diff_pct}
 
 
-# ============================================================
-# LIVE SALE / RENT / ROI COMPATIBILITY LAYER v40 FULL
-# ------------------------------------------------------------
-# This block is intentionally placed at the end of the original
-# 180KB main.py. It preserves all existing menus, handlers,
-# multilingual texts, smart-pick logic and UI states, but overrides
-# database access with the current Railway schema:
-#   - public.dld_transactions_full  -> live sales
-#   - public.dld_rents_full         -> live rents
-#   - public.roi_analytics          -> ROI/area analytics
-# ============================================================
 
-SALE_TABLE_V40 = "public.dld_transactions_full"
-RENT_TABLE = "public.dld_rents_full"
-RENT_TABLE_V40 = "public.dld_rents_full"
-ROI_TABLE_V40 = "public.roi_analytics"
-_SCHEMA_CACHE_V40 = {}
+# =========================
+# BUILDING / COLUMN COMPATIBILITY FIX v44
+# =========================
+# Причина бага: в новой таблице продаж DLD колонки называются building_en / project_en / area_en,
+# а часть старого кода искала building_name_en / area_name_en. Из-за этого поиск Grande / Corner / Marina
+# возвращал "Ничего не найдено". Этот слой создаёт совместимые alias-колонки внутри SQL-запросов
+# и чинит поиск зданий, районов, отчёты, последние сделки и fallback для аренды.
+
+SCHEMA_FIX_VERSION = "v44_building_project_area_compat"
 
 
-def _split_table_v40(table_name):
-    if "." in table_name:
-        return table_name.split(".", 1)
-    return "public", table_name
-
-
-def table_columns_v40(table_name):
-    if table_name in _SCHEMA_CACHE_V40:
-        return _SCHEMA_CACHE_V40[table_name]
-    schema, table = _split_table_v40(table_name)
+def _v44_sales_cols():
     try:
-        with db() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT column_name
-                    FROM information_schema.columns
-                    WHERE table_schema = %s AND table_name = %s
-                    ORDER BY ordinal_position
-                    """,
-                    [schema, table],
-                )
-                cols = [r["column_name"] for r in cur.fetchall()]
+        return table_columns(TABLE)
     except Exception as e:
-        print("V40_SCHEMA_ERROR:", table_name, repr(e))
-        cols = []
-    _SCHEMA_CACHE_V40[table_name] = cols
-    return cols
+        print("V44_SALES_COLUMNS_ERROR:", repr(e))
+        return []
 
 
-def q40(col):
-    return '"' + str(col).replace('"', '""') + '"'
-
-
-def first40(cols, candidates):
-    low = {str(c).lower(): c for c in cols}
-    for cand in candidates:
-        if str(cand).lower() in low:
-            return low[str(cand).lower()]
+def _v44_first(cols, candidates):
+    low = {str(c).lower(): c for c in (cols or [])}
+    for c in candidates:
+        if c.lower() in low:
+            return low[c.lower()]
     return None
 
 
-def existing40(cols, candidates):
-    low = {str(c).lower(): c for c in cols}
-    return [low[str(c).lower()] for c in candidates if str(c).lower() in low]
+def _v44_present(cols, candidates):
+    low = {str(c).lower(): c for c in (cols or [])}
+    return [low[c.lower()] for c in candidates if c.lower() in low]
 
 
-def text40(cols, candidates, fallback="''"):
-    found = existing40(cols, candidates)
-    if not found:
+def _v44_q(col):
+    return '"' + str(col).replace('"', '""') + '"'
+
+
+def _v44_text_expr(cols, candidates, fallback="''"):
+    present = _v44_present(cols, candidates)
+    if not present:
         return fallback
-    return "COALESCE(" + ", ".join([f"NULLIF({q40(c)}::text, '')" for c in found]) + ", '')"
+    return "COALESCE(" + ", ".join([f"NULLIF({_v44_q(c)}::text, '')" for c in present]) + f", {fallback})"
 
 
-def numeric40(cols, candidates, fallback="NULL::numeric"):
-    c = first40(cols, candidates)
-    if not c:
+def _v44_num_expr(cols, candidates, fallback="NULL::numeric"):
+    col = _v44_first(cols, candidates)
+    if not col:
         return fallback
-    return f"NULLIF(regexp_replace(COALESCE({q40(c)}::text, ''), '[^0-9.]', '', 'g'), '')::numeric"
+    return f"NULLIF(regexp_replace(COALESCE({_v44_q(col)}::text, ''), '[^0-9.]', '', 'g'), '')::numeric"
 
 
-def numeric_direct40(cols, candidates, fallback="NULL::numeric"):
-    c = first40(cols, candidates)
-    if not c:
-        return fallback
-    return f"NULLIF({q40(c)}, 0)::numeric"
-
-
-def date40(cols, candidates):
-    c = first40(cols, candidates)
-    if not c:
-        return "NULL::date"
-    s = f"COALESCE({q40(c)}::text, '')"
+def _v44_date_expr(cols):
+    col = _v44_first(cols, [
+        'transaction_date', 'instance_date', 'registration_date', 'date', 'created_at',
+        'start_date', 'contract_start_date'
+    ])
+    if not col:
+        return 'NULL::date'
     return f"""
         CASE
-            WHEN {s} ~ '^\\d{{4}}-\\d{{2}}-\\d{{2}}' THEN LEFT({s}, 10)::date
-            WHEN {s} ~ '^\\d{{2}}/\\d{{2}}/\\d{{4}}' THEN TO_DATE(LEFT({s}, 10), 'MM/DD/YYYY')
-            WHEN {s} ~ '^\\d{{2}}-\\d{{2}}-\\d{{4}}' THEN TO_DATE(LEFT({s}, 10), 'DD-MM-YYYY')
-            ELSE NULL
+            WHEN {_v44_q(col)}::text ~ '^\\d{{4}}-\\d{{2}}-\\d{{2}}' THEN {_v44_q(col)}::date
+            WHEN {_v44_q(col)}::text ~ '^\\d{{2}}/\\d{{2}}/\\d{{4}}' THEN TO_DATE(SUBSTRING({_v44_q(col)}::text, 1, 10), 'MM/DD/YYYY')
+            ELSE NULL::date
         END
     """
 
 
-def sale_meta_v40():
-    cols = table_columns_v40(SALE_TABLE_V40)
-    price_direct = numeric40(cols, [
-        "actual_worth", "actualWorth", "ACTUAL_WORTH", "amount", "transaction_amount",
-        "sale_price", "price", "value", "procedure_value", "actual_value",
-    ])
-    size = numeric40(cols, [
-        "procedure_area", "actual_area", "actualArea", "area_size", "size", "size_sqft", "actual_size",
-    ])
-    meter_col = numeric40(cols, ["meter_sale_price", "meter_price", "price_per_sqft", "price_per_meter"])
-    price_fallback = f"CASE WHEN ({price_direct}) IS NOT NULL THEN ({price_direct}) WHEN ({meter_col}) IS NOT NULL AND ({size}) IS NOT NULL THEN ({meter_col}) * ({size}) ELSE NULL END"
-    meter_expr = f"CASE WHEN ({meter_col}) IS NOT NULL THEN ({meter_col}) WHEN ({price_fallback}) IS NOT NULL AND ({size}) > 0 THEN ({price_fallback}) / ({size}) ELSE NULL END"
-    search = " || ' ' || ".join([
-        text40(cols, ["building_en", "building_en", "building_name", "project_en", "project_name_en", "master_project_en"]),
-        text40(cols, ["area_en", "area_en", "area_name", "area"]),
-        text40(cols, ["transaction_number", "transaction_id", "procedure_name", "procedure_name_en"]),
-    ])
+def _v44_sale_meta():
+    cols = _v44_sales_cols()
     return {
-        "table": SALE_TABLE_V40,
-        "date": date40(cols, ["transaction_date", "transaction_date", "created_at", "load_timestamp"]),
-        "area": text40(cols, ["area_en", "area_en", "area_name", "area", "community", "district"]),
-        "building": text40(cols, ["building_en", "building_en", "building_name", "project_en", "project_name_en", "master_project_en", "project_name"]),
-        "project": text40(cols, ["project_en", "project_name_en", "master_project_en", "project_name", "building_en", "building_en"]),
-        "rooms": text40(cols, ["rooms_en", "rooms", "bedrooms", "room", "rooms_count"]),
-        "ptype": text40(cols, ["prop_type_en", "prop_type_en", "property_type", "prop_type", "usage_en"]),
-        "subtype": text40(cols, ["prop_sub_type_en", "prop_sub_type_en", "prop_sb_type_en", "property_subtype", "unit_type"]),
-        "procedure": text40(cols, ["procedure_name_en", "procedure_name", "transaction_type_en", "transaction_type"]),
-        "unit": text40(cols, ["unit_number", "unit_no", "unit", "property_number", "property_no", "unit_id"]),
-        "price": price_fallback,
-        "meter": meter_expr,
-        "size": size,
-        "search": f"LOWER(COALESCE(({search})::text, ''))",
+        'building': _v44_text_expr(cols, [
+            'building_name_en', 'building_en', 'building_name', 'building',
+            'project_name_en', 'project_en', 'project_name', 'project',
+            'property_name_en', 'property_name', 'master_project_en', 'master_project'
+        ]),
+        'area': _v44_text_expr(cols, [
+            'area_name_en', 'area_en', 'area_name', 'area', 'location_en', 'location',
+            'district', 'community'
+        ]),
+        'rooms': _v44_text_expr(cols, ['rooms_en', 'rooms', 'room', 'bedrooms', 'bedroom', 'rooms_count']),
+        'ptype': _v44_text_expr(cols, ['property_type_en', 'prop_type_en', 'property_type', 'prop_type', 'type']),
+        'subtype': _v44_text_expr(cols, [
+            'property_sub_type_en', 'prop_sub_type_en', 'property_subtype', 'prop_sb_type_en',
+            'unit_type', 'property_category', 'property_usage_en'
+        ]),
+        'procedure': _v44_text_expr(cols, [
+            'procedure_name_en', 'procedure_name', 'procedure', 'transaction_type_en',
+            'transaction_type', 'transaction_group_en', 'procedure_group_en'
+        ]),
+        'unit': _v44_text_expr(cols, ['unit_number', 'unit_no', 'unit', 'property_number', 'property_no', 'property_id'], "''"),
+        'price': _v44_num_expr(cols, ['actual_worth', 'actual_value', 'transaction_value', 'price', 'value', 'amount']),
+        'meter': _v44_num_expr(cols, ['meter_sale_price', 'price_per_meter', 'meter_price', 'price_per_sqft']),
+        'size': _v44_num_expr(cols, ['actual_area', 'procedure_area', 'area_size_sqft', 'size_sqft', 'size']),
+        'date': _v44_date_expr(cols),
     }
 
 
-def rent_meta_v40():
-    cols = table_columns_v40(RENT_TABLE_V40)
-    price = numeric40(cols, [
-        "annual_amount", "annual_rent", "rent_amount", "rent_value", "contract_amount",
-        "contract_value", "lease_value", "rental_value", "yearly_rent", "amount",
-    ])
-    size = numeric40(cols, ["actual_area", "procedure_area", "area_size", "size", "size_sqft"])
-    meter_expr = f"CASE WHEN ({price}) IS NOT NULL AND ({size}) IS NOT NULL AND ({size}) > 0 THEN ({price}) / ({size}) ELSE NULL END"
-    search = " || ' ' || ".join([
-        text40(cols, ["building_en", "building_en", "project_en", "project_name_en", "master_project_en", "project_name"]),
-        text40(cols, ["area_en", "area_en", "area_name", "area", "community", "district"]),
-        text40(cols, ["contract_id", "rent_id", "property_number", "unit_number"]),
-    ])
-    return {
-        "table": RENT_TABLE_V40,
-        "date": date40(cols, ["registration_date", "start_date", "contract_start_date", "created_at", "load_timestamp"]),
-        "area": text40(cols, ["area_en", "area_en", "area_name", "area", "community", "district"]),
-        "building": text40(cols, ["building_en", "building_en", "project_en", "project_name_en", "master_project_en", "project_name"]),
-        "project": text40(cols, ["project_en", "project_name_en", "master_project_en", "project_name", "building_en", "building_en"]),
-        "rooms": text40(cols, ["rooms_en", "rooms", "bedrooms", "room", "rooms_count"]),
-        "ptype": text40(cols, ["prop_type_en", "prop_type_en", "property_type", "prop_type", "usage_en", "property_usage_en"]),
-        "subtype": text40(cols, ["prop_sub_type_en", "prop_sub_type_en", "property_subtype", "unit_type"]),
-        "procedure": "'Rent'",
-        "unit": text40(cols, ["unit_number", "unit_no", "unit", "property_number", "property_no", "unit_id"]),
-        "price": price,
-        "meter": meter_expr,
-        "size": size,
-        "search": f"LOWER(COALESCE(({search})::text, ''))",
-    }
-
-
-def meta_for_deal_v40(deal_type=None):
-    if is_rent_deal(deal_type):
-        return rent_meta_v40()
-    return sale_meta_v40()
-
-
-def base_from_v40(deal_type=None):
-    m = meta_for_deal_v40(deal_type)
+def base_from():
+    m = _v44_sale_meta()
+    meter_expr = f"""
+        COALESCE(
+            {m['meter']},
+            CASE WHEN ({m['size']}) IS NOT NULL AND ({m['size']}) > 0 AND ({m['price']}) IS NOT NULL
+                 THEN ({m['price']}) / NULLIF(({m['size']}), 0)
+                 ELSE NULL::numeric END
+        )
+    """
     return f"""
         FROM (
             SELECT
                 *,
                 {m['date']} AS safe_date,
-                {m['area']} AS area_en,
+                {m['building']} AS building_name_en,
                 {m['building']} AS building_en,
-                {m['project']} AS project_name_en,
+                {m['area']} AS area_name_en,
+                {m['area']} AS area_en,
                 {m['rooms']} AS rooms_en,
+                {m['ptype']} AS property_type_en,
                 {m['ptype']} AS prop_type_en,
+                {m['subtype']} AS property_sub_type_en,
                 {m['subtype']} AS prop_sub_type_en,
                 {m['procedure']} AS procedure_name_en,
+                {m['procedure']} AS procedure_name_norm,
                 {m['unit']} AS unit_number_norm,
-                {m['price']} AS value_price,
-                {m['meter']} AS value_meter,
-                {m['size']} AS value_size,
-                {m['search']} AS search_text
-            FROM {m['table']}
+                {m['price']} AS actual_worth_norm,
+                {meter_expr} AS meter_sale_price_norm,
+                LOWER(
+                    COALESCE({m['building']}, '') || ' ' ||
+                    COALESCE({m['area']}, '') || ' ' ||
+                    COALESCE({m['rooms']}, '') || ' ' ||
+                    COALESCE({m['ptype']}, '') || ' ' ||
+                    COALESCE({m['subtype']}, '')
+                ) AS search_text
+            FROM {TABLE}
         ) t
         WHERE 1=1
     """
 
 
-def _scope_condition_v40(scope="dubai", name=None, original_query=None):
-    if scope == "dubai" or not name:
-        return "", []
-    q = clean_query(original_query or name)
-    if not q:
-        return "", []
-    if scope == "area":
-        vals = area_alias_values(q) or [q]
-        return "AND (" + " OR ".join(["area_en ILIKE %s OR search_text ILIKE %s" for _ in vals]) + ")", [x for v in vals for x in (f"%{v}%", f"%{v.lower()}%")]
-    if scope == "building":
-        tokens = smart_query_tokens(q) or [q]
-        parts = []
-        params = []
-        for token in tokens:
-            parts.append("search_text ILIKE %s")
-            params.append(f"%{token.lower()}%")
-        return "AND (" + " AND ".join(parts) + ")", params
-    return "", []
+# Важно: переопределяем выражения после base_from alias-фикса.
+PRICE = "actual_worth_norm"
+METER_PRICE = "meter_sale_price_norm"
+BUILDING_NAME = "COALESCE(NULLIF(building_name_en::text, ''), NULLIF(building_en::text, ''), NULLIF(project_en::text, ''), '')"
+AREA_TXT = "COALESCE(area_name_en::text, '')"
+BUILDING_TXT = "COALESCE(building_name_en::text, '')"
+ROOMS_TXT = "COALESCE(rooms_en::text, '')"
+PROPERTY_TYPE_TXT = "COALESCE(property_type_en::text, '')"
+PROPERTY_SUB_TYPE_TXT = "COALESCE(property_sub_type_en::text, '')"
+PROCEDURE_TXT = "COALESCE(procedure_name_en::text, procedure_name_norm::text, '')"
 
 
-def _property_condition_v40(prop):
-    if not prop:
-        return "", []
-    p = str(prop).lower().strip()
-    blob = "LOWER(COALESCE(rooms_en,'') || ' ' || COALESCE(prop_type_en,'') || ' ' || COALESCE(prop_sub_type_en,''))"
-    if p == "studio":
-        return f"AND {blob} LIKE %s", ["%studio%"]
-    if p in ["1 br", "2 br", "3 br", "4 br"]:
-        n = p.split()[0]
-        return f"AND ({blob} LIKE %s OR {blob} LIKE %s OR COALESCE(rooms_en,'') = %s)", [f"%{n} br%", f"%{n} b/r%", n]
-    if p == "5 br+":
-        return f"AND ({blob} LIKE %s OR {blob} LIKE %s OR {blob} LIKE %s OR {blob} LIKE %s)", ["%5%", "%6%", "%7%", "%8%"]
-    return f"AND {blob} LIKE %s", [f"%{p}%"]
+def building_search_expression():
+    return "LOWER(COALESCE(search_text::text, '') || ' ' || COALESCE(building_name_en::text, '') || ' ' || COALESCE(area_name_en::text, ''))"
+
+
+def building_aliases(name):
+    q = normalize_search_text(name)
+    aliases = {
+        'grande': ['grande'],
+        'grande signature': ['grande', 'signature'],
+        'grande signature residences': ['grande', 'signature'],
+        'opera grande': ['opera', 'grand'],
+        'address opera': ['address', 'opera'],
+        'the address opera': ['address', 'opera'],
+        'address residences dubai opera': ['address', 'opera'],
+        'corner': ['corner'],
+        'binghatti corner': ['binghatti', 'corner'],
+        'marina gate': ['marina', 'gate'],
+        'marina': ['marina'],
+        'sobha': ['sobha'],
+        'anantara': ['anantara'],
+        'burj vista': ['burj', 'vista'],
+    }
+    return aliases.get(q, [q] if q else [])
+
+
+def smart_query_tokens(query):
+    q = normalize_search_text(query)
+    alias = building_aliases(q)
+    if alias:
+        # Для коротких запросов типа Grande / Corner / Marina ищем одним токеном,
+        # иначе AND по словам может быть слишком строгим.
+        return [a for a in alias if a]
+    tokens = [t for t in q.split() if len(t) >= 2 and t not in STOP_WORDS]
+    if not tokens:
+        tokens = [t for t in q.split() if len(t) >= 2]
+    return tokens[:6]
+
+
+def make_building_condition(query):
+    tokens = smart_query_tokens(query)
+    if not tokens:
+        return "AND 1=0", []
+    expr = building_search_expression()
+    params = []
+    parts = []
+    for token in tokens:
+        token = normalize_search_text(token)
+        if token:
+            parts.append(f"{expr} ILIKE %s")
+            params.append(f"%{token}%")
+    if not parts:
+        return "AND 1=0", []
+    return "AND (" + " AND ".join(parts) + ")", params
+
+
+def building_exact_condition_for_name(name):
+    # После выбора кнопки не делаем слишком жёсткий exact match: в DLD одно и то же здание
+    # может быть записано как project_en, building_en или с приставками T1/T2.
+    return make_building_condition(name)
+
+
+def safe_building_label(row):
+    if not row:
+        return ""
+    return (
+        row.get('building_name_en')
+        or row.get('building_en')
+        or row.get('project_en')
+        or row.get('project_name_en')
+        or ""
+    )
+
+
+def make_area_exact_condition(query):
+    values = [v for v in area_alias_values(query) if v]
+    if not values:
+        return "AND 1=0", []
+    parts = []
+    params = []
+    for value in values:
+        v = clean_query(value)
+        parts.append("LOWER(COALESCE(area_name_en::text, '')) ILIKE %s")
+        params.append(f"%{v.lower()}%")
+    return "AND (" + " OR ".join(parts) + ")", params
 
 
 def find_buildings(query, limit=10):
     query = clean_query(query)
     if not query:
         return []
-    tokens = smart_query_tokens(query) or [query]
-    token_sql = " AND ".join(["search_text ILIKE %s" for _ in tokens])
-    params = [f"%{t.lower()}%" for t in tokens]
+    where, params = make_building_condition(query)
+    exact = normalize_search_text(query)
     try:
         with db() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"""
-                    WITH unified AS (
-                        SELECT building_en, area_en, value_price, search_text
-                        {base_from_v40('sale')}
-                        UNION ALL
-                        SELECT building_en, area_en, value_price, search_text
-                        {base_from_v40('rent')}
-                    )
                     SELECT
-                        COALESCE(NULLIF(building_en, ''), NULLIF(project_en, ''), '') AS building_en,
-                        COALESCE(area_en, '') AS area_en,
-                        COUNT(*) AS deals
-                    FROM unified
-                    WHERE COALESCE(NULLIF(building_en, ''), NULLIF(project_en, ''), '') <> ''
-                      AND {token_sql}
-                    GROUP BY COALESCE(NULLIF(building_en, ''), NULLIF(project_en, ''), ''), COALESCE(area_en, '')
-                    ORDER BY deals DESC
+                        COALESCE(building_name_en::text, '') AS building_name_en,
+                        COALESCE(building_name_en::text, '') AS building_en,
+                        COALESCE(area_name_en::text, '') AS area_name_en,
+                        COALESCE(area_name_en::text, '') AS area_en,
+                        COUNT(*) AS deals,
+                        CASE
+                            WHEN LOWER(TRIM(COALESCE(building_name_en::text, ''))) = LOWER(TRIM(%s)) THEN 0
+                            WHEN LOWER(TRIM(COALESCE(building_name_en::text, ''))) LIKE LOWER(TRIM(%s)) THEN 1
+                            WHEN LOWER(COALESCE(search_text::text, '')) LIKE LOWER(TRIM(%s)) THEN 2
+                            ELSE 3
+                        END AS rank
+                    {base_from()}
+                      {where}
+                      AND COALESCE(building_name_en::text, '') <> ''
+                    GROUP BY COALESCE(building_name_en::text, ''), COALESCE(area_name_en::text, ''), COALESCE(search_text::text, '')
+                    ORDER BY rank ASC, deals DESC
                     LIMIT %s
-                """, params + [limit])
+                """, [query, query + "%", f"%{exact}%"] + params + [limit])
                 return cur.fetchall()
     except Exception as e:
-        print("V40_FIND_BUILDINGS_ERROR:", repr(e))
+        print("FIND_BUILDINGS_ERROR_V44:", repr(e))
         return []
 
 
@@ -4447,137 +4447,102 @@ def find_areas(query, limit=10):
     query = clean_query(query)
     if not query:
         return []
-    vals = area_alias_values(query) or [query]
-    cond = " OR ".join(["area_en ILIKE %s OR search_text ILIKE %s" for _ in vals])
-    params = [x for v in vals for x in (f"%{v}%", f"%{v.lower()}%")]
+    where, params = make_area_exact_condition(query)
     try:
         with db() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"""
-                    WITH unified AS (
-                        SELECT area_en, building_en, search_text
-                        {base_from_v40('sale')}
-                        UNION ALL
-                        SELECT area_en, building_en, search_text
-                        {base_from_v40('rent')}
-                    )
                     SELECT
-                        COALESCE(area_en, '') AS area_en,
+                        COALESCE(area_name_en::text, '') AS area_name_en,
+                        COALESCE(area_name_en::text, '') AS area_en,
                         COUNT(*) AS deals,
-                        COUNT(DISTINCT NULLIF(building_en, '')) AS buildings
-                    FROM unified
-                    WHERE COALESCE(area_en, '') <> ''
-                      AND ({cond})
-                    GROUP BY COALESCE(area_en, '')
+                        COUNT(DISTINCT COALESCE(building_name_en::text, '')) AS buildings
+                    {base_from()}
+                      {where}
+                      AND COALESCE(area_name_en::text, '') <> ''
+                    GROUP BY COALESCE(area_name_en::text, '')
                     ORDER BY deals DESC
                     LIMIT %s
                 """, params + [limit])
                 return cur.fetchall()
     except Exception as e:
-        print("V40_FIND_AREAS_ERROR:", repr(e))
+        print("FIND_AREAS_ERROR_V44:", repr(e))
         return []
 
 
-def get_stats(scope="dubai", name=None, prop=None, period=None, deal_type=None):
-    where, params = _scope_condition_v40(scope, name, name)
-    prop_sql, prop_args = _property_condition_v40(prop)
-    params += prop_args
-    try:
-        with db() as conn:
-            with conn.cursor() as cur:
-                cur.execute(f"""
-                    SELECT
-                        COUNT(*) AS deals,
-                        COUNT(DISTINCT NULLIF(building_en, '')) AS buildings,
-                        COUNT(DISTINCT NULLIF(area_en, '')) AS areas,
-                        AVG(value_price) AS avg_price,
-                        MIN(value_price) AS min_price,
-                        MAX(value_price) AS max_price,
-                        AVG(value_meter) AS avg_meter,
-                        MIN(safe_date) AS first_deal,
-                        MAX(safe_date) AS last_deal,
-                        STRING_AGG(DISTINCT NULLIF(rooms_en, ''), ', ') AS rooms_list,
-                        STRING_AGG(DISTINCT NULLIF(prop_type_en, ''), ', ') AS property_types,
-                        STRING_AGG(DISTINCT NULLIF(prop_sub_type_en, ''), ', ') AS property_sub_types
-                    {base_from_v40(deal_type)}
-                      {where}
-                      {prop_sql}
-                      {period_condition(period)}
-                      AND value_price IS NOT NULL
-                      AND value_price > 0
-                """, params)
-                return cur.fetchone()
-    except Exception as e:
-        print("V40_GET_STATS_ERROR:", repr(e))
-        return None
+def scope_condition(scope="dubai", name=None, original_query=None):
+    scope = scope or "dubai"
+    if scope == "dubai" or not name:
+        return "", []
+    if scope == "area":
+        return make_area_exact_condition(original_query or name)
+    if scope == "building":
+        return building_exact_condition_for_name(original_query or name)
+    return "", []
 
 
-def get_latest_deals(scope='building', name=None, prop=None, period=None, deal_type=None, limit=7, unit_query=None):
-    where, params = _scope_condition_v40(scope, name, name)
-    prop_sql, prop_args = _property_condition_v40(prop)
-    unit_sql = ""
-    unit_args = []
-    if unit_query:
-        unit_sql = "AND unit_number_norm ILIKE %s"
-        unit_args = [f"%{clean_query(unit_query)}%"]
-    params += prop_args + unit_args + [limit]
+def get_latest_deals(scope="building", name=None, prop=None, period=None, deal_type=None, limit=7, unit_query=None):
+    # Для аренды оставляем последнюю rent-логику v34.
+    if is_rent_deal(deal_type):
+        try:
+            where, params = rent_scope_condition_v34(scope, name, True)
+            prop_sql, prop_args = rent_property_condition_v34(prop, True)
+            unit_sql, unit_args = rent_unit_condition_v32(unit_query)
+            params += prop_args + unit_args + [limit]
+            with db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(f"""
+                        SELECT safe_date, 'Rent' AS procedure_name_en, rooms_en, property_type_en, property_sub_type_en,
+                               rent_price AS price, rent_meter_price AS meter_price, building_name_en, area_name_en, unit_number_norm AS unit_number
+                        {rent_base_from_v34()}
+                          {where}
+                          {prop_sql}
+                          {unit_sql}
+                          {rent_period_condition_v34(period, True)}
+                        ORDER BY safe_date DESC NULLS LAST
+                        LIMIT %s
+                    """, params)
+                    return cur.fetchall()
+        except Exception as e:
+            print("GET_LATEST_RENT_DEALS_ERROR_V44:", repr(e))
+            return []
+
+    prop_sql, prop_args = property_condition(prop)
+    deal_sql, deal_args = make_deal_type_condition(deal_type)
+    p_sql = period_condition(period)
+    value_expr = deal_value_expr(deal_type)
+    unit_sql, unit_args = make_unit_condition(unit_query) if 'make_unit_condition' in globals() else ("", [])
+    scope_sql, scope_args = scope_condition(scope, name, original_query=name)
+    params = scope_args + prop_args + deal_args + unit_args + [limit]
     try:
         with db() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"""
                     SELECT
                         safe_date,
-                        procedure_name_en,
-                        rooms_en,
-                        prop_type_en,
-                        prop_sub_type_en,
-                        value_price AS price,
-                        value_meter AS meter_price,
-                        building_en,
-                        area_en,
-                        unit_number_norm AS unit_number
-                    {base_from_v40(deal_type)}
-                      {where}
+                        COALESCE(procedure_name_en::text, '') AS procedure_name_en,
+                        COALESCE(rooms_en::text, '') AS rooms_en,
+                        COALESCE(property_type_en::text, '') AS property_type_en,
+                        COALESCE(property_sub_type_en::text, '') AS property_sub_type_en,
+                        {value_expr} AS price,
+                        {METER_PRICE} AS meter_price,
+                        COALESCE(building_name_en::text, '') AS building_name_en,
+                        COALESCE(area_name_en::text, '') AS area_name_en,
+                        COALESCE(unit_number_norm::text, '') AS unit_number
+                    {base_from()}
+                      {scope_sql}
+                      AND {value_expr} IS NOT NULL
                       {prop_sql}
+                      {deal_sql}
+                      {p_sql}
                       {unit_sql}
-                      {period_condition(period)}
-                      AND value_price IS NOT NULL
-                      AND value_price > 0
                     ORDER BY safe_date DESC NULLS LAST
                     LIMIT %s
                 """, params)
                 return cur.fetchall()
     except Exception as e:
-        print("V40_GET_LATEST_ERROR:", repr(e))
+        print("GET_LATEST_DEALS_ERROR_V44:", repr(e))
         return []
-
-
-def get_stats_smart(scope="dubai", name=None, prop=None, period=None, deal_type=None):
-    attempts = [
-        (prop, period, deal_type),
-        (prop, None, deal_type),
-        (None, period, deal_type),
-        (None, None, deal_type),
-    ]
-    for p, per, dt in attempts:
-        row = get_stats(scope, name, p, per, dt)
-        if row and int(row.get("deals") or 0) > 0:
-            return row, p, per, dt
-    return None, prop, period, deal_type
-
-
-def get_latest_deals_smart(scope, name, prop=None, period=None, deal_type=None, limit=5, unit_query=None):
-    attempts = [
-        (prop, period, deal_type),
-        (prop, None, deal_type),
-        (None, period, deal_type),
-        (None, None, deal_type),
-    ]
-    for p, per, dt in attempts:
-        rows = get_latest_deals(scope, name, p, per, dt, limit, unit_query)
-        if rows:
-            return rows, p, per, dt
-    return [], prop, period, deal_type
 
 
 def get_top_active():
@@ -4585,16 +4550,22 @@ def get_top_active():
         with db() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"""
-                    SELECT building_en, area_en, COUNT(*) AS deals, AVG(value_price) AS avg_price, AVG(value_meter) AS avg_meter
-                    {base_from_v40('sale')}
-                    WHERE COALESCE(NULLIF(building_en, ''), NULLIF(project_en, ''), '') <> '' AND value_price IS NOT NULL AND value_price > 0
-                    GROUP BY building_en, area_en
+                    SELECT
+                        COALESCE(building_name_en::text, '') AS building_name_en,
+                        COALESCE(area_name_en::text, '') AS area_name_en,
+                        COUNT(*) AS deals,
+                        AVG({PRICE}) AS avg_price,
+                        AVG({METER_PRICE}) AS avg_meter
+                    {base_from()}
+                      AND COALESCE(building_name_en::text, '') <> ''
+                      AND {PRICE} IS NOT NULL
+                    GROUP BY COALESCE(building_name_en::text, ''), COALESCE(area_name_en::text, '')
                     ORDER BY deals DESC
                     LIMIT 10
                 """)
                 return cur.fetchall()
     except Exception as e:
-        print("V40_TOP_ACTIVE_ERROR:", repr(e))
+        print("GET_TOP_ACTIVE_ERROR_V44:", repr(e))
         return []
 
 
@@ -4603,366 +4574,37 @@ def get_top_price():
         with db() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"""
-                    SELECT building_en, area_en, COUNT(*) AS deals, AVG(value_price) AS avg_price, AVG(value_meter) AS avg_meter
-                    {base_from_v40('sale')}
-                    WHERE COALESCE(NULLIF(building_en, ''), NULLIF(project_en, ''), '') <> '' AND value_price IS NOT NULL AND value_price > 0
-                    GROUP BY building_en, area_en
+                    SELECT
+                        COALESCE(building_name_en::text, '') AS building_name_en,
+                        COALESCE(area_name_en::text, '') AS area_name_en,
+                        COUNT(*) AS deals,
+                        AVG({PRICE}) AS avg_price,
+                        AVG({METER_PRICE}) AS avg_meter
+                    {base_from()}
+                      AND COALESCE(building_name_en::text, '') <> ''
+                      AND {PRICE} IS NOT NULL
+                    GROUP BY COALESCE(building_name_en::text, ''), COALESCE(area_name_en::text, '')
                     HAVING COUNT(*) >= 3
                     ORDER BY avg_price DESC NULLS LAST
                     LIMIT 10
                 """)
                 return cur.fetchall()
     except Exception as e:
-        print("V40_TOP_PRICE_ERROR:", repr(e))
+        print("GET_TOP_PRICE_ERROR_V44:", repr(e))
         return []
 
 
-def get_top_buildings_in_scope(scope="dubai", name=None, period=None, deal_type=None, limit=7):
-    where, params = _scope_condition_v40(scope, name, name)
-    params.append(limit)
-    try:
-        with db() as conn:
-            with conn.cursor() as cur:
-                cur.execute(f"""
-                    SELECT building_en, area_en, COUNT(*) AS deals, AVG(value_price) AS avg_price, AVG(value_meter) AS avg_meter
-                    {base_from_v40(deal_type)}
-                      {where}
-                      {period_condition(period)}
-                      AND COALESCE(NULLIF(building_en, ''), NULLIF(project_en, ''), '') <> ''
-                      AND value_price IS NOT NULL
-                    GROUP BY building_en, area_en
-                    ORDER BY deals DESC
-                    LIMIT %s
-                """, params)
-                return cur.fetchall()
-    except Exception as e:
-        print("V40_TOP_BUILDINGS_SCOPE_ERROR:", repr(e))
-        return []
+# Мини-тесты без подключения к БД: проверяют, что критические функции собираются и не имеют syntax errors.
+def _v44_selfcheck():
+    assert callable(find_buildings)
+    assert callable(scope_condition)
+    assert callable(base_from)
+    assert 'Grande'.lower() in smart_query_tokens('Grande')
+    assert 'corner' in smart_query_tokens('Corner')
+    return True
 
-
-def compare_value(scope, name, price, size, prop=None, period=None, deal_type=None):
-    row, _, _, _ = get_stats_smart(scope, name, prop, period, deal_type)
-    if not row or not row.get('avg_price'):
-        return None
-    market_avg = float(row['avg_price'])
-    user_price = float(price)
-    user_ppsqft = user_price / float(size) if float(size) else None
-    diff_pct = ((user_price - market_avg) / market_avg) * 100 if market_avg else 0
-    return {
-        'row': row,
-        'user_price': user_price,
-        'user_ppsqft': user_ppsqft,
-        'market_avg': market_avg,
-        'diff_pct': diff_pct,
-    }
-
-
-def get_roi_area_v40(area_name):
-    try:
-        with db() as conn:
-            with conn.cursor() as cur:
-                cur.execute(f"""
-                    SELECT *
-                    FROM {ROI_TABLE_V40}
-                    WHERE COALESCE(area_name::text, sales_area::text, rent_area::text, '') ILIKE %s
-                    ORDER BY gross_yield_percent DESC NULLS LAST
-                    LIMIT 1
-                """, [f"%{clean_query(area_name)}%"])
-                return cur.fetchone()
-    except Exception as e:
-        print("V40_ROI_AREA_ERROR:", repr(e))
-        return None
-
-
-try:
-    _ORIG_quick_area_report_v40 = quick_area_report
-    def quick_area_report(display_name, row, comparison=None, top_buildings=None, deal_type=None):
-        text = _ORIG_quick_area_report_v40(display_name, row, comparison, top_buildings, deal_type)
-        roi = get_roi_area_v40(display_name)
-        if roi:
-            text += "\n\n📈 <b>ROI / Yield по району:</b>\n"
-            if roi.get('avg_annual_rent') is not None:
-                text += f"🔑 Средняя годовая аренда: <b>{format_money(roi.get('avg_annual_rent'))}</b>\n"
-            if roi.get('gross_yield_percent') is not None:
-                text += f"📊 Gross yield: <b>{format_pct(roi.get('gross_yield_percent'))}</b>\n"
-            if roi.get('sales_deals') is not None or roi.get('rent_deals') is not None:
-                text += f"📁 Sales/Rent deals: <b>{format_int(roi.get('sales_deals'))}</b> / <b>{format_int(roi.get('rent_deals'))}</b>\n"
-        return text
-except Exception as e:
-    print("V40_ROI_WRAP_ERROR:", repr(e))
-
-
-
-# ============================================================
-# V43 HOTFIX — robust search + no false "not found"
-# Fixes:
-# 1) building search referenced project_en outside the unified CTE;
-# 2) JVC/Grande/Corner search was too strict;
-# 3) area search now uses richer aliases and fallback;
-# 4) analytics fallback is wider, so buttons return data instead of false empty messages.
-# ============================================================
-
-AREA_ALIASES.update({
-    "jvc": [
-        "JVC", "Jumeirah Village Circle", "Jumeirah Village", "Jumeirah Village Circle (JVC)",
-        "Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First", "Al Hebiah Fourth",
-    ],
-    "jumeirah village circle": [
-        "JVC", "Jumeirah Village Circle", "Jumeirah Village", "Jumeirah Village Circle (JVC)",
-        "Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First", "Al Hebiah Fourth",
-    ],
-    "jumeirah village": ["Jumeirah Village Circle", "JVC", "Al Barsha South Fourth", "Al Barsha South Fifth"],
-    "corner": ["Corner", "Binghatti Corner"],
-    "binghatti corner": ["Binghatti Corner", "Corner"],
-    "grande": ["Grande", "Grande Signature", "Grande Signature Residences"],
-    "grande signature": ["Grande", "Grande Signature", "Grande Signature Residences"],
-})
-
-BUILDING_ALIASES.update({
-    "grande": ["grande"],
-    "grande signature": ["grande", "signature"],
-    "grande signature residences": ["grande", "signature"],
-    "corner": ["corner"],
-    "binghatti corner": ["binghatti", "corner"],
-    "jvc": ["jumeirah", "village"],
-})
-
-
-def _v43_text_match_tokens(raw):
-    q = normalize_search_text(raw)
-    if not q:
-        return []
-    if q in BUILDING_ALIASES:
-        return BUILDING_ALIASES[q]
-    if q in AREA_ALIASES:
-        return [normalize_search_text(x) for x in AREA_ALIASES[q] if normalize_search_text(x)]
-    tokens = [t for t in q.split() if len(t) >= 2 and t not in STOP_WORDS]
-    return tokens or [q]
-
-
-def _v43_like_params_for_tokens(tokens):
-    return [f"%{t.lower()}%" for t in tokens if t]
-
-
-def find_buildings(query, limit=10):
-    """Robust building search across SALE + RENT using the normalized search_text.
-    Important: do not reference project_en outside the CTE.
-    """
-    raw = clean_query(query)
-    if not raw:
-        return []
-
-    # First pass: all tokens must match.
-    tokens = smart_query_tokens(raw) or [raw]
-    token_sql = " AND ".join(["search_text ILIKE %s" for _ in tokens])
-    params = [f"%{t.lower()}%" for t in tokens]
-
-    # Second pass fallback: any alias/string may match.
-    alias_values = []
-    q_low = normalize_search_text(raw)
-    if q_low in BUILDING_ALIASES:
-        alias_values.extend(BUILDING_ALIASES[q_low])
-    if q_low in AREA_ALIASES:
-        alias_values.extend(AREA_ALIASES[q_low])
-    alias_values.append(raw)
-    alias_values.extend(tokens)
-    alias_values = [x for x in dict.fromkeys([str(v).strip() for v in alias_values if str(v).strip()])]
-
-    try:
-        with db() as conn:
-            with conn.cursor() as cur:
-                cur.execute(f"""
-                    WITH unified AS (
-                        SELECT building_en, area_en, value_price, search_text
-                        {base_from_v40('sale')}
-                        UNION ALL
-                        SELECT building_en, area_en, value_price, search_text
-                        {base_from_v40('rent')}
-                    )
-                    SELECT
-                        building_en,
-                        COALESCE(area_en, '') AS area_en,
-                        COUNT(*) AS deals
-                    FROM unified
-                    WHERE COALESCE(building_en, '') <> ''
-                      AND ({token_sql})
-                    GROUP BY building_en, COALESCE(area_en, '')
-                    ORDER BY deals DESC
-                    LIMIT %s
-                """, params + [limit])
-                rows = cur.fetchall()
-                if rows:
-                    return rows
-
-                # Fallback: OR search by aliases / raw query.
-                or_sql = " OR ".join(["search_text ILIKE %s OR building_en ILIKE %s OR area_en ILIKE %s" for _ in alias_values])
-                or_params = []
-                for v in alias_values:
-                    like = f"%{str(v).lower()}%"
-                    or_params.extend([like, like, like])
-
-                cur.execute(f"""
-                    WITH unified AS (
-                        SELECT building_en, area_en, value_price, search_text
-                        {base_from_v40('sale')}
-                        UNION ALL
-                        SELECT building_en, area_en, value_price, search_text
-                        {base_from_v40('rent')}
-                    )
-                    SELECT
-                        building_en,
-                        COALESCE(area_en, '') AS area_en,
-                        COUNT(*) AS deals
-                    FROM unified
-                    WHERE COALESCE(building_en, '') <> ''
-                      AND ({or_sql})
-                    GROUP BY building_en, COALESCE(area_en, '')
-                    ORDER BY deals DESC
-                    LIMIT %s
-                """, or_params + [limit])
-                return cur.fetchall()
-    except Exception as e:
-        print("V43_FIND_BUILDINGS_ERROR:", repr(e))
-        return []
-
-
-def find_areas(query, limit=10):
-    raw = clean_query(query)
-    if not raw:
-        return []
-
-    vals = area_alias_values(raw) or [raw]
-    # Add raw lowercase and normalized variants.
-    vals = list(dict.fromkeys([raw] + vals + [normalize_search_text(v) for v in vals]))
-    vals = [v for v in vals if str(v).strip()]
-
-    cond = " OR ".join(["area_en ILIKE %s OR search_text ILIKE %s" for _ in vals])
-    params = []
-    for v in vals:
-        params.extend([f"%{v}%", f"%{str(v).lower()}%"])
-
-    try:
-        with db() as conn:
-            with conn.cursor() as cur:
-                cur.execute(f"""
-                    WITH unified AS (
-                        SELECT area_en, building_en, search_text
-                        {base_from_v40('sale')}
-                        UNION ALL
-                        SELECT area_en, building_en, search_text
-                        {base_from_v40('rent')}
-                    )
-                    SELECT
-                        COALESCE(area_en, '') AS area_en,
-                        COUNT(*) AS deals,
-                        COUNT(DISTINCT NULLIF(building_en, '')) AS buildings
-                    FROM unified
-                    WHERE COALESCE(area_en, '') <> ''
-                      AND ({cond})
-                    GROUP BY COALESCE(area_en, '')
-                    ORDER BY deals DESC
-                    LIMIT %s
-                """, params + [limit])
-                rows = cur.fetchall()
-                if rows:
-                    return rows
-
-                # Fallback: return top areas instead of hard dead-end, useful on mobile testing.
-                cur.execute(f"""
-                    WITH unified AS (
-                        SELECT area_en, building_en, search_text
-                        {base_from_v40('sale')}
-                        UNION ALL
-                        SELECT area_en, building_en, search_text
-                        {base_from_v40('rent')}
-                    )
-                    SELECT
-                        COALESCE(area_en, '') AS area_en,
-                        COUNT(*) AS deals,
-                        COUNT(DISTINCT NULLIF(building_en, '')) AS buildings
-                    FROM unified
-                    WHERE COALESCE(area_en, '') <> ''
-                    GROUP BY COALESCE(area_en, '')
-                    ORDER BY deals DESC
-                    LIMIT %s
-                """, [limit])
-                return cur.fetchall()
-    except Exception as e:
-        print("V43_FIND_AREAS_ERROR:", repr(e))
-        return []
-
-
-def _scope_condition_v40(scope="dubai", name=None, original_query=None):
-    """Runtime override: tolerant scope condition for reports and latest deals."""
-    if scope == "dubai" or not name:
-        return "", []
-    q = clean_query(original_query or name)
-    if not q:
-        return "", []
-
-    if scope == "area":
-        vals = area_alias_values(q) or [q]
-        vals = list(dict.fromkeys([q] + vals + [normalize_search_text(v) for v in vals]))
-        cond = " OR ".join(["area_en ILIKE %s OR search_text ILIKE %s" for _ in vals])
-        params = []
-        for v in vals:
-            params.extend([f"%{v}%", f"%{str(v).lower()}%"])
-        return "AND (" + cond + ")", params
-
-    if scope == "building":
-        q_low = normalize_search_text(q)
-        aliases = []
-        if q_low in BUILDING_ALIASES:
-            aliases += BUILDING_ALIASES[q_low]
-        aliases.append(q)
-        tokens = smart_query_tokens(q) or [q]
-
-        parts = []
-        params = []
-        # Exact/partial building name OR generic search_text.
-        for v in dict.fromkeys(aliases):
-            parts.append("building_en ILIKE %s OR search_text ILIKE %s")
-            params.extend([f"%{v}%", f"%{str(v).lower()}%"])
-        # AND tokens to support Address Opera / Binghatti Corner.
-        if len(tokens) > 1:
-            parts.append("(" + " AND ".join(["search_text ILIKE %s" for _ in tokens]) + ")")
-            params.extend([f"%{t.lower()}%" for t in tokens])
-        return "AND (" + " OR ".join([f"({p})" for p in parts]) + ")", params
-
-    return "", []
-
-
-def get_stats_smart(scope="dubai", name=None, prop=None, period=None, deal_type=None):
-    """More aggressive fallback: never fail just because filters are too narrow."""
-    attempts = [
-        (prop, period, deal_type),
-        (prop, None, deal_type),
-        (None, period, deal_type),
-        (None, None, deal_type),
-        (None, None, None),
-    ]
-    for p, per, dt in attempts:
-        row = get_stats(scope, name, p, per, dt)
-        if row and int(row.get("deals") or 0) > 0:
-            return row, p, per, dt
-    return None, prop, period, deal_type
-
-
-def get_latest_deals_smart(scope, name, prop=None, period=None, deal_type=None, limit=5, unit_query=None):
-    attempts = [
-        (prop, period, deal_type),
-        (prop, None, deal_type),
-        (None, period, deal_type),
-        (None, None, deal_type),
-        (None, None, None),
-    ]
-    for p, per, dt in attempts:
-        rows = get_latest_deals(scope, name, p, per, dt, limit, unit_query)
-        if rows:
-            return rows, p, per, dt
-    return [], prop, period, deal_type
-
-
+_v44_selfcheck()
+print(f"Loaded schema compatibility patch {SCHEMA_FIX_VERSION}")
 
 async def main():
     print("Dubai DLD Analytics Bot started")
