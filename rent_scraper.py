@@ -5,14 +5,15 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 import psycopg2
-from psycopg2.extras import execute_values
+from psycopg2.extras import execute_values, Json
 
-DATABASE_URL = os.getenv("RENT_DATABASE_URL")
+DATABASE_URL = os.getenv("DATABASE_URL") or os.getenv("RENT_DATABASE_URL")
 
 if not DATABASE_URL:
-    raise RuntimeError("RENT_DATABASE_URL is not set")
+    raise RuntimeError("DATABASE_URL / RENT_DATABASE_URL is not set")
 
 API_URL = "https://gateway.dubailand.gov.ae/open-data/rents"
+
 
 def default_dates():
     dubai_tz = timezone(timedelta(hours=4))
@@ -20,14 +21,20 @@ def default_dates():
     from_date = today - timedelta(days=3)
     return from_date.strftime("%m/%d/%Y"), today.strftime("%m/%d/%Y")
 
+
 FROM_DATE = os.getenv("FROM_DATE")
 TO_DATE = os.getenv("TO_DATE")
 
 if not FROM_DATE or not TO_DATE:
     FROM_DATE, TO_DATE = default_dates()
 
+print(f"FROM_DATE={FROM_DATE}", flush=True)
+print(f"TO_DATE={TO_DATE}", flush=True)
+
 conn = psycopg2.connect(DATABASE_URL)
 cur = conn.cursor()
+
+print("CONNECTED TO DB", flush=True)
 
 cur.execute('''
 CREATE TABLE IF NOT EXISTS dld_rents_full (
@@ -62,6 +69,9 @@ CREATE TABLE IF NOT EXISTS dld_rents_full (
 
 conn.commit()
 
+print("TABLE READY", flush=True)
+
+
 def make_rent_id(item):
     raw = "|".join([
         str(item.get("REGISTRATION_DATE")),
@@ -71,6 +81,7 @@ def make_rent_id(item):
         str(item.get("ACTUAL_AREA"))
     ])
     return hashlib.md5(raw.encode()).hexdigest()
+
 
 def fetch_rents(skip=0, take=1000):
     payload = {
@@ -87,9 +98,16 @@ def fetch_rents(skip=0, take=1000):
         "P_SORT": "REGISTRATION_DATE_ASC"
     }
 
+    print(f"FETCHING skip={skip}", flush=True)
+
     r = requests.post(API_URL, json=payload, timeout=90)
+
+    print(f"STATUS={r.status_code}", flush=True)
+
     r.raise_for_status()
+
     return r.json()
+
 
 def save_rows(rows):
     values = []
@@ -120,8 +138,10 @@ def save_rows(rows):
             item.get("NEAREST_METRO_EN"),
             item.get("NEAREST_MALL_EN"),
             item.get("NEAREST_LANDMARK_EN"),
-            item
+            Json(item)
         ))
+
+    print(f"SAVING {len(values)} ROWS", flush=True)
 
     execute_values(
         cur,
@@ -161,36 +181,39 @@ def save_rows(rows):
 
     conn.commit()
 
+    print("COMMIT DONE", flush=True)
+
+
 skip = 0
 take = 1000
 total = 0
 
 while True:
-    print(f"Fetching skip={skip}")
-
     data = fetch_rents(skip, take)
 
     rows = data.get("response", {}).get("result", [])
 
-    print(f"Received: {len(rows)}")
+    print(f"RECEIVED {len(rows)} ROWS", flush=True)
 
     if not rows:
+        print("NO MORE ROWS", flush=True)
         break
 
     save_rows(rows)
 
     total += len(rows)
 
-    print(f"Saved total: {total}")
+    print(f"TOTAL SAVED: {total}", flush=True)
 
     if len(rows) < take:
-        print("Last page reached")
+        print("LAST PAGE REACHED", flush=True)
         break
 
     skip += take
+
     time.sleep(1)
 
-print("DONE")
+print("DONE", flush=True)
 
 cur.close()
 conn.close()
