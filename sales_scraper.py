@@ -67,7 +67,9 @@ def safe_float(value):
 
 
 def getv(item, *keys):
+
     for key in keys:
+
         if key in item and item.get(key) is not None:
             return item.get(key)
 
@@ -144,6 +146,8 @@ def save_transactions(rows):
 
     values = []
 
+    seen_ids = set()
+
     for item in rows:
 
         transaction_id = (
@@ -154,6 +158,11 @@ def save_transactions(rows):
 
         if not transaction_id:
             continue
+
+        if transaction_id in seen_ids:
+            continue
+
+        seen_ids.add(transaction_id)
 
         actual_area = safe_float(
             getv(
