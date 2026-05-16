@@ -4623,8 +4623,27 @@ print(f"Loaded schema compatibility patch {SCHEMA_FIX_VERSION}")
 # Важно: PostgreSQL напрямую не делает UNION между двумя отдельными Railway databases,
 # поэтому объединение делается на Python layer: archive query + live query + merge.
 
-LIVE_DATABASE_URL = os.getenv("LIVE_DATABASE_URL") or DATABASE_URL
-ARCHIVE_DATABASE_URL = os.getenv("ARCHIVE_DATABASE_URL") or os.getenv("ARCHIVE_DB_URL") or DATABASE_URL
+def _env_postgres_url(*names):
+    """Returns the first valid PostgreSQL URL from Railway variables."""
+    for name in names:
+        value = os.getenv(name)
+        if value and str(value).strip().lower().startswith(("postgresql://", "postgres://")):
+            return value.strip()
+    return None
+
+
+LIVE_DATABASE_URL = (
+    _env_postgres_url("LIVE_DATABASE_URL", "DLD_TRANSACTIONS_URL", "DLD_RENTS_URL", "RENT_URL")
+    or DATABASE_URL
+)
+ARCHIVE_DATABASE_URL = (
+    _env_postgres_url("ARCHIVE_DATABASE_URL", "ARCHIVE_DB_URL")
+    or DATABASE_URL
+)
+
+# Startup diagnostics without printing secrets.
+print("LIVE_DATABASE_URL source:", "custom" if LIVE_DATABASE_URL != DATABASE_URL else "DATABASE_URL fallback")
+print("ARCHIVE_DATABASE_URL source:", "custom" if ARCHIVE_DATABASE_URL != DATABASE_URL else "DATABASE_URL fallback")
 
 _ACTIVE_DATABASE_URL = LIVE_DATABASE_URL
 _ACTIVE_SOURCE = "live"
