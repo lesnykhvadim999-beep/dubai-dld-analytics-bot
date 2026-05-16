@@ -2366,14 +2366,42 @@ def no_data_message(title="Аналитика"):
     )
 
 
+
+# =========================
+# RUNTIME SAFETY PATCH v52
+# Защита от дублей: если Telegram/Railway повторно отдаёт один и тот же message_id,
+# второй обработчик внутри процесса его игнорирует.
+# =========================
+_PROCESSED_MESSAGE_IDS = set()
+_PROCESSED_MESSAGE_ORDER = []
+
+def is_duplicate_message(message: Message) -> bool:
+    try:
+        key = (message.chat.id, message.message_id)
+        if key in _PROCESSED_MESSAGE_IDS:
+            print("DUPLICATE_MESSAGE_IGNORED:", key)
+            return True
+        _PROCESSED_MESSAGE_IDS.add(key)
+        _PROCESSED_MESSAGE_ORDER.append(key)
+        if len(_PROCESSED_MESSAGE_ORDER) > 500:
+            old = _PROCESSED_MESSAGE_ORDER.pop(0)
+            _PROCESSED_MESSAGE_IDS.discard(old)
+        return False
+    except Exception:
+        return False
+
 @dp.message(CommandStart())
 async def start_handler(message: Message):
+    if is_duplicate_message(message):
+        return
     user_states[message.from_user.id] = {}
     await message.answer(TEXTS["ru"]["choose_lang"], reply_markup=language_menu())
 
 
 @dp.message(lambda m: m.text in ["🇷🇺 Русский", "🇬🇧 English", "🇦🇪 العربية"])
 async def language_handler(message: Message):
+    if is_duplicate_message(message):
+        return
     if message.text == "🇷🇺 Русский":
         user_languages[message.from_user.id] = "ru"
     elif message.text == "🇬🇧 English":
@@ -2387,6 +2415,8 @@ async def language_handler(message: Message):
 
 @dp.message()
 async def main_handler(message: Message):
+    if is_duplicate_message(message):
+        return
     user_id = message.from_user.id
     text = (message.text or "").strip()
     state = user_states.get(user_id, {})
@@ -5264,9 +5294,61 @@ print(f"Loaded schema compatibility patch {SCHEMA_FIX_VERSION}")
 print("Loaded dual database archive+live engine v50")
 
 
+
+# =========================
+# SINGLE POLLING LOCK v52
+# PostgreSQL advisory lock prevents two Railway/local processes with the same DB
+# from polling the same Telegram bot simultaneously.
+# =========================
+_SINGLE_INSTANCE_LOCK_CONN = None
+
+def acquire_single_instance_lock() -> bool:
+    global _SINGLE_INSTANCE_LOCK_CONN
+    try:
+        lock_url = _env_postgres_url("BOT_LOCK_DATABASE_URL", "DATABASE_URL", "LIVE_DATABASE_URL", "DLD_TRANSACTIONS_URL") or DATABASE_URL
+        conn = psycopg2.connect(lock_url)
+        cur = conn.cursor()
+        cur.execute("SELECT pg_try_advisory_lock(%s)", (8740041082,))
+        ok = bool(cur.fetchone()[0])
+        if not ok:
+            print("Another bot instance is already running. Exit this duplicate process.")
+            cur.close()
+            conn.close()
+            return False
+        _SINGLE_INSTANCE_LOCK_CONN = conn
+        print("Single instance lock acquired")
+        return True
+    except Exception as e:
+        # Если lock-БД временно недоступна, не блокируем старт, но пишем причину.
+        print("SINGLE_INSTANCE_LOCK_WARNING:", repr(e))
+        return True
+
+def release_single_instance_lock():
+    global _SINGLE_INSTANCE_LOCK_CONN
+    try:
+        if _SINGLE_INSTANCE_LOCK_CONN:
+            cur = _SINGLE_INSTANCE_LOCK_CONN.cursor()
+            cur.execute("SELECT pg_advisory_unlock(%s)", (8740041082,))
+            cur.close()
+            _SINGLE_INSTANCE_LOCK_CONN.close()
+            print("Single instance lock released")
+    except Exception as e:
+        print("SINGLE_INSTANCE_UNLOCK_WARNING:", repr(e))
+    finally:
+        _SINGLE_INSTANCE_LOCK_CONN = None
+
 async def main():
     print("Dubai DLD Analytics Bot started")
-    await dp.start_polling(bot)
+    if not acquire_single_instance_lock():
+        try:
+            await bot.session.close()
+        except Exception:
+            pass
+        return
+    try:
+        await dp.start_polling(bot)
+    finally:
+        release_single_instance_lock()
 
 
 if __name__ == "__main__":
