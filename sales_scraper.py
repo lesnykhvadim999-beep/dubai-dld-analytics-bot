@@ -1,35 +1,17 @@
+# Fixed DLD Sales Scraper + Sales Analytics
+
 import os
 import time
-import hashlib
-from datetime import datetime, timedelta, timezone
-
 import requests
 import psycopg2
-from psycopg2.extras import execute_values, Json
+from psycopg2.extras import execute_values
 
-DATABASE_URL = os.getenv("DATABASE_URL") or os.getenv("RENT_DATABASE_URL")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL / RENT_DATABASE_URL is not set")
+    raise RuntimeError("DATABASE_URL is not set")
 
-API_URL = "https://gateway.dubailand.gov.ae/open-data/rents"
-
-
-def default_dates():
-    dubai_tz = timezone(timedelta(hours=4))
-    today = datetime.now(dubai_tz).date()
-    from_date = today - timedelta(days=3)
-    return from_date.strftime("%m/%d/%Y"), today.strftime("%m/%d/%Y")
-
-
-FROM_DATE = os.getenv("FROM_DATE")
-TO_DATE = os.getenv("TO_DATE")
-
-if not FROM_DATE or not TO_DATE:
-    FROM_DATE, TO_DATE = default_dates()
-
-print(f"FROM_DATE={FROM_DATE}", flush=True)
-print(f"TO_DATE={TO_DATE}", flush=True)
+API_URL = "https://gateway.dubailand.gov.ae/open-data/transactions"
 
 conn = psycopg2.connect(DATABASE_URL)
 cur = conn.cursor()
@@ -37,32 +19,32 @@ cur = conn.cursor()
 print("CONNECTED TO DB", flush=True)
 
 cur.execute("""
-CREATE TABLE IF NOT EXISTS dld_rents_full (
-    rent_id TEXT PRIMARY KEY,
-    rn INTEGER,
-    total INTEGER,
-    total_properties INTEGER,
-    registration_date TEXT,
-    start_date TEXT,
-    end_date TEXT,
-    contract_amount NUMERIC,
-    annual_amount NUMERIC,
-    actual_area NUMERIC,
+CREATE TABLE IF NOT EXISTS dld_transactions_full (
+    transaction_id TEXT PRIMARY KEY,
+    transaction_number TEXT,
+    transaction_date TEXT,
+    procedure_name TEXT,
     area_id INTEGER,
     area_en TEXT,
     area_ar TEXT,
     project_en TEXT,
     project_ar TEXT,
+    building_en TEXT,
+    building_ar TEXT,
     prop_type_en TEXT,
-    prop_type_ar TEXT,
     prop_sub_type_en TEXT,
-    prop_sub_type_ar TEXT,
-    usage_en TEXT,
-    usage_ar TEXT,
+    rooms_en TEXT,
+    actual_worth NUMERIC,
+    meter_sale_price NUMERIC,
+    actual_area NUMERIC,
+    procedure_area NUMERIC,
+    parking TEXT,
     nearest_metro_en TEXT,
     nearest_mall_en TEXT,
     nearest_landmark_en TEXT,
-    raw_json JSONB,
+    usage_id INTEGER,
+    is_free_hold TEXT,
+    is_offplan TEXT,
     created_at TIMESTAMP DEFAULT NOW()
 );
 """)
@@ -71,35 +53,37 @@ conn.commit()
 print("TABLE READY", flush=True)
 
 
-def make_rent_id(item):
-    raw = "|".join([
-        str(item.get("REGISTRATION_DATE")),
-        str(item.get("AREA_EN")),
-        str(item.get("PROJECT_EN")),
-        str(item.get("ANNUAL_AMOUNT")),
-        str(item.get("ACTUAL_AREA")),
-    ])
-    return hashlib.md5(raw.encode()).hexdigest()
-
-
-def fetch_rents(skip=0, take=1000):
+def fetch_transactions(from_date, to_date, skip=0, take=1000):
     payload = {
-        "P_DATE_TYPE": "0",
-        "P_FROM_DATE": FROM_DATE,
-        "P_TO_DATE": TO_DATE,
-        "P_IS_FREE_HOLD": "",
-        "P_VERSION": "",
+        "P_FROM_DATE": from_date,
+        "P_TO_DATE": to_date,
+        "P_GROUP_ID": "",
+        "P_IS_OFFPLAN": "",
         "P_AREA_ID": "",
-        "P_USAGE_ID": "",
+        "P_IS_FREE_HOLD": "",
         "P_PROP_TYPE_ID": "",
-        "P_TAKE": str(take),
         "P_SKIP": str(skip),
-        "P_SORT": "REGISTRATION_DATE_ASC",
+        "P_SORT": "TRANSACTION_NUMBER_ASC",
+        "P_TAKE": str(take),
+        "P_USAGE_ID": ""
     }
 
-    print(f"FETCHING skip={skip}", flush=True)
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Origin": "https://dubailand.gov.ae",
+        "Referer": "https://dubailand.gov.ae/"
+    }
 
-    response = requests.post(API_URL, json=payload, timeout=90)
+    print(f"FETCHING SALES skip={skip}", flush=True)
+
+    response = requests.post(
+        API_URL,
+        json=payload,
+        headers=headers,
+        timeout=90
+    )
+
     print(f"STATUS={response.status_code}", flush=True)
 
     response.raise_for_status()
@@ -126,162 +110,184 @@ def extract_rows(data):
     return []
 
 
-def save_rows(rows):
+def save_transactions(rows):
     if not rows:
         return
 
     values = []
 
     for item in rows:
+        transaction_id = (
+            item.get("TRANSACTION_ID")
+            or item.get("TRANSACTION_NUMBER")
+            or item.get("INSTANCE_ID")
+        )
+
+        if not transaction_id:
+            continue
+
         values.append((
-            make_rent_id(item),
-            item.get("RN"),
-            item.get("TOTAL"),
-            item.get("TOTAL_PROPERTIES"),
-            item.get("REGISTRATION_DATE"),
-            item.get("START_DATE"),
-            item.get("END_DATE"),
-            item.get("CONTRACT_AMOUNT"),
-            item.get("ANNUAL_AMOUNT"),
-            item.get("ACTUAL_AREA"),
+            str(transaction_id),
+            item.get("TRANSACTION_NUMBER"),
+            item.get("INSTANCE_DATE"),
+            item.get("PROCEDURE_NAME_EN"),
             item.get("AREA_ID"),
             item.get("AREA_EN"),
             item.get("AREA_AR"),
             item.get("PROJECT_EN"),
             item.get("PROJECT_AR"),
+            item.get("BUILDING_EN"),
+            item.get("BUILDING_AR"),
             item.get("PROP_TYPE_EN"),
-            item.get("PROP_TYPE_AR"),
-            item.get("PROP_SUB_TYPE_EN"),
-            item.get("PROP_SUB_TYPE_AR"),
-            item.get("USAGE_EN"),
-            item.get("USAGE_AR"),
+            item.get("PROP_SB_TYPE_EN"),
+            item.get("ROOMS_EN"),
+            item.get("ACTUAL_WORTH"),
+            item.get("METER_SALE_PRICE"),
+            item.get("ACTUAL_AREA"),
+            item.get("PROCEDURE_AREA"),
+            item.get("PARKING"),
             item.get("NEAREST_METRO_EN"),
             item.get("NEAREST_MALL_EN"),
             item.get("NEAREST_LANDMARK_EN"),
-            Json(item),
+            item.get("USAGE_ID"),
+            str(item.get("IS_FREE_HOLD")) if item.get("IS_FREE_HOLD") is not None else None,
+            str(item.get("IS_OFFPLAN")) if item.get("IS_OFFPLAN") is not None else None
         ))
 
-    print(f"SAVING {len(values)} ROWS", flush=True)
+    if not values:
+        return
+
+    print(f"SAVING SALES {len(values)} ROWS", flush=True)
 
     execute_values(
         cur,
         """
-        INSERT INTO dld_rents_full (
-            rent_id,
-            rn,
-            total,
-            total_properties,
-            registration_date,
-            start_date,
-            end_date,
-            contract_amount,
-            annual_amount,
-            actual_area,
+        INSERT INTO dld_transactions_full (
+            transaction_id,
+            transaction_number,
+            transaction_date,
+            procedure_name,
             area_id,
             area_en,
             area_ar,
             project_en,
             project_ar,
+            building_en,
+            building_ar,
             prop_type_en,
-            prop_type_ar,
             prop_sub_type_en,
-            prop_sub_type_ar,
-            usage_en,
-            usage_ar,
+            rooms_en,
+            actual_worth,
+            meter_sale_price,
+            actual_area,
+            procedure_area,
+            parking,
             nearest_metro_en,
             nearest_mall_en,
             nearest_landmark_en,
-            raw_json
+            usage_id,
+            is_free_hold,
+            is_offplan
         )
         VALUES %s
-        ON CONFLICT (rent_id) DO NOTHING
+        ON CONFLICT (transaction_id) DO NOTHING
         """,
-        values,
+        values
     )
 
     conn.commit()
     print("COMMIT DONE", flush=True)
 
 
-def refresh_rent_analytics():
-    print("REFRESHING RENT ANALYTICS", flush=True)
+def refresh_sales_analytics():
+    print("REFRESHING SALES ANALYTICS", flush=True)
 
     cur.execute("""
-    DROP TABLE IF EXISTS rent_analytics_by_building;
+    DROP TABLE IF EXISTS sales_analytics_by_building;
 
-    CREATE TABLE rent_analytics_by_building AS
+    CREATE TABLE sales_analytics_by_building AS
     SELECT
         area_en,
         project_en,
+        building_en,
         prop_type_en,
         prop_sub_type_en,
+        rooms_en,
 
         COUNT(*) AS deals_count,
 
-        ROUND(AVG(annual_amount), 2) AS avg_annual_rent,
-        ROUND(AVG(contract_amount), 2) AS avg_contract_amount,
+        ROUND(AVG(actual_worth), 2) AS avg_sale_price,
+        ROUND(AVG(meter_sale_price), 2) AS avg_meter_sale_price,
         ROUND(AVG(actual_area), 2) AS avg_area,
 
-        ROUND(
-            AVG(
-                annual_amount / NULLIF(actual_area, 0)
-            ),
-            2
-        ) AS avg_rent_per_sqft,
-
-        MIN(registration_date) AS first_contract,
-        MAX(registration_date) AS last_contract,
+        MIN(transaction_date) AS first_transaction,
+        MAX(transaction_date) AS last_transaction,
 
         NOW() AS updated_at
 
-    FROM dld_rents_full
+    FROM dld_transactions_full
 
-    WHERE annual_amount IS NOT NULL
+    WHERE actual_worth IS NOT NULL
     AND actual_area IS NOT NULL
     AND actual_area > 0
 
     GROUP BY
         area_en,
         project_en,
+        building_en,
         prop_type_en,
-        prop_sub_type_en;
+        prop_sub_type_en,
+        rooms_en;
     """)
 
     conn.commit()
-    print("RENT ANALYTICS READY", flush=True)
+    print("SALES ANALYTICS READY", flush=True)
 
 
-skip = 0
-take = 1000
-total = 0
+def run_parser(from_date, to_date):
+    skip = 0
+    take = 1000
+    total = 0
 
-while True:
-    data = fetch_rents(skip, take)
+    while True:
+        data = fetch_transactions(
+            from_date=from_date,
+            to_date=to_date,
+            skip=skip,
+            take=take
+        )
 
-    rows = extract_rows(data)
+        rows = extract_rows(data)
 
-    print(f"RECEIVED {len(rows)} ROWS", flush=True)
+        print(f"RECEIVED SALES: {len(rows)}", flush=True)
 
-    if not rows:
-        print("NO MORE ROWS", flush=True)
-        break
+        if not rows:
+            print("NO MORE SALES ROWS", flush=True)
+            break
 
-    save_rows(rows)
+        save_transactions(rows)
 
-    total += len(rows)
+        total += len(rows)
 
-    print(f"TOTAL SAVED: {total}", flush=True)
+        print(f"TOTAL SALES SAVED: {total}", flush=True)
 
-    if len(rows) < take:
-        print("LAST PAGE REACHED", flush=True)
-        break
+        if len(rows) < take:
+            print("LAST SALES PAGE REACHED", flush=True)
+            break
 
-    skip += take
-    time.sleep(1)
+        skip += take
+        time.sleep(1)
 
-refresh_rent_analytics()
+    refresh_sales_analytics()
 
-print("DONE", flush=True)
+    print("DONE", flush=True)
 
-cur.close()
-conn.close()
+    cur.close()
+    conn.close()
+
+
+if __name__ == "__main__":
+    run_parser(
+        from_date="05/01/2026",
+        to_date="05/15/2026"
+    )
