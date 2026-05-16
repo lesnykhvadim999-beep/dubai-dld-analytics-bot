@@ -6391,6 +6391,358 @@ def get_latest_deals(scope="building", name=None, prop=None, period=None, deal_t
 
 print(f"Loaded premium deal field normalization patch {DEAL_PATCH_VERSION}")
 
+
+
+# =========================
+# EXACT BUILDING FILTER + FIELD INFERENCE PATCH v57
+# =========================
+# Цель:
+# 1) если пользователь выбрал здание, показываем сделки ТОЛЬКО этого здания/проекта;
+# 2) больше не подменяем пустой результат сделками из района;
+# 3) комнаты/тип пытаемся восстановить из subtype/search_blob, если отдельной колонки нет;
+# 4) карточка явно показывает, что поле отсутствует в DLD, а не маскирует это как ошибку.
+
+DEAL_PATCH_VERSION = "v57_exact_building_no_area_leak"
+
+
+def _norm_tokens_for_exact_building(name):
+    tokens = []
+    try:
+        for t in smart_query_tokens(name):
+            nt = normalize_search_text(t)
+            if nt and nt not in tokens:
+                tokens.append(nt)
+    except Exception:
+        nt = normalize_search_text(name)
+        if nt:
+            tokens.append(nt)
+    return tokens
+
+
+def _building_match_sql_expr():
+    # В нормализованном layer эти поля есть и в sales, и в rent.
+    return "LOWER(COALESCE(building_name_en::text,'') || ' ' || COALESCE(project_name_en::text,'') || ' ' || COALESCE(project_en::text,''))"
+
+
+def building_exact_condition_for_name(name):
+    tokens = _norm_tokens_for_exact_building(name)
+    if not tokens:
+        return "AND 1=0", []
+    expr = _building_match_sql_expr()
+    parts = []
+    params = []
+    for token in tokens:
+        parts.append(f"{expr} ILIKE %s")
+        params.append(f"%{token}%")
+    return "AND (" + " AND ".join(parts) + ")", params
+
+
+def rent_scope_condition_v55(scope, name, strict=True):
+    if not strict or not name:
+        return '', []
+    n = clean_query(name).lower()
+    if not n:
+        return '', []
+    if scope == 'building':
+        tokens = _norm_tokens_for_exact_building(name)
+        if not tokens:
+            return "AND 1=0", []
+        expr = _building_match_sql_expr()
+        return "AND (" + " AND ".join([f"{expr} ILIKE %s" for _ in tokens]) + ")", [f"%{t}%" for t in tokens]
+    if scope == 'area':
+        return "AND LOWER(COALESCE(area_name_en::text,'')) ILIKE %s", [f'%{n}%']
+    return '', []
+
+
+def _row_building_blob(row):
+    return normalize_search_text(" ".join([
+        str(row.get('building_name_en') or ''),
+        str(row.get('building_en') or ''),
+        str(row.get('project_name_en') or ''),
+        str(row.get('project_en') or ''),
+    ]))
+
+
+def _row_matches_exact_building(row, name):
+    if not name:
+        return True
+    blob = _row_building_blob(row)
+    tokens = _norm_tokens_for_exact_building(name)
+    if not tokens:
+        return False
+    return all(t in blob for t in tokens)
+
+
+def _filter_exact_building_rows(rows, scope, name):
+    if scope != 'building' or not name:
+        return rows or []
+    return [r for r in (rows or []) if _row_matches_exact_building(r, name)]
+
+
+def _infer_rooms_from_row(row):
+    raw = _safe_text(row.get('rooms_en'), '')
+    if raw:
+        return raw
+    blob = " ".join([
+        str(row.get('property_sub_type_en') or ''),
+        str(row.get('property_type_en') or ''),
+        str(row.get('source_blob') or ''),
+        str(row.get('search_text') or ''),
+    ])
+    b = blob.lower()
+    if re.search(r'\bstudio\b', b):
+        return 'Studio'
+    m = re.search(r'\b([1-9])\s*(?:br|b/r|bed|bedroom|bedrooms)\b', b, re.I)
+    if m:
+        return f"{m.group(1)} BR"
+    m = re.search(r'\b([1-9])\s*bed(?:room)?', b, re.I)
+    if m:
+        return f"{m.group(1)} BR"
+    return ''
+
+
+def _infer_type_from_row(row):
+    ptype = _safe_text(row.get('property_type_en'), '')
+    subtype = _safe_text(row.get('property_sub_type_en'), '')
+    blob = (ptype + ' ' + subtype + ' ' + str(row.get('source_blob') or '')).lower()
+    if ptype:
+        return ptype
+    if any(x in blob for x in ['flat', 'apartment', 'unit']):
+        return 'Apartment / Unit'
+    if 'villa' in blob:
+        return 'Villa'
+    if 'townhouse' in blob or 'town house' in blob:
+        return 'Townhouse'
+    if 'office' in blob:
+        return 'Office'
+    if 'shop' in blob or 'retail' in blob:
+        return 'Retail'
+    return ''
+
+
+def _format_missing_short(label='нет в DLD'):
+    return f"<i>{label}</i>"
+
+
+def format_deal_cards(rows, start_index=1, deal_type=None):
+    text = ""
+    for i, r in enumerate(rows, start_index):
+        project = _safe_text(r.get("project_name_en") or r.get("project_en"), "")
+        building_raw = r.get("building_name_en") or r.get("building_en") or project
+        building = _safe_text(building_raw, "не указано в DLD")
+        area = _safe_text(r.get("area_name_en") or r.get("area_en"), "не указано")
+        unit = _safe_text(r.get("unit_number") or r.get("unit_number_norm"), "не указан в DLD")
+        rooms = _infer_rooms_from_row(r) or "не указано в DLD"
+        ptype = _infer_type_from_row(r) or "не указано в DLD"
+        subtype = _safe_text(r.get("property_sub_type_en"), "не указано")
+        proc = _safe_text(r.get("procedure_name_en"), "не указано")
+        price = format_money(r.get("price"))
+        size = _format_area_size(r.get("area_size"))
+        if r.get("meter_price") is not None:
+            meter = format_money(r.get("meter_price"))
+        else:
+            meter = "не рассчитывается без площади"
+        date = _safe_date(r.get("safe_date"))
+        kind = _deal_kind_label(r, deal_type)
+        project_line = f"\n🏗 <b>Проект:</b> {project}" if project and project.lower() != str(building_raw or '').lower() else ""
+        text += (
+            f"━━━━━━━━━━━━━━\n"
+            f"<b>#{i} · {kind}</b>\n"
+            f"🗓 <b>Дата:</b> {date}\n"
+            f"🏢 <b>Здание:</b> {building}{project_line}\n"
+            f"📍 <b>Район:</b> {area}\n"
+            f"🔢 <b>Юнит:</b> {unit}\n"
+            f"🏠 <b>Тип:</b> {ptype}\n"
+            f"🏷 <b>Подтип:</b> {subtype}\n"
+            f"🛏 <b>Комнаты:</b> {rooms}\n"
+            f"📐 <b>Площадь:</b> {size}\n"
+            f"💰 <b>Сумма:</b> {price}\n"
+            f"📏 <b>Цена за м²:</b> {meter}\n"
+            f"📄 <b>Процедура:</b> {proc}\n\n"
+        )
+    return text
+
+
+def get_latest_deals(scope="building", name=None, prop=None, period=None, deal_type=None, limit=60, unit_query=None):
+    if is_rent_deal_type(deal_type):
+        try:
+            where, params = rent_scope_condition_v55(scope, name, True)
+            prop_sql, prop_args = rent_property_condition_v34(prop, True)
+            unit_sql, unit_args = rent_unit_condition_v32(unit_query)
+            params += prop_args + unit_args + [limit]
+            with db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(f"""
+                        SELECT
+                            transaction_number,
+                            safe_date,
+                            'Rent' AS procedure_name_en,
+                            COALESCE(rooms_en::text, '') AS rooms_en,
+                            COALESCE(property_type_en::text, '') AS property_type_en,
+                            COALESCE(property_sub_type_en::text, '') AS property_sub_type_en,
+                            rent_price AS price,
+                            rent_meter_price AS meter_price,
+                            area_size,
+                            COALESCE(building_name_en::text, '') AS building_name_en,
+                            COALESCE(project_name_en::text, '') AS project_name_en,
+                            COALESCE(project_en::text, '') AS project_en,
+                            COALESCE(area_name_en::text, '') AS area_name_en,
+                            COALESCE(unit_number_norm::text, '') AS unit_number,
+                            COALESCE(source_blob::text, '') AS source_blob,
+                            COALESCE(search_text::text, '') AS search_text
+                        {rent_base_from_v34()}
+                          {where}
+                          {prop_sql}
+                          {unit_sql}
+                          {rent_period_condition_v34(period, True)}
+                          AND rent_price IS NOT NULL
+                        ORDER BY safe_date DESC NULLS LAST, price DESC NULLS LAST
+                        LIMIT %s
+                    """, params)
+                    rows = cur.fetchall()
+                    return _filter_exact_building_rows(rows, scope, name)
+        except Exception as e:
+            print("GET_LATEST_RENT_DEALS_ERROR_V57:", repr(e))
+            return []
+
+    prop_sql, prop_args = property_condition(prop)
+    deal_sql, deal_args = make_deal_type_condition(deal_type)
+    p_sql = period_condition(period)
+    unit_sql, unit_args = make_unit_condition(unit_query)
+    value_expr = deal_value_expr(deal_type)
+    if scope == "area":
+        scope_sql, scope_args = make_area_exact_condition(name)
+    elif scope == "building":
+        scope_sql, scope_args = building_exact_condition_for_name(name)
+    else:
+        scope_sql, scope_args = "", []
+    params = scope_args + prop_args + deal_args + unit_args + [limit]
+    try:
+        with db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT
+                        transaction_number,
+                        safe_date,
+                        COALESCE(procedure_name_en::text, '') AS procedure_name_en,
+                        COALESCE(rooms_en::text, '') AS rooms_en,
+                        COALESCE(property_type_en::text, '') AS property_type_en,
+                        COALESCE(property_sub_type_en::text, '') AS property_sub_type_en,
+                        {value_expr} AS price,
+                        {METER_PRICE} AS meter_price,
+                        area_size,
+                        COALESCE(unit_number_norm::text, '') AS unit_number,
+                        COALESCE(building_name_en::text, '') AS building_name_en,
+                        COALESCE(project_name_en::text, '') AS project_name_en,
+                        COALESCE(project_en::text, '') AS project_en,
+                        COALESCE(area_name_en::text, '') AS area_name_en,
+                        COALESCE(search_text::text, '') AS search_text,
+                        COALESCE(search_text::text, '') AS source_blob
+                    {base_from()}
+                      {scope_sql}
+                      AND {value_expr} IS NOT NULL
+                      {prop_sql}
+                      {deal_sql}
+                      {p_sql}
+                      {unit_sql}
+                    ORDER BY safe_date DESC NULLS LAST, price DESC NULLS LAST
+                    LIMIT %s
+                """, params)
+                rows = cur.fetchall()
+                return _filter_exact_building_rows(rows, scope, name)
+    except Exception as e:
+        print("GET_LATEST_SALE_DEALS_ERROR_V57:", repr(e))
+        return []
+
+
+def get_latest_deals_smart(scope, name, prop=None, period=None, deal_type=None, limit=60, unit_query=None):
+    # Для здания допускаем смягчать только property/period, но НЕ подменяем само здание.
+    # Если exact building rows нет — честно возвращаем пустой результат.
+    if deal_type:
+        attempts = [
+            (prop, period, deal_type),
+            (prop, None, deal_type),
+            (None, period, deal_type),
+            (None, None, deal_type),
+        ]
+    else:
+        attempts = [
+            (prop, period, None),
+            (prop, None, None),
+            (None, period, None),
+            (None, None, None),
+        ]
+    for p, per, dt in attempts:
+        rows = get_latest_deals(scope, name, p, per, dt, limit=limit, unit_query=unit_query)
+        rows = _filter_exact_building_rows(rows, scope, name)
+        if rows:
+            return rows, p, per, dt
+    return [], prop, period, deal_type
+
+print(f"Loaded exact building filter + field inference patch {DEAL_PATCH_VERSION}")
+
+
+
+# =========================
+# DUAL QUERY FINAL OVERRIDE v58
+# =========================
+# Важная правка: поздние патчи v55-v57 переопределяли get_latest_deals
+# и снова читали только активную БД. Здесь сохраняем финальную single-db
+# реализацию v57 и оборачиваем её в archive+live merge.
+_V57_get_latest_deals_single = get_latest_deals
+_V57_get_latest_deals_smart_single = get_latest_deals_smart
+
+
+def get_latest_deals(scope="building", name=None, prop=None, period=None, deal_type=None, limit=60, unit_query=None):
+    rows = []
+    source_counts = {"archive": 0, "live": 0}
+    for source in _active_sources():
+        part = _call_on_source(
+            source,
+            _V57_get_latest_deals_single,
+            scope,
+            name,
+            prop,
+            period,
+            deal_type,
+            limit,
+            unit_query,
+            default=[],
+        ) or []
+        source_counts[source] = len(part)
+        rows.extend(part)
+    merged = _merge_latest_rows(rows, limit=limit)
+    if scope == "building":
+        merged = _filter_exact_building_rows(merged, scope, name)
+    print(f"DUAL_LATEST_DEALS_V58: source_counts={source_counts}, merged={len(merged)}, scope={scope}, name={name}, deal_type={deal_type}")
+    return merged
+
+
+def get_latest_deals_smart(scope, name, prop=None, period=None, deal_type=None, limit=60, unit_query=None):
+    # Сначала строго по выбранным фильтрам, затем смягчаем prop/period/type,
+    # но для building не подменяем само здание чужими объектами.
+    if deal_type:
+        attempts = [
+            (prop, period, deal_type),
+            (prop, None, deal_type),
+            (None, period, deal_type),
+            (None, None, deal_type),
+        ]
+    else:
+        attempts = [
+            (prop, period, None),
+            (prop, None, None),
+            (None, period, None),
+            (None, None, None),
+        ]
+    for p, per, dt in attempts:
+        rows = get_latest_deals(scope, name, p, per, dt, limit=limit, unit_query=unit_query)
+        if rows:
+            return rows, p, per, dt
+    return [], prop, period, deal_type
+
+print("Loaded dual query final override v58: latest deals now checks archive + live")
+
 # =========================
 # SINGLE POLLING LOCK v52
 # PostgreSQL advisory lock prevents two Railway/local processes with the same DB
@@ -6456,3 +6808,230 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
+
+# =========================
+# SALES LATEST DEALS HARD FIX v59
+# =========================
+# Причина: поздний dual override мог стабильно отдавать аренду, но продажи
+# иногда возвращались пустыми из-за старого sale SQL/aliases. Этот патч делает
+# отдельный прямой sales-query по активной sales table для archive и live.
+
+def _v59_table_columns(table_name):
+    try:
+        schema = 'public'
+        name = table_name.split('.')[-1]
+        with db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema=%s AND table_name=%s
+                """, (schema, name))
+                return {r['column_name'] for r in cur.fetchall()}
+    except Exception as e:
+        print('V59_COLS_ERROR:', table_name, repr(e))
+        return set()
+
+
+def _v59_text_expr(cols, candidates, default="''"):
+    parts = [f"NULLIF(t.{c}::text, '')" for c in candidates if c in cols]
+    if not parts:
+        return default
+    return "COALESCE(" + ", ".join(parts) + ", '')"
+
+
+def _v59_num_expr(cols, candidates, default='NULL::numeric'):
+    parts = []
+    for c in candidates:
+        if c in cols:
+            parts.append(f"NULLIF(regexp_replace(COALESCE(t.{c}::text, ''), '[^0-9.]', '', 'g'), '')::numeric")
+    if not parts:
+        return default
+    return "COALESCE(" + ", ".join(parts) + ")"
+
+
+def _v59_date_expr(cols):
+    for c in ['transaction_date','instance_date','registration_date','reg_date','date','created_at']:
+        if c in cols:
+            return f"t.{c}::timestamp"
+    return 'NULL::timestamp'
+
+
+def _v59_scope_sql(cols, scope, name, params):
+    if not name:
+        return ''
+    if scope == 'building':
+        expr = "LOWER(" + _v59_text_expr(cols, [
+            'building_name_en','building_en','building_name','building',
+            'project_name_en','project_en','project_name','project',
+            'property_name_en','property_name','master_project_en','master_project'
+        ]) + ")"
+        tokens = _norm_tokens_for_exact_building(name) if '_norm_tokens_for_exact_building' in globals() else [normalize_search_text(name)]
+        tokens = [t for t in tokens if t]
+        if not tokens:
+            return ' AND 1=0 '
+        params.extend([f'%{t}%' for t in tokens])
+        return ' AND (' + ' AND '.join([f"{expr} ILIKE %s" for _ in tokens]) + ') '
+    if scope == 'area':
+        expr = "LOWER(" + _v59_text_expr(cols, ['area_name_en','area_en','area_name','area','location_en','district','community']) + ")"
+        params.append('%' + clean_query(name).lower() + '%')
+        return f' AND {expr} ILIKE %s '
+    return ''
+
+
+def _v59_period_sql(cols, period, params):
+    if not period:
+        return ''
+    try:
+        months = int(period)
+    except Exception:
+        return ''
+    date_expr = _v59_date_expr(cols)
+    return f" AND {date_expr} >= NOW() - INTERVAL '{months} months' "
+
+
+def _v59_prop_sql(cols, prop, params):
+    if not prop:
+        return ''
+    p = str(prop).lower().strip()
+    expr = "LOWER(" + _v59_text_expr(cols, [
+        'rooms_en','rooms','bedrooms','bedroom','property_type_en','prop_type_en','property_type',
+        'property_sub_type_en','prop_sub_type_en','property_subtype','unit_type','property_usage_en'
+    ]) + ")"
+    if p == 'studio':
+        params.append('%studio%')
+        return f' AND {expr} ILIKE %s '
+    if p in ['1 br','2 br','3 br','4 br']:
+        n = p.split()[0]
+        params.extend([f'%{n} br%', f'%{n} b/r%', f'%{n} bedroom%', f'%{n}%'])
+        return f" AND ({expr} ILIKE %s OR {expr} ILIKE %s OR {expr} ILIKE %s OR {expr} ILIKE %s) "
+    if p == '5 br+':
+        params.extend(['%5%','%6%','%7%','%8%','%9%'])
+        return f" AND ({expr} ILIKE %s OR {expr} ILIKE %s OR {expr} ILIKE %s OR {expr} ILIKE %s OR {expr} ILIKE %s) "
+    params.append('%' + p + '%')
+    return f' AND {expr} ILIKE %s '
+
+
+def _v59_unit_sql(cols, unit_query, params):
+    if not unit_query:
+        return ''
+    expr = _v59_text_expr(cols, ['unit_number','unit_no','unit','property_number','property_no','property_id'], "''")
+    params.append('%' + str(unit_query).strip() + '%')
+    return f' AND {expr} ILIKE %s '
+
+
+def _v59_sales_latest_single(scope='building', name=None, prop=None, period=None, deal_type=None, limit=60, unit_query=None):
+    cols = _v59_table_columns(TABLE)
+    if not cols:
+        return []
+    params = []
+    date_expr = _v59_date_expr(cols)
+    building_expr = _v59_text_expr(cols, ['building_name_en','building_en','building_name','building','property_name_en','property_name'])
+    project_expr = _v59_text_expr(cols, ['project_name_en','project_en','project_name','project','master_project_en','master_project'])
+    area_expr = _v59_text_expr(cols, ['area_name_en','area_en','area_name','area','location_en','district','community'])
+    unit_expr = _v59_text_expr(cols, ['unit_number','unit_no','unit','property_number','property_no','property_id'])
+    rooms_expr = _v59_text_expr(cols, ['rooms_en','rooms','bedrooms','bedroom','rooms_count'])
+    ptype_expr = _v59_text_expr(cols, ['property_type_en','prop_type_en','property_type','prop_type','type'])
+    subtype_expr = _v59_text_expr(cols, ['property_sub_type_en','prop_sub_type_en','property_subtype','unit_type','property_usage_en'])
+    proc_expr = _v59_text_expr(cols, ['procedure_name_en','procedure_name','procedure','transaction_type_en','transaction_type','transaction_group_en','procedure_group_en'])
+    trans_expr = _v59_text_expr(cols, ['transaction_number','transaction_id','instance_id','id'])
+    price_expr = _v59_num_expr(cols, ['actual_worth','actual_value','transaction_value','sale_price','selling_price','price','value','amount','instance_value','property_value','deal_value'])
+    size_expr = _v59_num_expr(cols, ['actual_area','procedure_area','area_size','area_size_sqft','size_sqft','size','property_area'])
+    meter_raw = _v59_num_expr(cols, ['meter_sale_price','price_per_meter','meter_price','price_per_sqft'], 'NULL::numeric')
+    meter_expr = f"COALESCE({meter_raw}, CASE WHEN ({size_expr}) IS NOT NULL AND ({size_expr}) > 0 AND ({price_expr}) IS NOT NULL THEN ({price_expr}) / NULLIF(({size_expr}),0) ELSE NULL::numeric END)"
+
+    sql = f"""
+        SELECT
+            {trans_expr} AS transaction_number,
+            {date_expr} AS safe_date,
+            {proc_expr} AS procedure_name_en,
+            {rooms_expr} AS rooms_en,
+            {ptype_expr} AS property_type_en,
+            {subtype_expr} AS property_sub_type_en,
+            {price_expr} AS price,
+            {meter_expr} AS meter_price,
+            {size_expr} AS area_size,
+            {unit_expr} AS unit_number,
+            {building_expr} AS building_name_en,
+            {project_expr} AS project_name_en,
+            {area_expr} AS area_name_en,
+            'sale'::text AS source_deal_type
+        FROM {TABLE} t
+        WHERE {price_expr} IS NOT NULL
+          AND {price_expr} > 0
+          AND LOWER({proc_expr}) !~ '(rent|rental|lease|leasing|tenancy|ejari)'
+    """
+    sql += _v59_scope_sql(cols, scope, name, params)
+    sql += _v59_prop_sql(cols, prop, params)
+    sql += _v59_unit_sql(cols, unit_query, params)
+    sql += _v59_period_sql(cols, period, params)
+    sql += f" ORDER BY {date_expr} DESC NULLS LAST, {price_expr} DESC NULLS LAST LIMIT %s"
+    params.append(limit)
+    try:
+        with db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                rows = cur.fetchall()
+                return _filter_exact_building_rows(rows, scope, name) if '_filter_exact_building_rows' in globals() else rows
+    except Exception as e:
+        print('V59_SALES_LATEST_ERROR:', repr(e))
+        return []
+
+
+def get_latest_deals(scope='building', name=None, prop=None, period=None, deal_type=None, limit=60, unit_query=None):
+    rows = []
+    source_counts = {'archive_sale': 0, 'live_sale': 0, 'archive_rent': 0, 'live_rent': 0}
+
+    # Продажи: отдельный прямой sales-query. Не даём rent logic перехватить продажу.
+    if is_sale_deal_type(deal_type):
+        for source in _active_sources():
+            part = _call_on_source(source, _v59_sales_latest_single, scope, name, prop, period, deal_type, limit, unit_query, default=[]) or []
+            source_counts[f'{source}_sale'] = len(part)
+            rows.extend(part)
+        merged = _merge_latest_rows(rows, limit=limit)
+        if scope == 'building':
+            merged = _filter_exact_building_rows(merged, scope, name)
+        print(f"V59_LATEST_SALES_ONLY: source_counts={source_counts}, merged={len(merged)}, scope={scope}, name={name}, deal_type={deal_type}")
+        return merged
+
+    # Аренда: оставляем рабочую rent-логику v57/v58.
+    if is_rent_deal_type(deal_type):
+        for source in _active_sources():
+            part = _call_on_source(source, _V57_get_latest_deals_single, scope, name, prop, period, deal_type, limit, unit_query, default=[]) or []
+            source_counts[f'{source}_rent'] = len(part)
+            rows.extend(part)
+        merged = _merge_latest_rows(rows, limit=limit)
+        if scope == 'building':
+            merged = _filter_exact_building_rows(merged, scope, name)
+        print(f"V59_LATEST_RENT_ONLY: source_counts={source_counts}, merged={len(merged)}, scope={scope}, name={name}, deal_type={deal_type}")
+        return merged
+
+    # Все сделки: sales + rent, но без смешивания при явном выборе.
+    for source in _active_sources():
+        sale_part = _call_on_source(source, _v59_sales_latest_single, scope, name, prop, period, '🏠 Продажа', limit, unit_query, default=[]) or []
+        rent_part = _call_on_source(source, _V57_get_latest_deals_single, scope, name, prop, period, '🔑 Аренда', limit, unit_query, default=[]) or []
+        source_counts[f'{source}_sale'] = len(sale_part)
+        source_counts[f'{source}_rent'] = len(rent_part)
+        rows.extend(sale_part)
+        rows.extend(rent_part)
+    merged = _merge_latest_rows(rows, limit=limit)
+    if scope == 'building':
+        merged = _filter_exact_building_rows(merged, scope, name)
+    print(f"V59_LATEST_ALL: source_counts={source_counts}, merged={len(merged)}, scope={scope}, name={name}, deal_type={deal_type}")
+    return merged
+
+
+def get_latest_deals_smart(scope, name, prop=None, period=None, deal_type=None, limit=60, unit_query=None):
+    if deal_type:
+        attempts = [(prop, period, deal_type), (prop, None, deal_type), (None, period, deal_type), (None, None, deal_type)]
+    else:
+        attempts = [(prop, period, None), (prop, None, None), (None, period, None), (None, None, None)]
+    for p, per, dt in attempts:
+        rows = get_latest_deals(scope, name, p, per, dt, limit=limit, unit_query=unit_query)
+        if rows:
+            return rows, p, per, dt
+    return [], prop, period, deal_type
+
+print('Loaded sales latest deals hard fix v59: sale and rent are queried separately across archive + live')
