@@ -36,7 +36,7 @@ cur = conn.cursor()
 
 print("CONNECTED TO DB", flush=True)
 
-cur.execute('''
+cur.execute("""
 CREATE TABLE IF NOT EXISTS dld_rents_full (
     rent_id TEXT PRIMARY KEY,
     rn INTEGER,
@@ -65,10 +65,9 @@ CREATE TABLE IF NOT EXISTS dld_rents_full (
     raw_json JSONB,
     created_at TIMESTAMP DEFAULT NOW()
 );
-''')
+""")
 
 conn.commit()
-
 print("TABLE READY", flush=True)
 
 
@@ -78,7 +77,7 @@ def make_rent_id(item):
         str(item.get("AREA_EN")),
         str(item.get("PROJECT_EN")),
         str(item.get("ANNUAL_AMOUNT")),
-        str(item.get("ACTUAL_AREA"))
+        str(item.get("ACTUAL_AREA")),
     ])
     return hashlib.md5(raw.encode()).hexdigest()
 
@@ -95,21 +94,42 @@ def fetch_rents(skip=0, take=1000):
         "P_PROP_TYPE_ID": "",
         "P_TAKE": str(take),
         "P_SKIP": str(skip),
-        "P_SORT": "REGISTRATION_DATE_ASC"
+        "P_SORT": "REGISTRATION_DATE_ASC",
     }
 
     print(f"FETCHING skip={skip}", flush=True)
 
-    r = requests.post(API_URL, json=payload, timeout=90)
+    response = requests.post(API_URL, json=payload, timeout=90)
+    print(f"STATUS={response.status_code}", flush=True)
 
-    print(f"STATUS={r.status_code}", flush=True)
+    response.raise_for_status()
+    return response.json()
 
-    r.raise_for_status()
 
-    return r.json()
+def extract_rows(data):
+    response = data.get("response", {})
+
+    if isinstance(response, dict):
+        if isinstance(response.get("result"), list):
+            return response["result"]
+        if isinstance(response.get("data"), list):
+            return response["data"]
+        if isinstance(response.get("items"), list):
+            return response["items"]
+
+    if isinstance(data.get("result"), list):
+        return data["result"]
+
+    if isinstance(data.get("data"), list):
+        return data["data"]
+
+    return []
 
 
 def save_rows(rows):
+    if not rows:
+        return
+
     values = []
 
     for item in rows:
@@ -138,14 +158,14 @@ def save_rows(rows):
             item.get("NEAREST_METRO_EN"),
             item.get("NEAREST_MALL_EN"),
             item.get("NEAREST_LANDMARK_EN"),
-            Json(item)
+            Json(item),
         ))
 
     print(f"SAVING {len(values)} ROWS", flush=True)
 
     execute_values(
         cur,
-        '''
+        """
         INSERT INTO dld_rents_full (
             rent_id,
             rn,
@@ -175,13 +195,60 @@ def save_rows(rows):
         )
         VALUES %s
         ON CONFLICT (rent_id) DO NOTHING
-        ''',
-        values
+        """,
+        values,
     )
 
     conn.commit()
-
     print("COMMIT DONE", flush=True)
+
+
+def refresh_rent_analytics():
+    print("REFRESHING RENT ANALYTICS", flush=True)
+
+    cur.execute("""
+    DROP TABLE IF EXISTS rent_analytics_by_building;
+
+    CREATE TABLE rent_analytics_by_building AS
+    SELECT
+        area_en,
+        project_en,
+        prop_type_en,
+        prop_sub_type_en,
+
+        COUNT(*) AS deals_count,
+
+        ROUND(AVG(annual_amount), 2) AS avg_annual_rent,
+        ROUND(AVG(contract_amount), 2) AS avg_contract_amount,
+        ROUND(AVG(actual_area), 2) AS avg_area,
+
+        ROUND(
+            AVG(
+                annual_amount / NULLIF(actual_area, 0)
+            ),
+            2
+        ) AS avg_rent_per_sqft,
+
+        MIN(registration_date) AS first_contract,
+        MAX(registration_date) AS last_contract,
+
+        NOW() AS updated_at
+
+    FROM dld_rents_full
+
+    WHERE annual_amount IS NOT NULL
+    AND actual_area IS NOT NULL
+    AND actual_area > 0
+
+    GROUP BY
+        area_en,
+        project_en,
+        prop_type_en,
+        prop_sub_type_en;
+    """)
+
+    conn.commit()
+    print("RENT ANALYTICS READY", flush=True)
 
 
 skip = 0
@@ -191,7 +258,7 @@ total = 0
 while True:
     data = fetch_rents(skip, take)
 
-    rows = data.get("response", {}).get("result", [])
+    rows = extract_rows(data)
 
     print(f"RECEIVED {len(rows)} ROWS", flush=True)
 
@@ -210,8 +277,9 @@ while True:
         break
 
     skip += take
-
     time.sleep(1)
+
+refresh_rent_analytics()
 
 print("DONE", flush=True)
 
