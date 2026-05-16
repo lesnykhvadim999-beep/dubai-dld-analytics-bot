@@ -2466,8 +2466,13 @@ async def main_handler(message: Message):
             return
 
         if text == "📉 Проверить сделку":
-            push_state(user_id, {"step": "building_query", "scope": "building", "force_report": "undervalued"})
-            await message.answer("📉 Сначала введите здание, по которому нужно проверить сделку.", reply_markup=back_menu(user_id))
+            push_state(user_id, {"step": "building_query", "scope": "building", "force_report": "check_exact_deal"})
+            await message.answer(
+                "🔎 <b>Проверка конкретной сделки</b>\n\n"
+                "Сначала введите название здания.\n\n"
+                "Например:\n• Binghatti Corner\n• Grande\n• Marina Gate",
+                reply_markup=back_menu(user_id)
+            )
             return
 
         if text == tr(user_id, "top_active"):
@@ -2614,6 +2619,7 @@ async def main_handler(message: Message):
                 "step": "choose_building",
                 "scope": "building",
                 "suggestions": suggestions,
+                "force_report": state.get("force_report"),
                 "history": state.get("history", [])
             }
             user_states[user_id] = new_state
@@ -2690,6 +2696,16 @@ async def main_handler(message: Message):
                 return
 
             state["name"] = text
+            if state.get("force_report") == "check_exact_deal":
+                state["step"] = "enter_exact_unit_for_deal"
+                user_states[user_id] = state
+                await message.answer(
+                    f"🏢 Здание: <b>{text}</b>\n\n"
+                    "Введите точный номер юнита / квартиры.\n\n"
+                    "Например:\n• 0804\n• 1208\n• 3102",
+                    reply_markup=back_menu(user_id)
+                )
+                return
             state["step"] = "choose_deal_type"
             user_states[user_id] = state
             await message.answer(tr(user_id, "choose_deal_type"), reply_markup=deal_type_menu(user_id))
@@ -2855,34 +2871,43 @@ async def main_handler(message: Message):
 
             if text == tr(user_id, "last_deals"):
                 await message.answer(tr(user_id, "loading"))
-                rows, used_prop, used_period, used_deal_type = get_latest_deals_smart(scope, name, prop, period, deal_type, unit_query=state.get("unit_query"))
+                rows, used_prop, used_period, used_deal_type = get_latest_deals_smart(
+                    scope, name, prop, period, deal_type, limit=60, unit_query=state.get("unit_query")
+                )
                 if not rows:
                     await message.answer(no_data_message("Последние сделки"), reply_markup=report_menu(user_id))
                     return
 
-                response = "🧾 <b>Последние сделки</b>\n"
-                if name:
-                    response += f"📍 {name}\n"
-                if (used_prop, used_period, used_deal_type) != (prop, period, deal_type):
-                    response += "ℹ️ По точному фильтру сделок мало, показываю ближайшую доступную выборку.\n"
-                    response += f"Фильтр: {used_deal_type or 'все сделки'} / {used_prop or 'все типы'} / {period_label(used_period)}\n"
-                response += "\n"
+                state["latest_rows"] = [dict(r) for r in rows]
+                state["latest_offset"] = 0
+                state["latest_used_prop"] = used_prop
+                state["latest_used_period"] = used_period
+                state["latest_used_deal_type"] = used_deal_type
+                user_states[user_id] = state
 
-                for r in rows:
-                    response += (
-                        f"🗓 {r['safe_date']}\n"
-                        f"🏢 {r['building_name_en'] or '-'}\n"
-                        f"📍 {r['area_name_en'] or '-'}\n"
-                        f"🏠 {r['rooms_en'] or '-'} / {r['property_sub_type_en'] or r['property_type_en'] or '-'}\n"
-                        f"💰 {format_money(r['price'])}\n"
-                        f"📐 {format_money(r['meter_price'])} за метр\n\n"
-                    )
+                response = format_latest_deals_page(
+                    state["latest_rows"], 0, scope, name, used_prop, used_period, used_deal_type,
+                    fallback_used=((used_prop, used_period, used_deal_type) != (prop, period, deal_type))
+                )
+                await message.answer(response, reply_markup=latest_deals_menu(user_id, len(state["latest_rows"]), 0))
+                return
 
-                summary_row = get_stats(scope, name, used_prop, used_period, used_deal_type)
-                if summary_row and summary_row.get('deals'):
-                    response += economic_takeaway(summary_row, used_prop, used_period, used_deal_type)
-
-                await message.answer(response, reply_markup=report_menu(user_id))
+            if text == "➡️ Следующие 10":
+                rows = state.get("latest_rows") or []
+                if not rows:
+                    await message.answer("Сначала откройте последние сделки.", reply_markup=report_menu(user_id))
+                    return
+                offset = int(state.get("latest_offset") or 0) + 10
+                if offset >= len(rows):
+                    offset = 0
+                state["latest_offset"] = offset
+                user_states[user_id] = state
+                response = format_latest_deals_page(
+                    rows, offset, scope, name,
+                    state.get("latest_used_prop"), state.get("latest_used_period"), state.get("latest_used_deal_type"),
+                    fallback_used=False
+                )
+                await message.answer(response, reply_markup=latest_deals_menu(user_id, len(rows), offset))
                 return
 
             if text == tr(user_id, "undervalued"):
@@ -2899,6 +2924,29 @@ async def main_handler(message: Message):
                 return
 
             await message.answer("Выберите действие кнопкой.")
+            return
+
+        if state.get("step") == "enter_exact_unit_for_deal":
+            unit_number = clean_query(text)
+            building_name = state.get("name")
+            await message.answer("⏳ Ищу конкретную сделку в DLD базе...")
+            rows = get_latest_deals("building", building_name, None, None, None, limit=20, unit_query=unit_number)
+            if not rows:
+                await message.answer(
+                    "❌ По этому зданию и номеру юнита сделка не найдена.\n\n"
+                    "Проверьте формат номера: иногда в DLD юнит хранится как 804 вместо 0804, или наоборот.",
+                    reply_markup=main_menu(user_id)
+                )
+                reset_to_main(user_id)
+                return
+            response = "🔎 <b>Проверка конкретной сделки</b>\n"
+            response += f"🏢 Здание: <b>{building_name}</b>\n"
+            response += f"🔢 Юнит: <b>{unit_number}</b>\n"
+            response += f"📊 Найдено сделок: <b>{len(rows)}</b>\n\n"
+            response += format_deal_cards(rows[:10], start_index=1)
+            response += "🧠 <b>Вывод:</b> если это именно ваш юнит, сравните цену, дату, площадь, тип сделки и цену за метр с текущим предложением. Для инвестиционного решения дополнительно проверьте этаж, вид, состояние, service charge и реальную ликвидность здания."
+            await message.answer(response, reply_markup=main_menu(user_id))
+            reset_to_main(user_id)
             return
 
         if state.get("step") == "enter_price":
@@ -5294,6 +5342,249 @@ print(f"Loaded schema compatibility patch {SCHEMA_FIX_VERSION}")
 print("Loaded dual database archive+live engine v50")
 
 
+
+
+
+# =========================
+# PREMIUM DEAL OUTPUT + PAGINATION + EXACT UNIT CHECK v53
+# =========================
+DEAL_PAGE_SIZE = 10
+
+def latest_deals_menu(user_id, total=0, offset=0):
+    rows = []
+    if total > offset + DEAL_PAGE_SIZE:
+        rows.append(["➡️ Следующие 10"])
+    elif total > DEAL_PAGE_SIZE:
+        rows.append(["➡️ Следующие 10"])
+    rows += [
+        [tr(user_id, "full_report")],
+        ["💼 Экономическое резюме"],
+        [tr(user_id, "period_compare"), tr(user_id, "last_deals")],
+        [tr(user_id, "undervalued")],
+        [tr(user_id, "back"), tr(user_id, "main")]
+    ]
+    return kb(rows)
+
+def _safe_text(v, default="-"):
+    v = str(v or "").strip()
+    return v if v and v.lower() not in ["none", "null", "nan"] else default
+
+def _deal_kind_label(row, deal_type=None):
+    proc = _safe_text(row.get("procedure_name_en"), "")
+    if is_rent_deal_type(deal_type) or "rent" in proc.lower() or "lease" in proc.lower():
+        return "🔑 Аренда"
+    if "grant" in proc.lower():
+        return "🎁 Grant"
+    return "🏠 Продажа"
+
+def _format_size(row):
+    size = row.get("area_size") or row.get("actual_area") or row.get("size")
+    if size is None:
+        return "нет данных"
+    try:
+        return f"{float(size):,.0f} м²".replace(",", " ")
+    except Exception:
+        return _safe_text(size, "нет данных")
+
+def format_deal_cards(rows, start_index=1, deal_type=None):
+    text = ""
+    for i, r in enumerate(rows, start_index):
+        building = _safe_text(r.get("building_name_en") or r.get("building_en") or r.get("project_en"))
+        area = _safe_text(r.get("area_name_en") or r.get("area_en"))
+        unit = _safe_text(r.get("unit_number") or r.get("unit_number_norm"), "нет данных")
+        rooms = _safe_text(r.get("rooms_en"), "-")
+        ptype = _safe_text(r.get("property_type_en"), "-")
+        subtype = _safe_text(r.get("property_sub_type_en"), "-")
+        proc = _safe_text(r.get("procedure_name_en"), "-")
+        price = format_money(r.get("price"))
+        meter = format_money(r.get("meter_price")) if r.get("meter_price") is not None else "нет данных"
+        size = _format_size(r)
+        date = _safe_text(r.get("safe_date"), "нет даты")
+        text += (
+            f"━━━━━━━━━━━━━━\n"
+            f"<b>#{i} · {_deal_kind_label(r, deal_type)}</b>\n"
+            f"🗓 <b>Дата:</b> {date}\n"
+            f"🏢 <b>Здание:</b> {building}\n"
+            f"📍 <b>Район:</b> {area}\n"
+            f"🔢 <b>Юнит:</b> {unit}\n"
+            f"🏠 <b>Тип:</b> {ptype} / {subtype}\n"
+            f"🛏 <b>Комнаты:</b> {rooms}\n"
+            f"📐 <b>Площадь:</b> {size}\n"
+            f"💰 <b>Сумма:</b> {price}\n"
+            f"📏 <b>Цена за метр:</b> {meter}\n"
+            f"📄 <b>Процедура:</b> {proc}\n\n"
+        )
+    return text
+
+def format_latest_deals_page(rows, offset, scope, name, prop, period, deal_type, fallback_used=False):
+    page = rows[offset:offset + DEAL_PAGE_SIZE]
+    total = len(rows)
+    title_name = f"\n📍 <b>{name}</b>" if name else ""
+    text = (
+        f"🧾 <b>Последние сделки</b>{title_name}\n"
+        f"📦 Показано: <b>{offset + 1}-{min(offset + DEAL_PAGE_SIZE, total)}</b> из <b>{total}</b>\n"
+        f"🔎 Фильтр: <b>{deal_type or 'все сделки'}</b> / <b>{prop or 'все типы'}</b> / <b>{period_label(period)}</b>\n"
+    )
+    if fallback_used:
+        text += "ℹ️ По точному фильтру сделок мало, показана ближайшая доступная выборка.\n"
+    text += "\n" + format_deal_cards(page, start_index=offset + 1, deal_type=deal_type)
+    text += "Нажмите <b>➡️ Следующие 10</b>, чтобы посмотреть следующую страницу."
+    return text
+
+# v53: расширяем нормализованный sale-layer дополнительными полями сделки.
+def base_from():
+    m = _v44_sale_meta()
+    cols = _v44_sales_cols()
+    trx = _v44_text_expr(cols, ['transaction_number', 'transaction_id', 'instance_id', 'id', 'contract_id'], "''")
+    meter_expr = f"""
+        COALESCE(
+            {m['meter']},
+            CASE WHEN ({m['size']}) IS NOT NULL AND ({m['size']}) > 0 AND ({m['price']}) IS NOT NULL
+                 THEN ({m['price']}) / NULLIF(({m['size']}), 0)
+                 ELSE NULL::numeric END
+        )
+    """
+    return f"""
+        FROM (
+            SELECT
+                {trx} AS transaction_number,
+                {m['date']} AS safe_date,
+                {m['building']} AS building_name_en,
+                {m['building']} AS building_en,
+                {m['building']} AS project_en,
+                {m['area']} AS area_name_en,
+                {m['area']} AS area_en,
+                {m['rooms']} AS rooms_en,
+                {m['ptype']} AS property_type_en,
+                {m['ptype']} AS prop_type_en,
+                {m['subtype']} AS property_sub_type_en,
+                {m['subtype']} AS prop_sub_type_en,
+                {m['procedure']} AS procedure_name_en,
+                {m['procedure']} AS procedure_name_norm,
+                {m['unit']} AS unit_number_norm,
+                {m['size']} AS area_size,
+                {m['price']} AS actual_worth_norm,
+                {meter_expr} AS meter_sale_price_norm,
+                LOWER(
+                    COALESCE({m['building']}, '') || ' ' ||
+                    COALESCE({m['area']}, '') || ' ' ||
+                    COALESCE({m['rooms']}, '') || ' ' ||
+                    COALESCE({m['ptype']}, '') || ' ' ||
+                    COALESCE({m['subtype']}, '') || ' ' ||
+                    COALESCE({m['procedure']}, '') || ' ' ||
+                    COALESCE({m['unit']}, '')
+                ) AS search_text
+            FROM {TABLE}
+        ) t
+        WHERE 1=1
+    """
+
+PRICE = "actual_worth_norm"
+METER_PRICE = "meter_sale_price_norm"
+
+# v53: расширенный latest query: building, area, unit, area/size, rooms, type, procedure.
+def get_latest_deals(scope="building", name=None, prop=None, period=None, deal_type=None, limit=60, unit_query=None):
+    if is_rent_deal(deal_type):
+        try:
+            where, params = rent_scope_condition_v34(scope, name, True)
+            prop_sql, prop_args = rent_property_condition_v34(prop, True)
+            unit_sql, unit_args = rent_unit_condition_v32(unit_query)
+            params += prop_args + unit_args + [limit]
+            with db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(f"""
+                        SELECT
+                            safe_date,
+                            'Rent' AS procedure_name_en,
+                            rooms_en,
+                            property_type_en,
+                            property_sub_type_en,
+                            rent_price AS price,
+                            rent_meter_price AS meter_price,
+                            building_name_en,
+                            area_name_en,
+                            unit_number_norm AS unit_number,
+                            NULL::numeric AS area_size
+                        {rent_base_from_v34()}
+                          {where}
+                          {prop_sql}
+                          {unit_sql}
+                          {rent_period_condition_v34(period, True)}
+                          AND rent_price IS NOT NULL
+                        ORDER BY safe_date DESC NULLS LAST
+                        LIMIT %s
+                    """, params)
+                    return cur.fetchall()
+        except Exception as e:
+            print("GET_LATEST_RENT_DEALS_ERROR_V53:", repr(e))
+            return []
+
+    prop_sql, prop_args = property_condition(prop)
+    deal_sql, deal_args = make_deal_type_condition(deal_type)
+    p_sql = period_condition(period)
+    unit_sql, unit_args = make_unit_condition(unit_query)
+    value_expr = deal_value_expr(deal_type)
+
+    if scope == "area":
+        scope_sql, scope_args = make_area_exact_condition(name)
+    elif scope == "building":
+        scope_sql, scope_args = building_exact_condition_for_name(name)
+    else:
+        scope_sql, scope_args = "", []
+
+    params = scope_args + prop_args + deal_args + unit_args + [limit]
+    try:
+        with db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT
+                        safe_date,
+                        transaction_number,
+                        COALESCE(procedure_name_en::text, '') AS procedure_name_en,
+                        COALESCE(rooms_en::text, '') AS rooms_en,
+                        COALESCE(property_type_en::text, '') AS property_type_en,
+                        COALESCE(property_sub_type_en::text, '') AS property_sub_type_en,
+                        {value_expr} AS price,
+                        {METER_PRICE} AS meter_price,
+                        area_size,
+                        COALESCE(unit_number_norm::text, '') AS unit_number,
+                        COALESCE(building_name_en::text, '') AS building_name_en,
+                        COALESCE(area_name_en::text, '') AS area_name_en
+                    {base_from()}
+                      {scope_sql}
+                      AND {value_expr} IS NOT NULL
+                      {prop_sql}
+                      {deal_sql}
+                      {p_sql}
+                      {unit_sql}
+                    ORDER BY safe_date DESC NULLS LAST, price DESC NULLS LAST
+                    LIMIT %s
+                """, params)
+                return cur.fetchall()
+    except Exception as e:
+        print("GET_LATEST_SALE_DEALS_ERROR_V53:", repr(e))
+        return []
+
+def get_latest_deals_smart(scope, name, prop=None, period=None, deal_type=None, limit=60, unit_query=None):
+    attempts = [
+        (prop, period, deal_type),
+        (prop, None, deal_type),
+        (None, period, deal_type),
+        (None, None, deal_type),
+    ] if deal_type else [
+        (prop, period, deal_type),
+        (prop, period, None),
+        (prop, None, None),
+        (None, period, None),
+        (None, None, None),
+    ]
+    for p, per, dt in attempts:
+        rows = get_latest_deals(scope, name, p, per, dt, limit=limit, unit_query=unit_query)
+        if rows:
+            return rows, p, per, dt
+    return [], prop, period, deal_type
+
+print("Loaded premium latest deals + exact deal check patch v53")
 
 # =========================
 # SINGLE POLLING LOCK v52
