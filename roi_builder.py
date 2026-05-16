@@ -16,57 +16,19 @@ DROP TABLE IF EXISTS roi_analytics;
 
 CREATE TABLE roi_analytics AS
 
-WITH sales AS (
-    SELECT
-        area_en,
-
-        COUNT(*) AS sales_deals,
-
-        AVG(NULLIF(actual_worth, 0)) AS avg_sale_price,
-        AVG(NULLIF(meter_sale_price, 0)) AS avg_meter_sale_price,
-        AVG(NULLIF(actual_area, 0)) AS avg_area
-
-    FROM dld_transactions_full
-
-    WHERE actual_worth IS NOT NULL
-      AND actual_worth > 0
-
-    GROUP BY
-        area_en
-),
-
-rents AS (
-    SELECT
-        area_en,
-
-        COUNT(*) AS rent_deals,
-
-        AVG(NULLIF(annual_amount, 0)) AS avg_annual_rent
-
-    FROM dld_rents_full
-
-    WHERE annual_amount IS NOT NULL
-      AND annual_amount > 0
-
-    GROUP BY
-        area_en
-)
-
 SELECT
     s.area_en,
 
     s.sales_deals,
+
     r.rent_deals,
 
     ROUND(s.avg_sale_price::numeric, 2) AS avg_sale_price,
-    ROUND(s.avg_meter_sale_price::numeric, 2) AS avg_meter_sale_price,
-    ROUND(s.avg_area::numeric, 2) AS avg_area,
-
     ROUND(r.avg_annual_rent::numeric, 2) AS avg_annual_rent,
 
     CASE
         WHEN s.avg_sale_price > 0
-         AND r.avg_annual_rent IS NOT NULL
+         AND r.avg_annual_rent > 0
         THEN ROUND(
             ((r.avg_annual_rent / s.avg_sale_price) * 100)::numeric,
             2
@@ -76,11 +38,41 @@ SELECT
 
     NOW() AS updated_at
 
-FROM sales s
+FROM (
 
-LEFT JOIN rents r
-ON LOWER(TRIM(COALESCE(s.area_en, ''))) =
-   LOWER(TRIM(COALESCE(r.area_en, '')));
+    SELECT
+        area_en,
+
+        COUNT(*) AS sales_deals,
+
+        AVG(actual_worth) AS avg_sale_price
+
+    FROM dld_transactions_full
+
+    WHERE actual_worth > 0
+
+    GROUP BY area_en
+
+) s
+
+LEFT JOIN (
+
+    SELECT
+        area_en,
+
+        COUNT(*) AS rent_deals,
+
+        AVG(annual_amount) AS avg_annual_rent
+
+    FROM dld_rents_full
+
+    WHERE annual_amount > 0
+
+    GROUP BY area_en
+
+) r
+
+ON s.area_en = r.area_en;
 """)
 
 conn.commit()
