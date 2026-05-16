@@ -5031,6 +5031,236 @@ def smart_pick_candidates(goal, budget_text, risk, timing):
     return merged[:5] if merged else smart_fallback_candidates(goal, budget_text, risk, timing)
 
 
+
+
+# =========================
+# FINAL HOTFIX v51 - unique normalized columns + safe aliases
+# =========================
+# Смысл фикса:
+# 1) Убирает AmbiguousColumn по building_name_en / area_name_en.
+#    Внутри base_from больше нет SELECT * вместе с alias-колонками с теми же именами.
+# 2) Поиск Grande / Corner / JVC работает через нормализованные alias-поля.
+# 3) sales-area fallback для аренды теперь тоже использует нормализованный base_from,
+#    а не напрямую старые имена колонок.
+
+SCHEMA_FIX_VERSION = "v51_unique_normalized_aliases"
+
+
+def base_from():
+    """Нормализованный слой продаж без дублей имён колонок.
+
+    ВАЖНО: раньше было SELECT *, ... AS building_name_en.
+    Если исходная таблица уже имела building_name_en, PostgreSQL видел две одноимённые
+    колонки и падал с AmbiguousColumn. Теперь наружу отдаём только совместимые поля,
+    которые реально использует бот.
+    """
+    m = _v44_sale_meta()
+    meter_expr = f"""
+        COALESCE(
+            {m['meter']},
+            CASE WHEN ({m['size']}) IS NOT NULL AND ({m['size']}) > 0 AND ({m['price']}) IS NOT NULL
+                 THEN ({m['price']}) / NULLIF(({m['size']}), 0)
+                 ELSE NULL::numeric END
+        )
+    """
+    return f"""
+        FROM (
+            SELECT
+                {m['date']} AS safe_date,
+                {m['building']} AS building_name_en,
+                {m['building']} AS building_en,
+                {m['building']} AS project_en,
+                {m['area']} AS area_name_en,
+                {m['area']} AS area_en,
+                {m['rooms']} AS rooms_en,
+                {m['ptype']} AS property_type_en,
+                {m['ptype']} AS prop_type_en,
+                {m['subtype']} AS property_sub_type_en,
+                {m['subtype']} AS prop_sub_type_en,
+                {m['procedure']} AS procedure_name_en,
+                {m['procedure']} AS procedure_name_norm,
+                {m['unit']} AS unit_number_norm,
+                {m['price']} AS actual_worth_norm,
+                {meter_expr} AS meter_sale_price_norm,
+                LOWER(
+                    COALESCE({m['building']}, '') || ' ' ||
+                    COALESCE({m['area']}, '') || ' ' ||
+                    COALESCE({m['rooms']}, '') || ' ' ||
+                    COALESCE({m['ptype']}, '') || ' ' ||
+                    COALESCE({m['subtype']}, '') || ' ' ||
+                    COALESCE({m['procedure']}, '')
+                ) AS search_text
+            FROM {TABLE}
+        ) t
+        WHERE 1=1
+    """
+
+
+# Глобальные SQL expressions после нормализации.
+PRICE = "actual_worth_norm"
+METER_PRICE = "meter_sale_price_norm"
+BUILDING_NAME = "COALESCE(building_name_en::text, '')"
+AREA_TXT = "COALESCE(area_name_en::text, '')"
+BUILDING_TXT = "COALESCE(building_name_en::text, '')"
+ROOMS_TXT = "COALESCE(rooms_en::text, '')"
+PROPERTY_TYPE_TXT = "COALESCE(property_type_en::text, '')"
+PROPERTY_SUB_TYPE_TXT = "COALESCE(property_sub_type_en::text, '')"
+PROCEDURE_TXT = "COALESCE(procedure_name_en::text, procedure_name_norm::text, '')"
+
+
+def building_search_expression():
+    return "LOWER(COALESCE(search_text::text, '') || ' ' || COALESCE(building_name_en::text, '') || ' ' || COALESCE(area_name_en::text, ''))"
+
+
+def make_area_exact_condition(query):
+    values = [v for v in area_alias_values(query) if v]
+    if not values:
+        return "AND 1=0", []
+    parts, params = [], []
+    for value in values:
+        v = clean_query(value).lower()
+        parts.append("LOWER(COALESCE(area_name_en::text, '')) ILIKE %s")
+        params.append(f"%{v}%")
+    return "AND (" + " OR ".join(parts) + ")", params
+
+
+def sales_areas_for_building_v32(name):
+    """Ищем район здания через нормализованный sales layer.
+    Работает и для archive, и для live, даже если реальные колонки называются project_en/building_en.
+    """
+    n = clean_query(name)
+    if not n:
+        return []
+    try:
+        where, params = make_building_condition(n)
+        with db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT DISTINCT COALESCE(area_name_en::text, '') AS area
+                    {base_from()}
+                      {where}
+                      AND COALESCE(area_name_en::text, '') <> ''
+                    LIMIT 25
+                """, params)
+                return [r["area"] for r in cur.fetchall() if r.get("area")]
+    except Exception as e:
+        print("RENT_AREA_FALLBACK_ERROR_V51:", repr(e))
+        return []
+
+
+def available_unit_column():
+    # После v51 в нормализованном sales layer всегда есть unit_number_norm.
+    return "unit_number_norm"
+
+
+def make_unit_condition(unit_text):
+    unit_text = clean_query(unit_text)
+    if not unit_text:
+        return "", []
+    q = unit_text.replace("№", "").replace("unit", "").replace("Unit", "").strip()
+    only_digits = re.sub(r"\D", "", q)
+    if only_digits:
+        if len(only_digits) <= 2:
+            return "AND COALESCE(unit_number_norm::text, '') ILIKE %s", [f"%{only_digits}"]
+        return "AND COALESCE(unit_number_norm::text, '') ILIKE %s", [f"%{only_digits}%"]
+    return "AND COALESCE(unit_number_norm::text, '') ILIKE %s", [f"%{q}%"]
+
+
+def find_buildings(query, limit=10):
+    query = clean_query(query)
+    if not query:
+        return []
+    where, params = make_building_condition(query)
+    exact = normalize_search_text(query)
+    try:
+        with db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT
+                        COALESCE(building_name_en::text, '') AS building_name_en,
+                        COALESCE(building_en::text, '') AS building_en,
+                        COALESCE(area_name_en::text, '') AS area_name_en,
+                        COALESCE(area_en::text, '') AS area_en,
+                        COUNT(*) AS deals,
+                        CASE
+                            WHEN LOWER(TRIM(COALESCE(building_name_en::text, ''))) = LOWER(TRIM(%s)) THEN 0
+                            WHEN LOWER(TRIM(COALESCE(building_name_en::text, ''))) LIKE LOWER(TRIM(%s)) THEN 1
+                            WHEN LOWER(COALESCE(search_text::text, '')) LIKE LOWER(TRIM(%s)) THEN 2
+                            ELSE 3
+                        END AS rank
+                    {base_from()}
+                      {where}
+                      AND COALESCE(building_name_en::text, '') <> ''
+                    GROUP BY
+                        COALESCE(building_name_en::text, ''),
+                        COALESCE(building_en::text, ''),
+                        COALESCE(area_name_en::text, ''),
+                        COALESCE(area_en::text, ''),
+                        CASE
+                            WHEN LOWER(TRIM(COALESCE(building_name_en::text, ''))) = LOWER(TRIM(%s)) THEN 0
+                            WHEN LOWER(TRIM(COALESCE(building_name_en::text, ''))) LIKE LOWER(TRIM(%s)) THEN 1
+                            WHEN LOWER(COALESCE(search_text::text, '')) LIKE LOWER(TRIM(%s)) THEN 2
+                            ELSE 3
+                        END
+                    ORDER BY rank ASC, deals DESC
+                    LIMIT %s
+                """, [query, query + "%", f"%{exact}%"] + params + [query, query + "%", f"%{exact}%", limit])
+                return cur.fetchall()
+    except Exception as e:
+        print("FIND_BUILDINGS_ERROR_V51:", repr(e))
+        return []
+
+
+def find_areas(query, limit=10):
+    query = clean_query(query)
+    if not query:
+        return []
+    where, params = make_area_exact_condition(query)
+    try:
+        with db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT
+                        COALESCE(area_name_en::text, '') AS area_name_en,
+                        COALESCE(area_en::text, '') AS area_en,
+                        COUNT(*) AS deals,
+                        COUNT(DISTINCT COALESCE(building_name_en::text, '')) AS buildings
+                    {base_from()}
+                      {where}
+                      AND COALESCE(area_name_en::text, '') <> ''
+                    GROUP BY COALESCE(area_name_en::text, ''), COALESCE(area_en::text, '')
+                    ORDER BY deals DESC
+                    LIMIT %s
+                """, params + [limit])
+                return cur.fetchall()
+    except Exception as e:
+        print("FIND_AREAS_ERROR_V51:", repr(e))
+        return []
+
+
+# Обновляем engine pointers для dual-db, чтобы merge-слой вызывал уже исправленные функции.
+_ENGINE_find_buildings = find_buildings
+_ENGINE_find_areas = find_areas
+
+# В v50 эти функции уже override-нуты на dual-db. Переопределяем только поиск,
+# так как он прямо вызывается handlers и должен читать archive+live, а не одну активную базу.
+def find_buildings(query, limit=10):
+    rows = []
+    for source in _active_sources():
+        rows.extend(_call_on_source(source, _ENGINE_find_buildings, query, limit, default=[]) or [])
+    return _merge_group_rows(rows, ["building_name_en", "area_name_en"], limit=limit, sort_field="deals")
+
+
+def find_areas(query, limit=10):
+    rows = []
+    for source in _active_sources():
+        rows.extend(_call_on_source(source, _ENGINE_find_areas, query, limit, default=[]) or [])
+    return _merge_group_rows(rows, ["area_name_en"], limit=limit, sort_field="deals")
+
+
+print(f"Loaded schema compatibility patch {SCHEMA_FIX_VERSION}")
+
+
 print("Loaded dual database archive+live engine v50")
 
 
