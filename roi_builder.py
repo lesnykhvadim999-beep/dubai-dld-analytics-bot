@@ -16,16 +16,14 @@ CREATE TABLE roi_analytics AS
 WITH sales AS (
     SELECT
         area_en,
-        prop_type_en,
-        prop_sub_type_en,
-
-        AVG(
-            NULLIF(procedure_area, 0)
-        ) AS avg_area,
 
         AVG(
             NULLIF(meter_sale_price, 0)
         ) AS avg_sale_price_psf,
+
+        AVG(
+            NULLIF(procedure_area, 0)
+        ) AS avg_area,
 
         COUNT(*) AS sales_deals
 
@@ -34,17 +32,12 @@ WITH sales AS (
     WHERE meter_sale_price IS NOT NULL
       AND meter_sale_price > 0
 
-    GROUP BY
-        area_en,
-        prop_type_en,
-        prop_sub_type_en
+    GROUP BY area_en
 ),
 
 rents AS (
     SELECT
         area_en,
-        prop_type_en,
-        prop_sub_type_en,
 
         AVG(
             NULLIF(annual_amount, 0)
@@ -57,19 +50,14 @@ rents AS (
     WHERE annual_amount IS NOT NULL
       AND annual_amount > 0
 
-    GROUP BY
-        area_en,
-        prop_type_en,
-        prop_sub_type_en
+    GROUP BY area_en
 )
 
 SELECT
     s.area_en,
-    s.prop_type_en,
-    s.prop_sub_type_en,
 
-    s.avg_area,
     s.avg_sale_price_psf,
+    s.avg_area,
 
     r.avg_annual_rent,
 
@@ -92,12 +80,6 @@ FROM sales s
 JOIN rents r
 ON LOWER(TRIM(COALESCE(s.area_en, ''))) =
    LOWER(TRIM(COALESCE(r.area_en, '')))
-
-AND LOWER(TRIM(COALESCE(s.prop_type_en, ''))) =
-    LOWER(TRIM(COALESCE(r.prop_type_en, '')))
-
-AND LOWER(TRIM(COALESCE(s.prop_sub_type_en, ''))) =
-    LOWER(TRIM(COALESCE(r.prop_sub_type_en, '')))
 
 WHERE r.avg_annual_rent IS NOT NULL
   AND s.avg_sale_price_psf IS NOT NULL
