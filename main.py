@@ -5584,7 +5584,7 @@ def get_latest_deals_smart(scope, name, prop=None, period=None, deal_type=None, 
             return rows, p, per, dt
     return [], prop, period, deal_type
 
-print("Loaded premium latest deals + exact deal check patch v53")
+print("Loaded premium latest deals + exact deal check patch v54")
 
 # =========================
 # SINGLE POLLING LOCK v52
@@ -5594,6 +5594,13 @@ print("Loaded premium latest deals + exact deal check patch v53")
 _SINGLE_INSTANCE_LOCK_CONN = None
 
 def acquire_single_instance_lock() -> bool:
+    """Soft lock only.
+    Railway sometimes starts a replacement container before the old one fully dies.
+    In v53 the bot exited when it saw an existing advisory lock, which could leave
+    the active deployment in Completed state and Telegram without a working bot.
+    v54 never exits because of the lock; it logs the situation and continues.
+    Telegram-side duplicate updates are still ignored by the duplicate guard.
+    """
     global _SINGLE_INSTANCE_LOCK_CONN
     try:
         lock_url = _env_postgres_url("BOT_LOCK_DATABASE_URL", "DATABASE_URL", "LIVE_DATABASE_URL", "DLD_TRANSACTIONS_URL") or DATABASE_URL
@@ -5601,16 +5608,15 @@ def acquire_single_instance_lock() -> bool:
         cur = conn.cursor()
         cur.execute("SELECT pg_try_advisory_lock(%s)", (8740041082,))
         ok = bool(cur.fetchone()[0])
-        if not ok:
-            print("Another bot instance is already running. Exit this duplicate process.")
-            cur.close()
+        cur.close()
+        if ok:
+            _SINGLE_INSTANCE_LOCK_CONN = conn
+            print("Single instance soft lock acquired")
+        else:
             conn.close()
-            return False
-        _SINGLE_INSTANCE_LOCK_CONN = conn
-        print("Single instance lock acquired")
+            print("Single instance soft lock skipped: another DB lock exists; continuing polling")
         return True
     except Exception as e:
-        # Если lock-БД временно недоступна, не блокируем старт, но пишем причину.
         print("SINGLE_INSTANCE_LOCK_WARNING:", repr(e))
         return True
 
@@ -5630,13 +5636,14 @@ def release_single_instance_lock():
 
 async def main():
     print("Dubai DLD Analytics Bot started")
-    if not acquire_single_instance_lock():
-        try:
-            await bot.session.close()
-        except Exception:
-            pass
-        return
+    acquire_single_instance_lock()
     try:
+        try:
+            await bot.delete_webhook(drop_pending_updates=True)
+            print("Telegram webhook cleared before polling")
+        except Exception as e:
+            print("DELETE_WEBHOOK_WARNING:", repr(e))
+        print("Polling started")
         await dp.start_polling(bot)
     finally:
         release_single_instance_lock()
