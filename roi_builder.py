@@ -18,58 +18,63 @@ CREATE TABLE roi_analytics AS
 
 WITH sales AS (
     SELECT
-        LOWER(TRIM(area_en)) AS area_key,
+        LOWER(TRIM(COALESCE(area_en, 'UNKNOWN'))) AS area_key,
+
         MIN(area_en) AS sales_area,
 
         COUNT(*) AS sales_deals,
 
-        AVG(NULLIF(procedure_area, 0)) AS avg_area
+        AVG(
+            CASE
+                WHEN procedure_area > 0
+                THEN procedure_area
+            END
+        ) AS avg_area
 
     FROM dld_transactions_full
 
-    WHERE area_en IS NOT NULL
-      AND procedure_area IS NOT NULL
-      AND procedure_area > 0
-
-    GROUP BY LOWER(TRIM(area_en))
+    GROUP BY LOWER(TRIM(COALESCE(area_en, 'UNKNOWN')))
 ),
 
 rents AS (
     SELECT
-        LOWER(TRIM(area_en)) AS area_key,
+        LOWER(TRIM(COALESCE(area_en, 'UNKNOWN'))) AS area_key,
+
         MIN(area_en) AS rent_area,
 
         COUNT(*) AS rent_deals,
 
-        AVG(NULLIF(annual_amount, 0)) AS avg_annual_rent
+        AVG(
+            CASE
+                WHEN annual_amount > 0
+                THEN annual_amount
+            END
+        ) AS avg_annual_rent
 
     FROM dld_rents_full
 
-    WHERE area_en IS NOT NULL
-      AND annual_amount IS NOT NULL
-      AND annual_amount > 0
-
-    GROUP BY LOWER(TRIM(area_en))
+    GROUP BY LOWER(TRIM(COALESCE(area_en, 'UNKNOWN')))
 )
 
 SELECT
-    s.sales_area,
-    r.rent_area,
+    COALESCE(s.sales_area, r.rent_area) AS area_name,
 
     s.sales_deals,
     r.rent_deals,
 
     ROUND(s.avg_area::numeric, 2) AS avg_area,
-    ROUND(r.avg_annual_rent::numeric, 2) AS avg_annual_rent,
 
-    NULL::numeric AS avg_property_price,
-    NULL::numeric AS gross_yield_percent,
+    ROUND(r.avg_annual_rent::numeric, 2) AS avg_annual_rent,
 
     NOW() AS updated_at
 
 FROM sales s
-JOIN rents r
-ON s.area_key = r.area_key;
+FULL OUTER JOIN rents r
+ON s.area_key = r.area_key
+
+WHERE
+    s.sales_area IS NOT NULL
+    OR r.rent_area IS NOT NULL;
 """)
 
 conn.commit()
