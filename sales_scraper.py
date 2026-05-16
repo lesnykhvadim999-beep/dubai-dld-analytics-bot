@@ -1,5 +1,3 @@
-# Fixed DLD Sales Scraper + Sales Analytics
-
 import os
 import time
 import requests
@@ -53,6 +51,18 @@ conn.commit()
 print("TABLE READY", flush=True)
 
 
+def getv(item, *keys):
+    for key in keys:
+        if key in item and item.get(key) is not None:
+            return item.get(key)
+
+        lower_key = key.lower()
+        if lower_key in item and item.get(lower_key) is not None:
+            return item.get(lower_key)
+
+    return None
+
+
 def fetch_transactions(from_date, to_date, skip=0, take=1000):
     payload = {
         "P_FROM_DATE": from_date,
@@ -85,8 +95,8 @@ def fetch_transactions(from_date, to_date, skip=0, take=1000):
     )
 
     print(f"STATUS={response.status_code}", flush=True)
-
     response.raise_for_status()
+
     return response.json()
 
 
@@ -94,35 +104,15 @@ def extract_rows(data):
     response = data.get("response", {})
 
     if isinstance(response, dict):
-        if isinstance(response.get("result"), list):
-            return response["result"]
+        for key in ["result", "data", "items"]:
+            if isinstance(response.get(key), list):
+                return response[key]
 
-        if isinstance(response.get("data"), list):
-            return response["data"]
-
-        if isinstance(response.get("items"), list):
-            return response["items"]
-
-    if isinstance(data.get("result"), list):
-        return data["result"]
-
-    if isinstance(data.get("data"), list):
-        return data["data"]
+    for key in ["result", "data", "items"]:
+        if isinstance(data.get(key), list):
+            return data[key]
 
     return []
-
-
-def getv(item, *keys):
-    for key in keys:
-        if key in item and item.get(key) is not None:
-            return item.get(key)
-
-        lower_key = key.lower()
-
-        if lower_key in item and item.get(lower_key) is not None:
-            return item.get(lower_key)
-
-    return None
 
 
 def save_transactions(rows):
@@ -132,7 +122,6 @@ def save_transactions(rows):
     values = []
 
     for item in rows:
-
         transaction_id = (
             getv(item, "TRANSACTION_ID", "transaction_id")
             or getv(item, "TRANSACTION_NUMBER", "transaction_number")
@@ -142,58 +131,60 @@ def save_transactions(rows):
         if not transaction_id:
             continue
 
+        actual_area = getv(
+            item,
+            "ACTUAL_AREA",
+            "actual_area",
+            "PROCEDURE_AREA",
+            "procedure_area"
+        )
+
         values.append((
             str(transaction_id),
+            getv(item, "TRANSACTION_NUMBER", "transaction_number"),
+            getv(item, "INSTANCE_DATE", "instance_date", "TRANSACTION_DATE", "transaction_date"),
+            getv(item, "PROCEDURE_NAME_EN", "procedure_name_en", "PROCEDURE_NAME", "procedure_name"),
 
-            getv(item, "TRANSACTION_NUMBER"),
-            getv(item, "INSTANCE_DATE"),
-            getv(item, "PROCEDURE_NAME_EN"),
+            getv(item, "AREA_ID", "area_id"),
+            getv(item, "AREA_EN", "area_en"),
+            getv(item, "AREA_AR", "area_ar"),
 
-            getv(item, "AREA_ID"),
-            getv(item, "AREA_EN"),
-            getv(item, "AREA_AR"),
+            getv(item, "PROJECT_EN", "project_en", "MASTER_PROJECT_EN", "master_project_en"),
+            getv(item, "PROJECT_AR", "project_ar", "MASTER_PROJECT_AR", "master_project_ar"),
 
-            getv(item, "PROJECT_EN"),
-            getv(item, "PROJECT_AR"),
+            getv(item, "BUILDING_EN", "building_en"),
+            getv(item, "BUILDING_AR", "building_ar"),
 
-            getv(item, "BUILDING_EN"),
-            getv(item, "BUILDING_AR"),
+            getv(item, "PROP_TYPE_EN", "prop_type_en", "PROPERTY_TYPE_EN", "property_type_en"),
+            getv(item, "PROP_SB_TYPE_EN", "prop_sb_type_en", "PROP_SUB_TYPE_EN", "prop_sub_type_en"),
 
-            getv(item, "PROP_TYPE_EN"),
-            getv(item, "PROP_SB_TYPE_EN"),
+            getv(item, "ROOMS_EN", "rooms_en"),
 
-            getv(item, "ROOMS_EN"),
-
-            getv(item, "ACTUAL_WORTH", "actual_worth"),
+            getv(item, "ACTUAL_WORTH", "actual_worth", "AMOUNT", "amount", "VALUE", "value"),
 
             getv(item, "METER_SALE_PRICE", "meter_sale_price"),
 
-            getv(
-                item,
-                "ACTUAL_AREA",
-                "actual_area",
-                "PROCEDURE_AREA",
-                "procedure_area"
-            ),
+            actual_area,
 
-            getv(item, "PROCEDURE_AREA"),
+            getv(item, "PROCEDURE_AREA", "procedure_area"),
 
-            getv(item, "PARKING"),
+            getv(item, "PARKING", "parking"),
 
-            getv(item, "NEAREST_METRO_EN"),
-            getv(item, "NEAREST_MALL_EN"),
-            getv(item, "NEAREST_LANDMARK_EN"),
+            getv(item, "NEAREST_METRO_EN", "nearest_metro_en"),
+            getv(item, "NEAREST_MALL_EN", "nearest_mall_en"),
+            getv(item, "NEAREST_LANDMARK_EN", "nearest_landmark_en"),
 
-            getv(item, "USAGE_ID"),
+            getv(item, "USAGE_ID", "usage_id"),
 
-            str(getv(item, "IS_FREE_HOLD"))
-            if getv(item, "IS_FREE_HOLD") is not None else None,
+            str(getv(item, "IS_FREE_HOLD", "is_free_hold"))
+            if getv(item, "IS_FREE_HOLD", "is_free_hold") is not None else None,
 
-            str(getv(item, "IS_OFFPLAN"))
-            if getv(item, "IS_OFFPLAN") is not None else None
+            str(getv(item, "IS_OFFPLAN", "is_offplan"))
+            if getv(item, "IS_OFFPLAN", "is_offplan") is not None else None
         ))
 
     if not values:
+        print("NO VALID SALES ROWS TO SAVE", flush=True)
         return
 
     print(f"SAVING SALES {len(values)} ROWS", flush=True)
@@ -229,7 +220,17 @@ def save_transactions(rows):
             is_offplan
         )
         VALUES %s
-        ON CONFLICT (transaction_id) DO NOTHING
+        ON CONFLICT (transaction_id) DO UPDATE SET
+            actual_worth = COALESCE(EXCLUDED.actual_worth, dld_transactions_full.actual_worth),
+            meter_sale_price = COALESCE(EXCLUDED.meter_sale_price, dld_transactions_full.meter_sale_price),
+            actual_area = COALESCE(EXCLUDED.actual_area, dld_transactions_full.actual_area),
+            procedure_area = COALESCE(EXCLUDED.procedure_area, dld_transactions_full.procedure_area),
+            area_en = COALESCE(EXCLUDED.area_en, dld_transactions_full.area_en),
+            project_en = COALESCE(EXCLUDED.project_en, dld_transactions_full.project_en),
+            building_en = COALESCE(EXCLUDED.building_en, dld_transactions_full.building_en),
+            prop_type_en = COALESCE(EXCLUDED.prop_type_en, dld_transactions_full.prop_type_en),
+            prop_sub_type_en = COALESCE(EXCLUDED.prop_sub_type_en, dld_transactions_full.prop_sub_type_en),
+            rooms_en = COALESCE(EXCLUDED.rooms_en, dld_transactions_full.rooms_en)
         """,
         values
     )
@@ -239,14 +240,12 @@ def save_transactions(rows):
 
 
 def refresh_sales_analytics():
-
     print("REFRESHING SALES ANALYTICS", flush=True)
 
     cur.execute("""
     DROP TABLE IF EXISTS sales_analytics_by_building;
 
     CREATE TABLE sales_analytics_by_building AS
-
     SELECT
         area_en,
         project_en,
@@ -257,16 +256,9 @@ def refresh_sales_analytics():
 
         COUNT(*) AS deals_count,
 
-        ROUND(AVG(actual_worth), 2) AS avg_sale_price,
-
-        ROUND(
-            AVG(
-                actual_worth / NULLIF(actual_area, 0)
-            ),
-            2
-        ) AS avg_meter_sale_price,
-
-        ROUND(AVG(actual_area), 2) AS avg_area,
+        ROUND(AVG(COALESCE(actual_worth, 0)), 2) AS avg_sale_price,
+        ROUND(AVG(COALESCE(meter_sale_price, 0)), 2) AS avg_meter_sale_price,
+        ROUND(AVG(COALESCE(actual_area, procedure_area, 0)), 2) AS avg_area,
 
         MIN(transaction_date) AS first_transaction,
         MAX(transaction_date) AS last_transaction,
@@ -274,10 +266,6 @@ def refresh_sales_analytics():
         NOW() AS updated_at
 
     FROM dld_transactions_full
-
-    WHERE actual_worth IS NOT NULL
-      AND actual_area IS NOT NULL
-      AND actual_area > 0
 
     GROUP BY
         area_en,
@@ -289,18 +277,15 @@ def refresh_sales_analytics():
     """)
 
     conn.commit()
-
     print("SALES ANALYTICS READY", flush=True)
 
 
 def run_parser(from_date, to_date):
-
     skip = 0
     take = 1000
     total = 0
 
     while True:
-
         data = fetch_transactions(
             from_date=from_date,
             to_date=to_date,
@@ -309,7 +294,6 @@ def run_parser(from_date, to_date):
         )
 
         rows = extract_rows(data)
-
         print(f"RECEIVED SALES: {len(rows)}", flush=True)
 
         if not rows:
@@ -319,7 +303,6 @@ def run_parser(from_date, to_date):
         save_transactions(rows)
 
         total += len(rows)
-
         print(f"TOTAL SALES SAVED: {total}", flush=True)
 
         if len(rows) < take:
@@ -327,7 +310,6 @@ def run_parser(from_date, to_date):
             break
 
         skip += take
-
         time.sleep(1)
 
     refresh_sales_analytics()
@@ -339,7 +321,6 @@ def run_parser(from_date, to_date):
 
 
 if __name__ == "__main__":
-
     run_parser(
         from_date="05/01/2026",
         to_date="05/15/2026"
