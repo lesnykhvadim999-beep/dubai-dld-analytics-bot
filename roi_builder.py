@@ -18,7 +18,6 @@ WITH sales AS (
         area_en,
         prop_type_en,
         prop_sub_type_en,
-        rooms_en,
 
         AVG(
             NULLIF(procedure_area, 0)
@@ -38,8 +37,7 @@ WITH sales AS (
     GROUP BY
         area_en,
         prop_type_en,
-        prop_sub_type_en,
-        rooms_en
+        prop_sub_type_en
 ),
 
 rents AS (
@@ -47,7 +45,6 @@ rents AS (
         area_en,
         prop_type_en,
         prop_sub_type_en,
-        rooms_en,
 
         AVG(
             NULLIF(annual_amount, 0)
@@ -63,15 +60,13 @@ rents AS (
     GROUP BY
         area_en,
         prop_type_en,
-        prop_sub_type_en,
-        rooms_en
+        prop_sub_type_en
 )
 
 SELECT
     s.area_en,
     s.prop_type_en,
     s.prop_sub_type_en,
-    s.rooms_en,
 
     s.avg_area,
     s.avg_sale_price_psf,
@@ -103,9 +98,6 @@ AND LOWER(TRIM(COALESCE(s.prop_type_en, ''))) =
 
 AND LOWER(TRIM(COALESCE(s.prop_sub_type_en, ''))) =
     LOWER(TRIM(COALESCE(r.prop_sub_type_en, '')))
-
-AND LOWER(TRIM(COALESCE(s.rooms_en, ''))) =
-    LOWER(TRIM(COALESCE(r.rooms_en, '')))
 
 WHERE r.avg_annual_rent IS NOT NULL
   AND s.avg_sale_price_psf IS NOT NULL
