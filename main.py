@@ -2461,8 +2461,28 @@ async def main_handler(message: Message):
             return
 
         if text == tr(user_id, "view_deals"):
-            push_state(user_id, {"step": "building_query", "scope": "building", "force_report": "last"})
-            await message.answer("🧾 Введите название здания для просмотра сделок.\n\nНапример:\n• Grande\n• Address Opera\n• Marina Gate", reply_markup=back_menu(user_id))
+            push_state(user_id, {"step": "analytics_scope"})
+            await message.answer(
+                "📊 <b>Аналитика сделок</b>\n\n"
+                "Выберите, что анализируем. Логика: район → здание → тип объекта/комнатность → период → инвестиционный вывод.",
+                reply_markup=kb([["🏙 Район", "🏢 Здание"], [tr(user_id, "back"), tr(user_id, "main")]])
+            )
+            return
+
+        if state.get("step") == "analytics_scope":
+            if text == "🏙 Район":
+                state["step"] = "area_query"
+                state["scope"] = "area"
+                user_states[user_id] = state
+                await message.answer(tr(user_id, "enter_area"), reply_markup=back_menu(user_id))
+                return
+            if text == "🏢 Здание":
+                state["step"] = "building_query"
+                state["scope"] = "building"
+                user_states[user_id] = state
+                await message.answer(tr(user_id, "enter_building"), reply_markup=back_menu(user_id))
+                return
+            await message.answer("Выберите: район или здание.", reply_markup=kb([["🏙 Район", "🏢 Здание"], [tr(user_id, "back"), tr(user_id, "main")]]))
             return
 
         if text == "🔎 Проверить конкретную сделку":
@@ -6806,11 +6826,6 @@ async def main():
         release_single_instance_lock()
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
-
-
-
 # =========================
 # SALES LATEST DEALS HARD FIX v59
 # =========================
@@ -7035,3 +7050,555 @@ def get_latest_deals_smart(scope, name, prop=None, period=None, deal_type=None, 
     return [], prop, period, deal_type
 
 print('Loaded sales latest deals hard fix v59: sale and rent are queried separately across archive + live')
+
+
+# =========================
+# STRICT BUILDING SALES FILTER v60
+# =========================
+# Исправление: при выборе здания (например Grande) продажи не должны показывать
+# другие объекты, где слово Grande встречается в составе другого проекта.
+# Логика: SQL делает максимально строгий отбор по отдельным building/project полям,
+# а Python-фильтр после merge повторно отсекает чужие building/project.
+
+STRICT_BUILDING_PATCH_VERSION = "v60_strict_sales_building_filter"
+
+
+def _v60_norm(value):
+    try:
+        return normalize_search_text(value)
+    except Exception:
+        value = (value or "").lower()
+        value = re.sub(r"[^a-z0-9\s]", " ", value)
+        return re.sub(r"\s+", " ", value).strip()
+
+
+def _v60_aliases_for_selected_building(name):
+    n = _v60_norm(name)
+    if not n:
+        return []
+    special = {
+        "grande": ["grande", "grande signature", "grande signature residences", "grande signature residence"],
+        "grande signature": ["grande", "grande signature", "grande signature residences", "grande signature residence"],
+        "grande signature residences": ["grande", "grande signature", "grande signature residences", "grande signature residence"],
+        "corner": ["corner", "binghatti corner"],
+        "binghatti corner": ["corner", "binghatti corner"],
+        "address opera": ["address opera", "address residences dubai opera", "the address residences dubai opera"],
+        "the address opera": ["address opera", "address residences dubai opera", "the address residences dubai opera"],
+        "address residences dubai opera": ["address opera", "address residences dubai opera", "the address residences dubai opera"],
+    }
+    return special.get(n, [n])
+
+
+def _v60_pg_norm_expr(col_sql):
+    return f"LOWER(TRIM(regexp_replace(COALESCE({col_sql}::text, ''), '[^a-zA-Z0-9]+', ' ', 'g')))"
+
+
+def _v60_existing_field_exprs(cols):
+    candidates = [
+        'building_name_en', 'building_en', 'building_name', 'building',
+        'project_name_en', 'project_en', 'project_name', 'project',
+        'property_name_en', 'property_name', 'master_project_en', 'master_project'
+    ]
+    exprs = []
+    for c in candidates:
+        if c in cols:
+            exprs.append(_v60_pg_norm_expr(f't.{c}'))
+    return exprs
+
+
+def _v59_scope_sql(cols, scope, name, params):
+    """Override v59: strict building filtering for sales latest deals."""
+    if not name:
+        return ''
+    if scope == 'building':
+        field_exprs = _v60_existing_field_exprs(cols)
+        if not field_exprs:
+            return ' AND 1=0 '
+        aliases = _v60_aliases_for_selected_building(name)
+        if not aliases:
+            return ' AND 1=0 '
+
+        clauses = []
+        n = _v60_norm(name)
+        # Для коротких опасных названий вроде Grande запрещаем substring-match.
+        # Иначе попадут Beverly Grande, Crest Grande, Creek Vistas Grande и т.п.
+        strict_exact_only = n in {'grande', 'corner'} or len(n.split()) == 1
+        for expr in field_exprs:
+            for alias in aliases:
+                if strict_exact_only:
+                    clauses.append(f"{expr} = %s")
+                    params.append(alias)
+                else:
+                    # Для полноценного названия разрешаем точное совпадение или фразу внутри поля
+                    # например Marina Gate Tower 1 для выбранного Marina Gate.
+                    clauses.append(f"({expr} = %s OR {expr} LIKE %s)")
+                    params.extend([alias, f'%{alias}%'])
+        return ' AND (' + ' OR '.join(clauses) + ') '
+
+    if scope == 'area':
+        expr = "LOWER(" + _v59_text_expr(cols, ['area_name_en','area_en','area_name','area','location_en','district','community']) + ")"
+        params.append('%' + clean_query(name).lower() + '%')
+        return f' AND {expr} ILIKE %s '
+    return ''
+
+
+def _v60_field_values_from_row(row):
+    values = []
+    for key in [
+        'building_name_en', 'building_en', 'building_name', 'building',
+        'project_name_en', 'project_en', 'project_name', 'project',
+        'property_name_en', 'property_name', 'master_project_en', 'master_project'
+    ]:
+        val = row.get(key) if hasattr(row, 'get') else None
+        if val:
+            values.append(_v60_norm(val))
+    return [v for v in values if v]
+
+
+def _row_matches_exact_building(row, name):
+    if not name:
+        return True
+    aliases = _v60_aliases_for_selected_building(name)
+    fields = _v60_field_values_from_row(row)
+    if not aliases or not fields:
+        return False
+    n = _v60_norm(name)
+    strict_exact_only = n in {'grande', 'corner'} or len(n.split()) == 1
+    for f in fields:
+        for a in aliases:
+            if strict_exact_only:
+                if f == a:
+                    return True
+            else:
+                if f == a or a in f:
+                    return True
+    return False
+
+
+def _filter_exact_building_rows(rows, scope, name):
+    if scope != 'building' or not name:
+        return rows or []
+    filtered = [r for r in (rows or []) if _row_matches_exact_building(r, name)]
+    if len(filtered) != len(rows or []):
+        print(f"V60_STRICT_BUILDING_FILTER: before={len(rows or [])}, after={len(filtered)}, name={name}")
+    return filtered
+
+print(f"Loaded strict building sales filter {STRICT_BUILDING_PATCH_VERSION}")
+
+# =========================
+# PROFESSIONAL ECONOMIC INTELLIGENCE ENGINE v61
+# =========================
+# Цель: превратить экономическое резюме/аналитику сделок в профессиональный
+# инвестиционный отчёт по DLD: покупка, аренда, short-term model, resale horizon,
+# сравнение форматов юнитов и альтернатив в районе.
+
+ECONOMIC_ENGINE_VERSION = "v61_professional_investment_brain"
+
+# Обновляем названия меню без переписывания handlers.
+try:
+    TEXTS["ru"]["view_deals"] = "📊 Аналитика сделок"
+    TEXTS["en"]["view_deals"] = "📊 Deal analytics"
+    TEXTS["ar"]["view_deals"] = "📊 تحليل الصفقات"
+    TEXTS["ru"]["full_report"] = "📊 Рыночная аналитика"
+    TEXTS["ru"]["period_compare"] = "📈 Профессиональное сравнение периодов"
+    TEXTS["ru"]["undervalued"] = "📉 Оценить выгодность цены"
+except Exception as _e:
+    print("V61_TEXT_PATCH_ERROR:", repr(_e))
+
+# Расширяем типы объекта: апартаменты / виллы / таунхаусы / коммерция / участки.
+PROPERTY_OPTIONS = [
+    "Studio", "1 BR", "2 BR", "3 BR", "4 BR", "5 BR+",
+    "Apartment", "Villa", "Townhouse", "Penthouse",
+    "Office", "Shop", "Retail", "Warehouse", "Plot", "Land", "Commercial"
+]
+
+
+def property_menu(user_id):
+    return kb([
+        ["Studio", "1 BR", "2 BR"],
+        ["3 BR", "4 BR", "5 BR+"],
+        ["Apartment", "Penthouse"],
+        ["Villa", "Townhouse"],
+        ["Office", "Shop"],
+        ["Retail", "Warehouse"],
+        ["Plot", "Land", "Commercial"],
+        [tr(user_id, "skip")],
+        [tr(user_id, "back"), tr(user_id, "main")]
+    ])
+
+
+def report_menu(user_id):
+    return kb([
+        ["💼 Экономическое заключение 360°"],
+        [tr(user_id, "full_report")],
+        [tr(user_id, "period_compare")],
+        [tr(user_id, "last_deals")],
+        [tr(user_id, "undervalued")],
+        [tr(user_id, "back"), tr(user_id, "main")]
+    ])
+
+
+def property_condition(prop):
+    if not prop:
+        return "", []
+    p = (prop or "").lower().strip()
+    all_text = "LOWER(COALESCE(rooms_en::text,'') || ' ' || COALESCE(property_type_en::text,'') || ' ' || COALESCE(property_sub_type_en::text,'') || ' ' || COALESCE(search_text::text,''))"
+    if p == "studio":
+        return f"AND ({all_text} LIKE %s)", ["%studio%"]
+    if p in ["1 br", "2 br", "3 br", "4 br"]:
+        n = p.split()[0]
+        words = {"1": "one", "2": "two", "3": "three", "4": "four"}.get(n, n)
+        return f"""
+        AND (
+            COALESCE(rooms_en::text, '') = %s
+            OR {all_text} LIKE %s
+            OR {all_text} LIKE %s
+            OR {all_text} LIKE %s
+            OR {all_text} LIKE %s
+            OR {all_text} LIKE %s
+        )
+        """, [n, f"%{n} b/r%", f"%{n} br%", f"%{n} bedroom%", f"%bedroom {n}%", f"%{words} bedroom%"]
+    if p == "5 br+":
+        return f"AND ({all_text} LIKE %s OR {all_text} LIKE %s OR {all_text} LIKE %s OR {all_text} LIKE %s OR {all_text} LIKE %s)", ["%5 br%", "%6 br%", "%7 br%", "%8 br%", "%9 br%"]
+    if p == "apartment":
+        return f"AND ({all_text} LIKE %s OR {all_text} LIKE %s OR {all_text} LIKE %s)", ["%apartment%", "%flat%", "%unit%"]
+    if p == "villa":
+        return f"AND ({all_text} LIKE %s)", ["%villa%"]
+    if p == "townhouse":
+        return f"AND ({all_text} LIKE %s OR {all_text} LIKE %s)", ["%townhouse%", "%town house%"]
+    if p == "penthouse":
+        return f"AND ({all_text} LIKE %s)", ["%penthouse%"]
+    if p in ["office", "shop", "retail", "warehouse"]:
+        return f"AND ({all_text} LIKE %s)", [f"%{p}%"]
+    if p in ["plot", "land"]:
+        return f"AND ({all_text} LIKE %s OR {all_text} LIKE %s)", ["%plot%", "%land%"]
+    if p == "commercial":
+        return f"AND ({all_text} LIKE %s OR {all_text} LIKE %s OR {all_text} LIKE %s OR {all_text} LIKE %s)", ["%office%", "%shop%", "%retail%", "%commercial%"]
+    return f"AND ({all_text} LIKE %s)", [f"%{p}%"]
+
+
+def _v61_float(v):
+    try:
+        if v is None:
+            return None
+        return float(v)
+    except Exception:
+        return None
+
+
+def _v61_int(v):
+    try:
+        return int(v or 0)
+    except Exception:
+        return 0
+
+
+def _v61_money(v):
+    return format_money(v) if v is not None else "нет данных"
+
+
+def _v61_pct(v):
+    return format_pct(v) if v is not None else "нет данных"
+
+
+def _v61_ratio(n, d):
+    n = _v61_float(n); d = _v61_float(d)
+    if n is None or d in [None, 0]:
+        return None
+    return n / d
+
+
+def _v61_yield_pct(annual_rent, sale_price):
+    r = _v61_ratio(annual_rent, sale_price)
+    return r * 100 if r is not None else None
+
+
+def _v61_growth_pct(current, previous):
+    return pct_change(current, previous)
+
+
+def _v61_payback_years(yield_pct):
+    y = _v61_float(yield_pct)
+    if not y or y <= 0:
+        return None
+    return 100 / y
+
+
+def _v61_risk_label(deals, yield_pct, growth_pct):
+    deals = _v61_int(deals)
+    y = _v61_float(yield_pct) or 0
+    g = _v61_float(growth_pct) or 0
+    score = 0
+    if deals >= 50: score += 35
+    elif deals >= 20: score += 25
+    elif deals >= 8: score += 15
+    else: score += 5
+    if y >= 7: score += 35
+    elif y >= 5.5: score += 25
+    elif y >= 4: score += 15
+    else: score += 5
+    if g > 8: score += 20
+    elif g > 2: score += 15
+    elif g > -3: score += 8
+    else: score += 3
+    if score >= 75:
+        return "🟢 сильный инвестиционный профиль"
+    if score >= 50:
+        return "🟡 нормальный профиль, нужна проверка цены входа"
+    return "🔴 слабая/узкая выборка, вход только с дисконтом"
+
+
+def _v61_get_stats_safe(scope, name, prop, period, deal_type):
+    try:
+        row = get_stats(scope, name, prop, period, deal_type)
+        return row if row and _v61_int(row.get("deals")) > 0 else None
+    except Exception as e:
+        print("V61_GET_STATS_SAFE_ERROR:", repr(e))
+        return None
+
+
+def _v61_get_comparison_safe(scope, name, prop, period, deal_type):
+    try:
+        comp = get_comparison(scope, name, prop, period, deal_type)
+        if comp and comp[0] and comp[1]:
+            return comp
+    except Exception as e:
+        print("V61_GET_COMPARISON_SAFE_ERROR:", repr(e))
+    return None
+
+
+def _v61_get_sale_rent_pack(scope, name, prop=None, period=None):
+    sale = _v61_get_stats_safe(scope, name, prop, period, "🏠 Продажа")
+    rent = _v61_get_stats_safe(scope, name, prop, period, "🔑 Аренда")
+    # Если по аренде с точным prop мало данных — расширяем только prop, но не меняем scope/name.
+    rent_broad = rent or _v61_get_stats_safe(scope, name, None, period, "🔑 Аренда")
+    sale_broad = sale or _v61_get_stats_safe(scope, name, None, period, "🏠 Продажа")
+    comp12 = _v61_get_comparison_safe(scope, name, prop, "12", "🏠 Продажа")
+    comp36 = _v61_get_comparison_safe(scope, name, prop, "36", "🏠 Продажа")
+    return {"sale": sale, "rent": rent, "sale_broad": sale_broad, "rent_broad": rent_broad, "comp12": comp12, "comp36": comp36}
+
+
+def _v61_format_horizon(avg_price, annual_rent, growth_pct):
+    p = _v61_float(avg_price)
+    r = _v61_float(annual_rent)
+    g = (_v61_float(growth_pct) or 0) / 100
+    if not p:
+        return "нет данных для расчёта горизонта"
+    lines = []
+    for years in [1, 3, 6]:
+        future_price = p * ((1 + g) ** years) if g else p
+        resale_profit = future_price - p
+        rent_income_lt = (r or 0) * years
+        # Short-term модель: не DLD STR, а оценка от долгосрочной аренды.
+        str_gross = (r or 0) * 1.35 * years
+        str_net = str_gross * 0.70
+        total_lt = resale_profit + rent_income_lt
+        total_str = resale_profit + str_net
+        lines.append(
+            f"• <b>{years} г.</b>: resale {format_money(future_price)} | "
+            f"прибыль от цены {format_money(resale_profit)} | "
+            f"LT rent {format_money(rent_income_lt)} | STR net model {format_money(str_net)} | "
+            f"итого LT {format_money(total_lt)} / STR {format_money(total_str)}"
+        )
+    return "\n".join(lines)
+
+
+def _v61_unit_type_ranking(scope, name, period="36"):
+    candidates = ["Studio", "1 BR", "2 BR", "3 BR", "Apartment", "Villa", "Townhouse", "Office", "Shop", "Plot"]
+    rows = []
+    for prop in candidates:
+        sale = _v61_get_stats_safe(scope, name, prop, period, "🏠 Продажа")
+        if not sale:
+            continue
+        rent = _v61_get_stats_safe(scope, name, prop, period, "🔑 Аренда")
+        y = _v61_yield_pct(rent.get("avg_price") if rent else None, sale.get("avg_price"))
+        deals = _v61_int(sale.get("deals")) + _v61_int(rent.get("deals") if rent else 0)
+        score = deals * 0.25 + (y or 0) * 10
+        rows.append({"prop": prop, "sale": sale, "rent": rent, "yield": y, "deals": deals, "score": score})
+    rows.sort(key=lambda x: x["score"], reverse=True)
+    return rows[:5]
+
+
+def _v61_best_buy_text(scope, name, current_prop=None, period="36"):
+    ranked = _v61_unit_type_ranking(scope, name, period)
+    if not ranked:
+        return "Данных по альтернативным форматам мало — сравнение форматов лучше делать после расширения периода или выбора района."
+    text = "🏆 <b>Что выгоднее покупать по DLD:</b>\n"
+    for i, r in enumerate(ranked, 1):
+        sale = r["sale"]; rent = r.get("rent")
+        text += (
+            f"{i}. <b>{r['prop']}</b> — продажа {format_money(sale.get('avg_price'))}, "
+            f"аренда {format_money(rent.get('avg_price') if rent else None)}, "
+            f"yield {_v61_pct(r.get('yield'))}, сделок {format_int(r.get('deals'))}\n"
+        )
+    best = ranked[0]
+    text += (
+        f"\n✅ <b>Лучший формат:</b> {best['prop']}. "
+        f"Причина: лучший баланс ликвидности и арендной доходности в текущей DLD-выборке."
+    )
+    return text
+
+
+def _v61_professional_conclusion(scope, name, prop=None, period=None, deal_type=None):
+    period = period or "36"
+    pack = _v61_get_sale_rent_pack(scope, name, prop, period)
+    sale = pack["sale"] or pack["sale_broad"]
+    rent = pack["rent"] or pack["rent_broad"]
+    if not sale and not rent:
+        return "❌ Недостаточно DLD данных для профессионального экономического заключения. Расширьте период или выберите район вместо здания."
+
+    title_name = name or "Dubai"
+    sale_avg = sale.get("avg_price") if sale else None
+    sale_min = sale.get("min_price") if sale else None
+    sale_max = sale.get("max_price") if sale else None
+    sale_deals = _v61_int(sale.get("deals") if sale else 0)
+    sale_meter = sale.get("avg_meter") if sale else None
+    rent_avg = rent.get("avg_price") if rent else None
+    rent_deals = _v61_int(rent.get("deals") if rent else 0)
+    rent_meter = rent.get("avg_meter") if rent else None
+    gross_yield = _v61_yield_pct(rent_avg, sale_avg)
+    net_yield = gross_yield * 0.78 if gross_yield is not None else None
+    payback = _v61_payback_years(net_yield)
+
+    growth12 = None
+    if pack.get("comp12"):
+        c, pr = pack["comp12"]
+        growth12 = _v61_growth_pct(c.get("avg_price"), pr.get("avg_price"))
+    growth36 = None
+    if pack.get("comp36"):
+        c, pr = pack["comp36"]
+        growth36 = _v61_growth_pct(c.get("avg_price"), pr.get("avg_price"))
+
+    entry_good = sale_avg * 0.95 if sale_avg else None
+    entry_strong = sale_avg * 0.90 if sale_avg else None
+    overpriced = sale_avg * 1.08 if sale_avg else None
+    risk = _v61_risk_label(sale_deals + rent_deals, gross_yield, growth12)
+
+    text = (
+        f"💼 <b>Экономическое заключение 360°</b>\n"
+        f"📍 Объект анализа: <b>{title_name}</b>\n"
+        f"🏠 Формат: <b>{prop or 'все релевантные типы'}</b>\n"
+        f"📅 Период DLD: <b>{period_label(period)}</b>\n\n"
+        f"<b>1) Покупка / цена входа</b>\n"
+        f"📊 Сделок продажи: <b>{format_int(sale_deals)}</b>\n"
+        f"💰 Средняя цена покупки: <b>{_v61_money(sale_avg)}</b>\n"
+        f"🔻 Нижняя граница сделок: <b>{_v61_money(sale_min)}</b>\n"
+        f"🔺 Верхняя граница сделок: <b>{_v61_money(sale_max)}</b>\n"
+        f"📐 Средняя цена за м²/sqft по данным таблицы: <b>{_v61_money(sale_meter)}</b>\n\n"
+        f"✅ <b>Сильная точка входа:</b> до <b>{_v61_money(entry_strong)}</b>\n"
+        f"🟡 <b>Нормальная рыночная покупка:</b> до <b>{_v61_money(entry_good)}</b>\n"
+        f"🔴 <b>Дорого без особой причины:</b> выше <b>{_v61_money(overpriced)}</b>\n\n"
+        f"<b>2) Арендная доходность</b>\n"
+        f"🔑 Сделок аренды: <b>{format_int(rent_deals)}</b>\n"
+        f"💵 Средняя долгосрочная аренда/год: <b>{_v61_money(rent_avg)}</b>\n"
+        f"📐 Аренда за м²/sqft: <b>{_v61_money(rent_meter)}</b>\n"
+        f"📈 Gross yield: <b>{_v61_pct(gross_yield)}</b>\n"
+        f"🧾 Net yield модель после расходов 22%: <b>{_v61_pct(net_yield)}</b>\n"
+        f"⏳ Окупаемость по net yield: <b>{f'{payback:.1f} лет' if payback else 'нет данных'}</b>\n\n"
+    )
+
+    str_gross = rent_avg * 1.35 if rent_avg else None
+    str_net = str_gross * 0.70 if str_gross else None
+    text += (
+        f"<b>3) Long-term vs Short-term</b>\n"
+        f"🏘 Long-term ориентир: <b>{_v61_money(rent_avg)}</b> / год\n"
+        f"🏨 Short-term gross model: <b>{_v61_money(str_gross)}</b> / год\n"
+        f"🏨 Short-term net model после occupancy/fees/management: <b>{_v61_money(str_net)}</b> / год\n"
+    )
+    if str_net and rent_avg:
+        diff = ((str_net - rent_avg) / rent_avg) * 100
+        text += f"📌 STR premium к долгосрочной аренде: <b>{format_pct(diff)}</b>\n"
+    text += "⚠️ STR модель рассчитана от DLD long-term rent, без внешних Airbnb данных.\n\n"
+
+    text += (
+        f"<b>4) Динамика рынка</b>\n"
+        f"📈 Изменение средней цены 12м/пред.12м: <b>{_v61_pct(growth12)}</b>\n"
+        f"📈 Изменение средней цены 36м/пред.36м: <b>{_v61_pct(growth36)}</b>\n"
+        f"🧠 Профиль риска: <b>{risk}</b>\n\n"
+        f"<b>5) Горизонт доходности</b>\n"
+        f"{_v61_format_horizon(sale_avg, rent_avg, growth12)}\n\n"
+        f"<b>6) Выбор формата</b>\n"
+        f"{_v61_best_buy_text(scope, name, prop, period)}\n\n"
+    )
+
+    # Финальный вывод.
+    if gross_yield and gross_yield >= 7 and (growth12 or 0) >= 0:
+        verdict = "покупка выглядит сильной: есть доходность, ликвидность и положительная/нейтральная динамика."
+    elif gross_yield and gross_yield >= 5.5:
+        verdict = "покупка возможна, но входить желательно с дисконтом к средней DLD цене и проверкой аренды по конкретному юниту."
+    elif (growth12 or 0) > 8:
+        verdict = "объект больше подходит под resale/capital growth, чем под чистую аренду."
+    else:
+        verdict = "покупка требует осторожности: нужна цена ниже рынка или более ликвидный формат/здание в этом районе."
+    text += f"🎯 <b>Итог:</b> {verdict}"
+    return text
+
+
+def show_unit_summary(title, row, prop=None, period=None):
+    # Используем name из title как fallback, но лучше берём из текста title.
+    name = re.sub(r"<[^>]+>", "", str(title or "")).replace("🏢", "").replace("🏙", "").strip()
+    scope = "area" if "🏙" in str(title) else "building"
+    return _v61_professional_conclusion(scope, name, prop, period, None)
+
+
+def show_comparison(title, current, previous, period=None, deal_type=None):
+    if not current or not previous:
+        return "❌ Недостаточно данных для сравнения."
+    deals_change = pct_change(current.get("deals"), previous.get("deals"))
+    price_change = pct_change(current.get("avg_price"), previous.get("avg_price"))
+    meter_change = pct_change(current.get("avg_meter"), previous.get("avg_meter"))
+    value_name = "Средняя аренда" if is_rent_deal_type(deal_type) or is_rent_deal(deal_type) else "Средняя цена"
+    liquidity = "усилилась" if (deals_change or 0) > 10 else ("ослабла" if (deals_change or 0) < -10 else "стабильна")
+    price_trend = "рост" if (price_change or 0) > 3 else ("снижение" if (price_change or 0) < -3 else "боковое движение")
+    if (price_change or 0) > 5 and (deals_change or 0) > 0:
+        strategy = "держать/покупать только ниже рынка: рынок подтверждает рост и ликвидность."
+    elif (price_change or 0) < -5 and (deals_change or 0) < 0:
+        strategy = "ждать или покупать только с сильным дисконтом: и цена, и активность просели."
+    elif (price_change or 0) < 0 and (deals_change or 0) > 0:
+        strategy = "может быть окно входа: активность есть, цена ниже прошлого периода."
+    else:
+        strategy = "решение принимать по конкретному юниту, этажу, виду, сервис-чарджу и цене входа."
+    return (
+        f"📈 <b>Профессиональное сравнение периодов</b>\n"
+        f"{title}\n\n"
+        f"📅 Период: <b>{period_label(period)}</b> против предыдущего аналогичного периода\n\n"
+        f"<b>Текущий период</b>\n"
+        f"📊 Сделок: <b>{format_int(current.get('deals'))}</b>\n"
+        f"💰 {value_name}: <b>{format_money(current.get('avg_price'))}</b>\n"
+        f"📐 Цена за м²/sqft: <b>{format_money(current.get('avg_meter'))}</b>\n\n"
+        f"<b>Предыдущий период</b>\n"
+        f"📊 Сделок: <b>{format_int(previous.get('deals'))}</b>\n"
+        f"💰 {value_name}: <b>{format_money(previous.get('avg_price'))}</b>\n"
+        f"📐 Цена за м²/sqft: <b>{format_money(previous.get('avg_meter'))}</b>\n\n"
+        f"<b>Динамика</b>\n"
+        f"📊 Ликвидность / количество сделок: <b>{format_pct(deals_change)}</b> → {liquidity}\n"
+        f"💰 Средняя цена: <b>{format_pct(price_change)}</b> → {price_trend}\n"
+        f"📐 Цена за м²/sqft: <b>{format_pct(meter_change)}</b>\n\n"
+        f"🧠 <b>Экономический вывод:</b> {strategy}"
+    )
+
+
+def show_stats(title, row, prop=None, period=None, deal_type=None):
+    basic = "❌ Нет данных по выбранным фильтрам." if not row or not row.get("deals") else (
+        f"{title}\n\n"
+        f"Фильтры:\n"
+        f"📊 Сделка: <b>{deal_type or 'все'}</b>\n"
+        f"🏠 Тип/комнаты: <b>{prop or 'все'}</b>\n"
+        f"📅 Период: <b>{period_label(period)}</b>\n\n"
+        f"📊 Сделок: <b>{format_int(row.get('deals'))}</b>\n"
+        f"🏢 Зданий: <b>{format_int(row.get('buildings'))}</b>\n"
+        f"📍 Районов: <b>{format_int(row.get('areas'))}</b>\n"
+        f"💰 {'Средняя аренда' if is_rent_deal_type(deal_type) or is_rent_deal(deal_type) else 'Средняя цена'}: <b>{format_money(row.get('avg_price'))}</b>\n"
+        f"🔻 Минимум: <b>{format_money(row.get('min_price'))}</b>\n"
+        f"🔺 Максимум: <b>{format_money(row.get('max_price'))}</b>\n"
+        f"📐 Цена за м²/sqft: <b>{format_money(row.get('avg_meter'))}</b>\n"
+        f"🗓 Первая сделка: <b>{row.get('first_deal')}</b>\n"
+        f"🗓 Последняя сделка: <b>{row.get('last_deal')}</b>\n"
+    )
+    return basic
+
+print(f"Loaded professional economic intelligence engine {ECONOMIC_ENGINE_VERSION}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
