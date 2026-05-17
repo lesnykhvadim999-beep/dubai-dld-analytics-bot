@@ -2,1515 +2,501 @@ import os
 import time
 import math
 import logging
-from datetime import datetime, UTC, timedelta
-from typing import Dict, List, Optional, Tuple
+from datetime import datetime, UTC
+from typing import Dict, List, Optional, Tuple, Any
 
 import psycopg2
 from psycopg2.extras import RealDictCursor, execute_values
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-)
-
-LIVE_DATABASE_URL = os.getenv("LIVE_DATABASE_URL")
-ARCHIVE_DATABASE_URL = os.getenv("ARCHIVE_DATABASE_URL")
-INTELLIGENCE_DATABASE_URL = os.getenv("INTELLIGENCE_DATABASE_URL")
-
+LIVE_DATABASE_URL = os.getenv("LIVE_DATABASE_URL") or os.getenv("DATABASE_URL")
+ARCHIVE_DATABASE_URL = os.getenv("ARCHIVE_DATABASE_URL") or os.getenv("ARCHIVE_DB_URL") or os.getenv("DATABASE_URL")
+INTELLIGENCE_DATABASE_URL = os.getenv("INTELLIGENCE_DATABASE_URL") or os.getenv("INTELLIGENCE_DB_URL") or os.getenv("DATABASE_URL")
 CYCLE_SECONDS = int(os.getenv("INTELLIGENCE_CYCLE_SECONDS", "21600"))
+STATEMENT_TIMEOUT_MS = int(os.getenv("INTELLIGENCE_STATEMENT_TIMEOUT_MS", "0"))
 
-SALE_TABLES = [
-    ("archive", "public", "dld_sale_archive"),
-    ("live", "public", "dld_transactions_full"),
-]
-
-RENT_TABLES = [
-    ("archive", "public", "dld_rent_archive"),
-    ("live", "public", "dld_rents_full"),
-]
-
-PERIOD_WINDOWS = {
-    "30d": 30,
-    "90d": 90,
-    "180d": 180,
-    "365d": 365,
-}
+SALE_SOURCES = [("archive", ARCHIVE_DATABASE_URL, "public", "dld_sale_archive"), ("live", LIVE_DATABASE_URL, "public", "dld_transactions_full")]
+RENT_SOURCES = [("archive", ARCHIVE_DATABASE_URL, "public", "dld_rent_archive"), ("live", LIVE_DATABASE_URL, "public", "dld_rents_full")]
+PERIODS = {"30d": 30, "90d": 90, "180d": 180, "365d": 365}
 
 COLUMN_CANDIDATES = {
-    "date": [
-        "transaction_date",
-        "instance_date",
-        "procedure_date",
-        "date",
-        "registration_date",
-        "contract_start_date",
-        "contract_end_date",
-        "ejari_contract_start_date",
-    ],
-    "area": [
-        "area_name_en",
-        "area_en",
-        "area_name",
-        "area",
-        "master_project_en",
-        "master_project",
-        "project_area",
-        "community",
-    ],
-    "building": [
-        "building_name_en",
-        "building_en",
-        "building_name",
-        "building",
-        "project_name_en",
-        "project_en",
-        "project_name",
-        "project",
-        "master_project_en",
-        "property_name",
-    ],
-    "project": [
-        "project_name_en",
-        "project_en",
-        "project_name",
-        "project",
-        "master_project_en",
-        "master_project",
-    ],
-    "property_type": [
-        "property_type_en",
-        "prop_type_en",
-        "property_type",
-        "property_usage_en",
-        "property_usage",
-        "usage_en",
-    ],
-    "unit_type": [
-        "property_sub_type_en",
-        "prop_sub_type_en",
-        "property_sub_type",
-        "unit_type_en",
-        "unit_type",
-        "property_type_en",
-        "prop_type_en",
-        "property_type",
-    ],
-    "rooms": [
-        "rooms_en",
-        "rooms",
-        "rooms_ar",
-        "bedrooms",
-        "bedroom",
-        "beds",
-        "room",
-    ],
-    "unit": [
-        "unit_number",
-        "unit_no",
-        "unit",
-        "property_number",
-        "property_no",
-        "property_id",
-        "property_number_en",
-        "unit_number_en",
-    ],
-    "size_sqm": [
-        "actual_area",
-        "procedure_area",
-        "area_sqm",
-        "property_size_sqm",
-        "size_sqm",
-        "property_area",
-        "area",
-    ],
-    "size_sqft": [
-        "area_sqft",
-        "property_size_sqft",
-        "size_sqft",
-        "built_up_area_sqft",
-        "bua_sqft",
-    ],
-    "price": [
-        "actual_worth",
-        "amount",
-        "price",
-        "sale_price",
-        "value",
-        "transaction_amount",
-        "procedure_value",
-        "trans_value",
-    ],
-    "rent": [
-        "annual_amount",
-        "contract_amount",
-        "rent_value",
-        "rent_amount",
-        "amount",
-        "price",
-        "annual_rent",
-        "contract_value",
-    ],
-    "procedure": [
-        "procedure_name_en",
-        "procedure_name",
-        "procedure",
-        "transaction_type_en",
-        "transaction_type",
-        "reg_type_en",
-    ],
-    "transaction_id": [
-        "transaction_id",
-        "transaction_number",
-        "contract_id",
-        "id",
-    ],
-    "parking": [
-        "has_parking",
-        "parking",
-    ],
-    "freehold": [
-        "is_free_hold",
-        "freehold",
-    ],
-    "offplan": [
-        "is_offplan",
-        "offplan",
-    ],
-    "nearest_metro": [
-        "nearest_metro_en",
-        "nearest_metro",
-    ],
-    "nearest_mall": [
-        "nearest_mall_en",
-        "nearest_mall",
-    ],
-    "nearest_landmark": [
-        "nearest_landmark_en",
-        "nearest_landmark",
-    ],
+    "date": ["transaction_date", "instance_date", "procedure_date", "date", "registration_date", "contract_start_date", "contract_end_date"],
+    "area": ["area_name_en", "area_en", "area_name", "area", "master_project_en", "master_project", "community"],
+    "building": ["building_name_en", "building_en", "building_name", "building", "project_name_en", "project_en", "project_name", "project", "master_project_en"],
+    "project": ["project_name_en", "project_en", "project_name", "project", "master_project_en", "master_project"],
+    "property_type": ["property_type_en", "prop_type_en", "property_type", "property_usage_en", "property_usage", "usage_en"],
+    "unit_type": ["property_sub_type_en", "prop_sub_type_en", "property_sub_type", "unit_type_en", "unit_type", "property_type_en", "prop_type_en", "property_type"],
+    "rooms": ["rooms_en", "rooms", "bedrooms", "bedroom", "beds", "room"],
+    "size_sqm": ["actual_area", "procedure_area", "area_sqm", "property_size_sqm", "size_sqm", "property_area", "area"],
+    "size_sqft": ["area_sqft", "property_size_sqft", "size_sqft", "built_up_area_sqft", "bua_sqft"],
+    "price": ["actual_worth", "amount", "price", "sale_price", "value", "transaction_amount", "procedure_value", "trans_value"],
+    "rent": ["annual_amount", "contract_amount", "rent_value", "rent_amount", "amount", "price", "annual_rent", "contract_value"],
 }
 
 
-def require_env() -> None:
-    missing = []
-    for key, value in {
-        "LIVE_DATABASE_URL": LIVE_DATABASE_URL,
-        "ARCHIVE_DATABASE_URL": ARCHIVE_DATABASE_URL,
-        "INTELLIGENCE_DATABASE_URL": INTELLIGENCE_DATABASE_URL,
-    }.items():
-        if not value:
-            missing.append(key)
-
-    if missing:
-        raise RuntimeError(f"Missing environment variables: {', '.join(missing)}")
+def db(url: str):
+    if not url:
+        raise RuntimeError("Database URL is not set")
+    c = psycopg2.connect(url, cursor_factory=RealDictCursor)
+    c.autocommit = False
+    if STATEMENT_TIMEOUT_MS > 0:
+        with c.cursor() as cur:
+            cur.execute("SET statement_timeout = %s", (STATEMENT_TIMEOUT_MS,))
+    return c
 
 
-def connect(url: str):
-    return psycopg2.connect(url, cursor_factory=RealDictCursor)
+def q(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
 
 
-def has_table(conn, schema: str, table: str) -> bool:
+def table_exists(conn, schema: str, table: str) -> bool:
     with conn.cursor() as cur:
-        cur.execute(
-            """
+        cur.execute("""
             SELECT EXISTS (
-                SELECT 1
-                FROM information_schema.tables
-                WHERE table_schema = %s
-                  AND table_name = %s
-            ) AS exists
-            """,
-            (schema, table),
-        )
-        return bool(cur.fetchone()["exists"])
+                SELECT 1 FROM information_schema.tables
+                WHERE table_schema=%s AND table_name=%s
+            ) AS ok
+        """, (schema, table))
+        return bool(cur.fetchone()["ok"])
 
 
-def get_columns(conn, schema: str, table: str) -> List[str]:
+def columns(conn, schema: str, table: str) -> List[str]:
     with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT column_name
-            FROM information_schema.columns
-            WHERE table_schema = %s
-              AND table_name = %s
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_schema=%s AND table_name=%s
             ORDER BY ordinal_position
-            """,
-            (schema, table),
-        )
+        """, (schema, table))
         return [r["column_name"] for r in cur.fetchall()]
 
 
-def pick_col(columns: List[str], logical: str) -> Optional[str]:
-    lower_map = {c.lower(): c for c in columns}
-
-    for candidate in COLUMN_CANDIDATES.get(logical, []):
-        if candidate.lower() in lower_map:
-            return lower_map[candidate.lower()]
-
+def pick(cols: List[str], key: str) -> Optional[str]:
+    low = {c.lower(): c for c in cols}
+    for cand in COLUMN_CANDIDATES.get(key, []):
+        if cand.lower() in low:
+            return low[cand.lower()]
     return None
 
 
-def sql_expr(columns: List[str], logical: str, fallback: str = "NULL") -> str:
-    col = pick_col(columns, logical)
-    if not col:
+def clean_text_expr(cols: List[str], key: str, fallback="'Unknown'") -> str:
+    c = pick(cols, key)
+    if not c:
         return fallback
-    return f'"{col}"'
+    return f"COALESCE(NULLIF(INITCAP(TRIM({q(c)}::text)), ''), {fallback})"
 
 
-def numeric_expr(columns: List[str], logical: str, fallback: str = "NULL") -> str:
-    col = pick_col(columns, logical)
-    if not col:
-        return fallback
-
-    return (
-        f"NULLIF("
-        f"REGEXP_REPLACE(\"{col}\"::text, '[^0-9.]', '', 'g'), "
-        f"''"
-        f")::numeric"
-    )
+def amount_expr(cols: List[str], key: str) -> str:
+    c = pick(cols, key)
+    if not c:
+        return "NULL::numeric"
+    return f"NULLIF(regexp_replace(COALESCE({q(c)}::text, ''), '[^0-9.]', '', 'g'), '')::numeric"
 
 
-def date_expr(columns: List[str]) -> str:
-    col = pick_col(columns, "date")
-    if not col:
+def date_expr(cols: List[str]) -> str:
+    c = pick(cols, "date")
+    if not c:
         return "NULL::date"
+    return f"CASE WHEN NULLIF(TRIM({q(c)}::text), '') IS NULL THEN NULL::date ELSE NULLIF(TRIM({q(c)}::text), '')::date END"
 
+
+def unit_segment_expr(cols: List[str]) -> str:
+    rooms = clean_text_expr(cols, "rooms", "NULL")
+    unit_type = clean_text_expr(cols, "unit_type", "NULL")
+    raw = f"LOWER(COALESCE({rooms}, {unit_type}, 'unknown'))"
     return f"""
         CASE
-            WHEN NULLIF(TRIM("{col}"::text), '') IS NULL THEN NULL::date
-            ELSE NULLIF(TRIM("{col}"::text), '')::date
+            WHEN {raw} LIKE '%studio%' THEN 'Studio'
+            WHEN {raw} ~ '(^|[^0-9])1([^0-9]|$)' OR {raw} LIKE '%1 br%' OR {raw} LIKE '%1 bedroom%' THEN '1BR'
+            WHEN {raw} ~ '(^|[^0-9])2([^0-9]|$)' OR {raw} LIKE '%2 br%' OR {raw} LIKE '%2 bedroom%' THEN '2BR'
+            WHEN {raw} ~ '(^|[^0-9])3([^0-9]|$)' OR {raw} LIKE '%3 br%' OR {raw} LIKE '%3 bedroom%' THEN '3BR'
+            WHEN {raw} ~ '(^|[^0-9])4([^0-9]|$)' OR {raw} LIKE '%4 br%' OR {raw} LIKE '%4 bedroom%' THEN '4BR'
+            WHEN {raw} ~ '(^|[^0-9])5([^0-9]|$)' OR {raw} LIKE '%5 br%' OR {raw} LIKE '%5 bedroom%' THEN '5BR+'
+            WHEN {raw} LIKE '%penthouse%' THEN 'Penthouse'
+            ELSE 'Unknown'
         END
     """
 
 
-def text_norm_sql(expr: str) -> str:
-    return f"NULLIF(TRIM(COALESCE({expr}::text, '')), '')"
+def size_sqft_expr(cols: List[str]) -> str:
+    sqm = amount_expr(cols, "size_sqm")
+    sqft = amount_expr(cols, "size_sqft")
+    return f"CASE WHEN {sqft} IS NOT NULL AND {sqft} > 0 THEN {sqft} WHEN {sqm} IS NOT NULL AND {sqm} > 0 THEN {sqm}*10.7639 ELSE NULL::numeric END"
 
 
-def boolean_text_sql(columns: List[str], logical: str) -> str:
-    col = pick_col(columns, logical)
-    if not col:
-        return "NULL::text"
-    return f"NULLIF(TRIM(\"{col}\"::text), '')"
+def aggregate_sql(cols: List[str], schema: str, table: str, kind: str, period_days: Optional[int] = None, previous: bool = False) -> str:
+    value_key = "price" if kind == "sale" else "rent"
+    value = amount_expr(cols, value_key)
+    sqft = size_sqft_expr(cols)
+    date = date_expr(cols)
+    area = clean_text_expr(cols, "area")
+    building = clean_text_expr(cols, "building")
+    prop = clean_text_expr(cols, "property_type")
+    unit = unit_segment_expr(cols)
 
+    date_filter = ""
+    if period_days:
+        if previous:
+            date_filter = f"AND {date} >= CURRENT_DATE - INTERVAL '{period_days*2} days' AND {date} < CURRENT_DATE - INTERVAL '{period_days} days'"
+        else:
+            date_filter = f"AND {date} >= CURRENT_DATE - INTERVAL '{period_days} days'"
 
-def normalized_source_sql(
-    conn,
-    source_name: str,
-    schema: str,
-    table: str,
-    deal_type: str,
-) -> Optional[str]:
-    if not has_table(conn, schema, table):
-        logging.warning("Table missing: %s.%s", schema, table)
-        return None
-
-    columns = get_columns(conn, schema, table)
-    amount_logical = "price" if deal_type == "sale" else "rent"
-
-    size_sqm_expr = numeric_expr(columns, "size_sqm")
-    size_sqft_expr = numeric_expr(columns, "size_sqft")
-    amount_expr = numeric_expr(columns, amount_logical)
-
-    size_sqft_final = f"""
-        CASE
-            WHEN {size_sqft_expr} IS NOT NULL AND {size_sqft_expr} > 0 THEN {size_sqft_expr}
-            WHEN {size_sqm_expr} IS NOT NULL AND {size_sqm_expr} > 0 THEN {size_sqm_expr} * 10.7639
-            ELSE NULL
-        END
-    """
-
+    psf = f"CASE WHEN ({sqft}) IS NOT NULL AND ({sqft}) > 0 THEN ({value})/({sqft}) ELSE NULL::numeric END"
     return f"""
         SELECT
-            '{source_name}'::text AS source_db,
-            '{deal_type}'::text AS deal_type,
-            {date_expr(columns)} AS deal_date,
-            {text_norm_sql(sql_expr(columns, "area", "NULL"))} AS area_name,
-            {text_norm_sql(sql_expr(columns, "building", "NULL"))} AS building_name,
-            {text_norm_sql(sql_expr(columns, "project", "NULL"))} AS project_name,
-            {text_norm_sql(sql_expr(columns, "property_type", "NULL"))} AS property_type,
-            {text_norm_sql(sql_expr(columns, "unit_type", "NULL"))} AS unit_type,
-            {text_norm_sql(sql_expr(columns, "rooms", "NULL"))} AS rooms,
-            {text_norm_sql(sql_expr(columns, "unit", "NULL"))} AS unit_number,
-            ({size_sqm_expr})::numeric AS size_sqm,
-            ({size_sqft_final})::numeric AS size_sqft,
-            ({amount_expr})::numeric AS amount,
-            {text_norm_sql(sql_expr(columns, "procedure", "NULL"))} AS procedure_name,
-            {text_norm_sql(sql_expr(columns, "transaction_id", "NULL"))} AS source_transaction_id,
-            {boolean_text_sql(columns, "parking")} AS parking,
-            {boolean_text_sql(columns, "freehold")} AS freehold,
-            {boolean_text_sql(columns, "offplan")} AS offplan,
-            {text_norm_sql(sql_expr(columns, "nearest_metro", "NULL"))} AS nearest_metro,
-            {text_norm_sql(sql_expr(columns, "nearest_mall", "NULL"))} AS nearest_mall,
-            {text_norm_sql(sql_expr(columns, "nearest_landmark", "NULL"))} AS nearest_landmark
-        FROM "{schema}"."{table}"
-        WHERE ({amount_expr}) IS NOT NULL
-          AND ({amount_expr}) > 0
+            {area} AS area_name,
+            {building} AS building_name,
+            {prop} AS property_type,
+            {unit} AS unit_segment,
+            COUNT(*)::bigint AS deals_count,
+            AVG({value})::numeric AS avg_amount,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY {value})::numeric AS median_amount,
+            AVG({psf})::numeric AS avg_psf,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY {psf})::numeric AS median_psf,
+            MIN({date}) AS first_date,
+            MAX({date}) AS last_date
+        FROM {q(schema)}.{q(table)}
+        WHERE {value} IS NOT NULL AND {value} > 0
+          AND {area} IS NOT NULL
+          AND {building} IS NOT NULL
+          {date_filter}
+        GROUP BY 1,2,3,4
     """
 
 
-def fetch_normalized_deals(
-    conn,
-    tables: List[Tuple[str, str, str]],
-    deal_type: str,
-) -> List[dict]:
-    parts = []
-
-    for source_name, schema, table in tables:
-        part = normalized_source_sql(conn, source_name, schema, table, deal_type)
-        if part:
-            parts.append(part)
-
-    if not parts:
+def source_aggregate(source: Tuple[str, str, str, str], kind: str, period_days: Optional[int] = None, previous: bool = False) -> List[dict]:
+    source_name, url, schema, table = source
+    if not url:
+        return []
+    try:
+        with db(url) as c:
+            if not table_exists(c, schema, table):
+                logging.warning("Source table not found: %s.%s", schema, table)
+                return []
+            cols = columns(c, schema, table)
+            sql = aggregate_sql(cols, schema, table, kind, period_days, previous)
+            logging.info("Aggregating %s %s.%s%s%s...", kind, schema, table, f" {period_days}d" if period_days else "", " previous" if previous else "")
+            with c.cursor() as cur:
+                cur.execute(sql)
+                rows = cur.fetchall()
+                logging.info("Aggregated rows from %s.%s: %s", schema, table, len(rows))
+                return rows
+    except Exception:
+        logging.exception("Failed source aggregate %s %s.%s", kind, schema, table)
         return []
 
-    sql = " UNION ALL ".join(parts)
 
-    with conn.cursor() as cur:
-        cur.execute(sql)
-        return cur.fetchall()
-
-
-def safe_float(value) -> Optional[float]:
-    try:
-        if value is None:
-            return None
-        value = float(value)
-        if math.isnan(value) or math.isinf(value):
-            return None
-        return value
-    except Exception:
-        return None
-
-
-def median(values: List[Optional[float]]) -> Optional[float]:
-    clean = sorted([v for v in values if v is not None and v > 0])
-    if not clean:
-        return None
-    n = len(clean)
-    mid = n // 2
-    if n % 2:
-        return clean[mid]
-    return (clean[mid - 1] + clean[mid]) / 2
-
-
-def avg(values: List[Optional[float]]) -> Optional[float]:
-    clean = [v for v in values if v is not None and v > 0]
-    if not clean:
-        return None
-    return sum(clean) / len(clean)
-
-
-def pct_change(new: Optional[float], old: Optional[float]) -> Optional[float]:
-    if new is None or old is None or old == 0:
-        return None
-    return (new - old) / old * 100
-
-
-def score_0_100(value: Optional[float], low: float, high: float) -> Optional[float]:
-    if value is None:
-        return None
-    if high == low:
-        return 50
-    return max(0, min(100, (value - low) / (high - low) * 100))
-
-
-def normalize_text(value: Optional[str]) -> str:
-    if not value:
-        return "Unknown"
-
-    clean = " ".join(str(value).strip().split())
-
-    if not clean or clean in {"-", "--", "N/A", "n/a", "None", "none", "null", "NULL"}:
-        return "Unknown"
-
-    return clean
-
-
-def normalize_property_type(value: Optional[str]) -> str:
-    v = normalize_text(value).lower()
-
-    if any(x in v for x in ["villa"]):
-        return "Villa"
-    if any(x in v for x in ["townhouse", "town house"]):
-        return "Townhouse"
-    if any(x in v for x in ["office", "shop", "retail", "commercial", "warehouse"]):
-        return "Commercial"
-    if any(x in v for x in ["plot", "land"]):
-        return "Plot"
-    if any(x in v for x in ["apartment", "flat", "unit", "residential"]):
-        return "Apartment"
-
-    return normalize_text(value)
-
-
-def normalize_segment(rooms: Optional[str], unit_type: Optional[str], property_type: Optional[str]) -> str:
-    raw = f"{rooms or ''} {unit_type or ''} {property_type or ''}".lower().strip()
-
-    if "studio" in raw:
-        return "Studio"
-
-    for n in range(1, 11):
-        variants = [
-            f"{n} br",
-            f"{n}br",
-            f"{n} bedroom",
-            f"{n} bedrooms",
-            f"{n}-bed",
-            f"{n} bed",
-            f"{n} beds",
-        ]
-        if any(v in raw for v in variants):
-            return f"{n}BR"
-        if raw == str(n):
-            return f"{n}BR"
-
-    if "penthouse" in raw:
-        return "Penthouse"
-    if "office" in raw:
-        return "Office"
-    if "shop" in raw or "retail" in raw:
-        return "Retail"
-    if "plot" in raw or "land" in raw:
-        return "Plot"
-
-    return normalize_text(rooms or unit_type or property_type)
-
-
-def key_for(deal: dict) -> Tuple[str, str, str, str]:
-    property_type = normalize_property_type(
-        deal.get("property_type")
-        or deal.get("unit_type")
-        or deal.get("project_name")
-    )
-
-    return (
-        normalize_text(deal.get("area_name")),
-        normalize_text(deal.get("building_name")),
-        property_type,
-        normalize_segment(deal.get("rooms"), deal.get("unit_type"), property_type),
-    )
-
-
-def area_key_for(deal: dict) -> Tuple[str, str, str]:
-    area, _building, property_type, segment = key_for(deal)
-    return area, property_type, segment
-
-
-def create_tables(conn) -> None:
-    with conn.cursor() as cur:
-        cur.execute("DROP TABLE IF EXISTS investment_recommendations")
-        cur.execute("DROP TABLE IF EXISTS market_period_summary")
-        cur.execute("DROP TABLE IF EXISTS area_period_comparison")
-        cur.execute("DROP TABLE IF EXISTS building_period_comparison")
-        cur.execute("DROP TABLE IF EXISTS area_roi_summary")
-        cur.execute("DROP TABLE IF EXISTS building_roi_summary")
-        cur.execute("DROP TABLE IF EXISTS intelligence_status")
-
-        cur.execute("""
-            CREATE TABLE building_roi_summary (
-                id BIGSERIAL PRIMARY KEY,
-                calculated_at TIMESTAMP NOT NULL,
-                area_name TEXT,
-                building_name TEXT,
-                property_type TEXT,
-                unit_segment TEXT,
-                sales_count INTEGER,
-                rents_count INTEGER,
-                avg_sale_price NUMERIC,
-                median_sale_price NUMERIC,
-                avg_sale_psf NUMERIC,
-                median_sale_psf NUMERIC,
-                avg_rent NUMERIC,
-                median_rent NUMERIC,
-                avg_rent_psf NUMERIC,
-                median_rent_psf NUMERIC,
-                gross_roi_percent NUMERIC,
-                liquidity_score NUMERIC,
-                yield_score NUMERIC,
-                price_score NUMERIC,
-                investment_score NUMERIC,
-                price_position TEXT,
-                recommendation TEXT,
-                economic_conclusion TEXT
-            )
-        """)
-
-        cur.execute("""
-            CREATE TABLE area_roi_summary (
-                id BIGSERIAL PRIMARY KEY,
-                calculated_at TIMESTAMP NOT NULL,
-                area_name TEXT,
-                property_type TEXT,
-                unit_segment TEXT,
-                sales_count INTEGER,
-                rents_count INTEGER,
-                avg_sale_price NUMERIC,
-                median_sale_price NUMERIC,
-                avg_sale_psf NUMERIC,
-                median_sale_psf NUMERIC,
-                avg_rent NUMERIC,
-                median_rent NUMERIC,
-                gross_roi_percent NUMERIC,
-                liquidity_score NUMERIC,
-                investment_score NUMERIC,
-                recommendation TEXT,
-                economic_conclusion TEXT
-            )
-        """)
-
-        cur.execute("""
-            CREATE TABLE building_period_comparison (
-                id BIGSERIAL PRIMARY KEY,
-                calculated_at TIMESTAMP NOT NULL,
-                period_code TEXT,
-                current_days INTEGER,
-                previous_days INTEGER,
-                area_name TEXT,
-                building_name TEXT,
-                property_type TEXT,
-                unit_segment TEXT,
-                current_sales_count INTEGER,
-                previous_sales_count INTEGER,
-                current_rents_count INTEGER,
-                previous_rents_count INTEGER,
-                current_median_sale_price NUMERIC,
-                previous_median_sale_price NUMERIC,
-                sale_price_change_percent NUMERIC,
-                current_median_sale_psf NUMERIC,
-                previous_median_sale_psf NUMERIC,
-                sale_psf_change_percent NUMERIC,
-                current_median_rent NUMERIC,
-                previous_median_rent NUMERIC,
-                rent_change_percent NUMERIC,
-                current_roi_percent NUMERIC,
-                previous_roi_percent NUMERIC,
-                roi_change_pp NUMERIC,
-                volume_change_percent NUMERIC,
-                momentum_score NUMERIC,
-                trend_label TEXT,
-                professional_conclusion TEXT
-            )
-        """)
-
-        cur.execute("""
-            CREATE TABLE area_period_comparison (
-                id BIGSERIAL PRIMARY KEY,
-                calculated_at TIMESTAMP NOT NULL,
-                period_code TEXT,
-                current_days INTEGER,
-                previous_days INTEGER,
-                area_name TEXT,
-                property_type TEXT,
-                unit_segment TEXT,
-                current_sales_count INTEGER,
-                previous_sales_count INTEGER,
-                current_rents_count INTEGER,
-                previous_rents_count INTEGER,
-                current_median_sale_price NUMERIC,
-                previous_median_sale_price NUMERIC,
-                sale_price_change_percent NUMERIC,
-                current_median_sale_psf NUMERIC,
-                previous_median_sale_psf NUMERIC,
-                sale_psf_change_percent NUMERIC,
-                current_median_rent NUMERIC,
-                previous_median_rent NUMERIC,
-                rent_change_percent NUMERIC,
-                current_roi_percent NUMERIC,
-                previous_roi_percent NUMERIC,
-                roi_change_pp NUMERIC,
-                volume_change_percent NUMERIC,
-                momentum_score NUMERIC,
-                trend_label TEXT,
-                professional_conclusion TEXT
-            )
-        """)
-
-        cur.execute("""
-            CREATE TABLE market_period_summary (
-                id BIGSERIAL PRIMARY KEY,
-                calculated_at TIMESTAMP NOT NULL,
-                period_code TEXT,
-                current_days INTEGER,
-                previous_days INTEGER,
-                property_type TEXT,
-                unit_segment TEXT,
-                current_sales_count INTEGER,
-                previous_sales_count INTEGER,
-                current_rents_count INTEGER,
-                previous_rents_count INTEGER,
-                current_median_sale_price NUMERIC,
-                previous_median_sale_price NUMERIC,
-                sale_price_change_percent NUMERIC,
-                current_median_sale_psf NUMERIC,
-                previous_median_sale_psf NUMERIC,
-                sale_psf_change_percent NUMERIC,
-                current_median_rent NUMERIC,
-                previous_median_rent NUMERIC,
-                rent_change_percent NUMERIC,
-                current_roi_percent NUMERIC,
-                previous_roi_percent NUMERIC,
-                roi_change_pp NUMERIC,
-                volume_change_percent NUMERIC,
-                market_temperature TEXT,
-                professional_conclusion TEXT
-            )
-        """)
-
-        cur.execute("""
-            CREATE TABLE investment_recommendations (
-                id BIGSERIAL PRIMARY KEY,
-                calculated_at TIMESTAMP NOT NULL,
-                area_name TEXT,
-                building_name TEXT,
-                property_type TEXT,
-                unit_segment TEXT,
-                investment_score NUMERIC,
-                gross_roi_percent NUMERIC,
-                liquidity_score NUMERIC,
-                avg_sale_price NUMERIC,
-                median_rent NUMERIC,
-                recommendation TEXT,
-                reason TEXT
-            )
-        """)
-
-        cur.execute("""
-            CREATE TABLE intelligence_status (
-                id BIGSERIAL PRIMARY KEY,
-                created_at TIMESTAMP NOT NULL,
-                live_sales_count BIGINT,
-                live_rents_count BIGINT,
-                archive_sales_count BIGINT,
-                archive_rents_count BIGINT,
-                building_summaries_count BIGINT,
-                area_summaries_count BIGINT,
-                building_period_rows_count BIGINT,
-                area_period_rows_count BIGINT,
-                market_period_rows_count BIGINT,
-                status TEXT
-            )
-        """)
-
-        cur.execute("CREATE INDEX idx_building_roi_lookup ON building_roi_summary (area_name, building_name, property_type, unit_segment)")
-        cur.execute("CREATE INDEX idx_building_roi_score ON building_roi_summary (investment_score DESC)")
-        cur.execute("CREATE INDEX idx_area_roi_lookup ON area_roi_summary (area_name, property_type, unit_segment)")
-        cur.execute("CREATE INDEX idx_building_period_lookup ON building_period_comparison (period_code, area_name, building_name, property_type, unit_segment)")
-        cur.execute("CREATE INDEX idx_building_period_momentum ON building_period_comparison (period_code, momentum_score DESC)")
-        cur.execute("CREATE INDEX idx_area_period_lookup ON area_period_comparison (period_code, area_name, property_type, unit_segment)")
-        cur.execute("CREATE INDEX idx_area_period_momentum ON area_period_comparison (period_code, momentum_score DESC)")
-        cur.execute("CREATE INDEX idx_market_period_lookup ON market_period_summary (period_code, property_type, unit_segment)")
-        cur.execute("CREATE INDEX idx_recommendations_score ON investment_recommendations (investment_score DESC)")
-
-    conn.commit()
-
-
-def economic_conclusion(
-    area: str,
-    building: str,
-    property_type: str,
-    segment: str,
-    sales_count: int,
-    rents_count: int,
-    median_sale_price: Optional[float],
-    median_sale_psf: Optional[float],
-    median_rent: Optional[float],
-    roi: Optional[float],
-    liquidity_score: Optional[float],
-    investment_score: Optional[float],
-) -> Tuple[str, str]:
-    if roi is None or not median_sale_price or not median_rent:
-        recommendation = "WATCH"
-        text = (
-            f"{building}, {area}. Сегмент: {property_type}, {segment}. "
-            f"Недостаточно стабильных сопоставимых данных для точного ROI: продаж {sales_count}, аренды {rents_count}. "
-            f"Вывод: объект можно держать в watchlist, но для инвестиционного решения нужны дополнительные comparables."
-        )
-        return recommendation, text
-
-    if investment_score is not None and investment_score >= 75:
-        recommendation = "BUY"
-    elif investment_score is not None and investment_score >= 55:
-        recommendation = "SELECTIVE BUY / HOLD"
-    else:
-        recommendation = "NEGOTIATE / AVOID"
-
-    if roi >= 8:
-        roi_text = "высокая валовая доходность"
-    elif roi >= 6:
-        roi_text = "здоровая валовая доходность"
-    elif roi >= 4:
-        roi_text = "умеренная валовая доходность"
-    else:
-        roi_text = "низкая валовая доходность"
-
-    breakeven_years = median_sale_price / median_rent if median_rent else None
-
-    text = (
-        f"{building}, {area}. Сегмент: {property_type}, {segment}. "
-        f"Медианная цена покупки: {median_sale_price:,.0f} AED. "
-        f"Медианная цена за sqft: {median_sale_psf or 0:,.0f} AED. "
-        f"Медианная годовая аренда: {median_rent:,.0f} AED. "
-        f"Gross ROI: {roi:.2f}% — {roi_text}. "
-        f"Ориентир валового дохода: 1 год ≈ {median_rent:,.0f} AED, "
-        f"3 года ≈ {median_rent * 3:,.0f} AED, "
-        f"6 лет ≈ {median_rent * 6:,.0f} AED. "
-        f"Ориентировочная окупаемость по gross rent: {breakeven_years or 0:.1f} лет. "
-        f"Ликвидность: {liquidity_score or 0:.0f}/100. "
-        f"Инвестиционный скоринг: {investment_score or 0:.0f}/100. "
-        f"Рекомендация: {recommendation}. "
-        f"Расчёт основан на {sales_count} сделках продаж и {rents_count} арендных контрактах по сопоставимому сегменту."
-    )
-
-    return recommendation, text
-
-
-def calculate_building_summary(sales: List[dict], rents: List[dict]) -> List[dict]:
-    grouped: Dict[Tuple[str, str, str, str], Dict[str, List[dict]]] = {}
-
-    for deal in sales:
-        grouped.setdefault(key_for(deal), {"sales": [], "rents": []})["sales"].append(deal)
-
-    for deal in rents:
-        grouped.setdefault(key_for(deal), {"sales": [], "rents": []})["rents"].append(deal)
-
-    rows = []
-    now = datetime.now(UTC).replace(tzinfo=None)
-
-    for (area, building, property_type, segment), data in grouped.items():
-        s = data["sales"]
-        r = data["rents"]
-
-        if len(s) < 3 and len(r) < 3:
+def merge_aggs(rows: List[dict]) -> Dict[Tuple[str, str, str, str], dict]:
+    out: Dict[Tuple[str, str, str, str], dict] = {}
+    for r in rows:
+        key = (r.get("area_name") or "Unknown", r.get("building_name") or "Unknown", r.get("property_type") or "Unknown", r.get("unit_segment") or "Unknown")
+        cnt = int(r.get("deals_count") or 0)
+        if cnt <= 0:
             continue
-
-        sale_prices = [safe_float(x.get("amount")) for x in s]
-        sale_psf = [
-            safe_float(x.get("amount")) / safe_float(x.get("size_sqft"))
-            for x in s
-            if safe_float(x.get("amount")) and safe_float(x.get("size_sqft"))
-        ]
-
-        rent_amounts = [safe_float(x.get("amount")) for x in r]
-        rent_psf = [
-            safe_float(x.get("amount")) / safe_float(x.get("size_sqft"))
-            for x in r
-            if safe_float(x.get("amount")) and safe_float(x.get("size_sqft"))
-        ]
-
-        avg_sale_price = avg(sale_prices)
-        med_sale_price = median(sale_prices)
-        avg_sale_psf = avg(sale_psf)
-        med_sale_psf = median(sale_psf)
-        avg_rent = avg(rent_amounts)
-        med_rent = median(rent_amounts)
-        avg_rent_psf = avg(rent_psf)
-        med_rent_psf = median(rent_psf)
-
-        roi = med_rent / med_sale_price * 100 if med_sale_price and med_rent else None
-        liquidity_score = min(100, (len(s) + len(r)) / 50 * 100)
-        yield_score = score_0_100(roi, 3, 10)
-        price_score = 50
-
-        if roi is not None:
-            investment_score = (yield_score or 0) * 0.45 + liquidity_score * 0.35 + price_score * 0.20
-        else:
-            investment_score = liquidity_score * 0.5
-
-        if roi is None:
-            price_position = "INSUFFICIENT DATA"
-        elif roi >= 8:
-            price_position = "HIGH YIELD"
-        elif roi >= 6:
-            price_position = "HEALTHY YIELD"
-        elif roi >= 4:
-            price_position = "MODERATE YIELD"
-        else:
-            price_position = "LOW YIELD"
-
-        recommendation, conclusion = economic_conclusion(
-            area, building, property_type, segment,
-            len(s), len(r), med_sale_price, med_sale_psf, med_rent,
-            roi, liquidity_score, investment_score
-        )
-
-        rows.append({
-            "calculated_at": now,
-            "area_name": area,
-            "building_name": building,
-            "property_type": property_type,
-            "unit_segment": segment,
-            "sales_count": len(s),
-            "rents_count": len(r),
-            "avg_sale_price": avg_sale_price,
-            "median_sale_price": med_sale_price,
-            "avg_sale_psf": avg_sale_psf,
-            "median_sale_psf": med_sale_psf,
-            "avg_rent": avg_rent,
-            "median_rent": med_rent,
-            "avg_rent_psf": avg_rent_psf,
-            "median_rent_psf": med_rent_psf,
-            "gross_roi_percent": roi,
-            "liquidity_score": liquidity_score,
-            "yield_score": yield_score,
-            "price_score": price_score,
-            "investment_score": investment_score,
-            "price_position": price_position,
-            "recommendation": recommendation,
-            "economic_conclusion": conclusion,
-        })
-
-    return rows
-
-
-def calculate_area_summary(building_rows: List[dict]) -> List[dict]:
-    grouped: Dict[Tuple[str, str, str], List[dict]] = {}
-
-    for row in building_rows:
-        key = (row["area_name"], row["property_type"], row["unit_segment"])
-        grouped.setdefault(key, []).append(row)
-
-    now = datetime.now(UTC).replace(tzinfo=None)
-    out = []
-
-    for (area, property_type, segment), rows in grouped.items():
-        sales_count = sum(r["sales_count"] or 0 for r in rows)
-        rents_count = sum(r["rents_count"] or 0 for r in rows)
-
-        avg_sale_price = avg([safe_float(r["avg_sale_price"]) for r in rows])
-        med_sale_price = median([safe_float(r["median_sale_price"]) for r in rows])
-        avg_sale_psf = avg([safe_float(r["avg_sale_psf"]) for r in rows])
-        med_sale_psf = median([safe_float(r["median_sale_psf"]) for r in rows])
-        avg_rent_value = avg([safe_float(r["avg_rent"]) for r in rows])
-        med_rent_value = median([safe_float(r["median_rent"]) for r in rows])
-        roi = median([safe_float(r["gross_roi_percent"]) for r in rows])
-        liquidity_score = min(100, (sales_count + rents_count) / 300 * 100)
-        investment_score = median([safe_float(r["investment_score"]) for r in rows])
-
-        if investment_score and investment_score >= 75:
-            recommendation = "BUY"
-        elif investment_score and investment_score >= 55:
-            recommendation = "SELECTIVE BUY / HOLD"
-        else:
-            recommendation = "WATCH / NEGOTIATE"
-
-        conclusion = (
-            f"{area}. Сегмент: {property_type}, {segment}. "
-            f"Районная сводка: {sales_count} продаж и {rents_count} арендных контрактов. "
-            f"Медианная цена покупки: {med_sale_price or 0:,.0f} AED. "
-            f"Медианная цена за sqft: {med_sale_psf or 0:,.0f} AED. "
-            f"Медианная аренда: {med_rent_value or 0:,.0f} AED. "
-            f"Ориентир gross ROI: {roi or 0:.2f}%. "
-            f"Ликвидность района: {liquidity_score:.0f}/100. "
-            f"Инвестиционный вывод: {recommendation}."
-        )
-
-        out.append({
-            "calculated_at": now,
-            "area_name": area,
-            "property_type": property_type,
-            "unit_segment": segment,
-            "sales_count": sales_count,
-            "rents_count": rents_count,
-            "avg_sale_price": avg_sale_price,
-            "median_sale_price": med_sale_price,
-            "avg_sale_psf": avg_sale_psf,
-            "median_sale_psf": med_sale_psf,
-            "avg_rent": avg_rent_value,
-            "median_rent": med_rent_value,
-            "gross_roi_percent": roi,
-            "liquidity_score": liquidity_score,
-            "investment_score": investment_score,
-            "recommendation": recommendation,
-            "economic_conclusion": conclusion,
-        })
-
+        cur = out.setdefault(key, {"area_name": key[0], "building_name": key[1], "property_type": key[2], "unit_segment": key[3], "deals_count": 0, "avg_amount_sum": 0, "median_amount_sum": 0, "avg_psf_sum": 0, "median_psf_sum": 0})
+        cur["deals_count"] += cnt
+        for f in ["avg_amount", "median_amount", "avg_psf", "median_psf"]:
+            v = r.get(f)
+            if v is not None:
+                cur[f + "_sum"] += float(v) * cnt
+    for cur in out.values():
+        cnt = cur["deals_count"] or 1
+        for f in ["avg_amount", "median_amount", "avg_psf", "median_psf"]:
+            cur[f] = cur.pop(f + "_sum", 0) / cnt if cnt else None
     return out
 
 
-def metrics_for_deals(sales: List[dict], rents: List[dict]) -> dict:
-    sale_prices = [safe_float(x.get("amount")) for x in sales]
-    sale_psf = [
-        safe_float(x.get("amount")) / safe_float(x.get("size_sqft"))
-        for x in sales
-        if safe_float(x.get("amount")) and safe_float(x.get("size_sqft"))
-    ]
-    rent_amounts = [safe_float(x.get("amount")) for x in rents]
-
-    med_sale = median(sale_prices)
-    med_psf = median(sale_psf)
-    med_rent = median(rent_amounts)
-    roi = med_rent / med_sale * 100 if med_sale and med_rent else None
-
-    return {
-        "sales_count": len(sales),
-        "rents_count": len(rents),
-        "median_sale_price": med_sale,
-        "median_sale_psf": med_psf,
-        "median_rent": med_rent,
-        "roi": roi,
-        "volume": len(sales) + len(rents),
-    }
+def calc_score(roi, sales, rents, psf_change=None, rent_change=None) -> float:
+    roi = float(roi or 0)
+    sales = int(sales or 0)
+    rents = int(rents or 0)
+    liquidity = min(100, (sales + rents) / 20)
+    growth = max(-20, min(40, float(psf_change or 0))) + max(-20, min(40, float(rent_change or 0)))
+    return max(0, min(100, roi * 7 + liquidity * 0.35 + growth * 0.5))
 
 
-def filter_period(deals: List[dict], start: datetime, end: datetime) -> List[dict]:
-    out = []
-    for d in deals:
-        dt = d.get("deal_date")
-        if not dt:
-            continue
-        if isinstance(dt, datetime):
-            dd = dt.date()
-        else:
-            dd = dt
-        if start.date() <= dd < end.date():
-            out.append(d)
-    return out
+def economic_text(row: dict) -> str:
+    roi = row.get("gross_roi_percent")
+    score = row.get("investment_score")
+    liq = row.get("liquidity_score")
+    verdict = "strong investment candidate" if (score or 0) >= 70 else "balanced opportunity" if (score or 0) >= 50 else "requires selective entry and negotiation"
+    return f"DLD-based analysis indicates {verdict}. Gross ROI is estimated at {roi:.1f}% where rent and sale benchmarks are available. Liquidity score is {liq:.0f}/100 based on transaction depth. Best use: compare asking price against median sale price and negotiate below market median when liquidity is moderate or low."
 
 
-def trend_label(momentum: Optional[float]) -> str:
-    if momentum is None:
-        return "INSUFFICIENT DATA"
-    if momentum >= 70:
-        return "STRONG UPWARD MOMENTUM"
-    if momentum >= 55:
-        return "POSITIVE MOMENTUM"
-    if momentum >= 45:
-        return "STABLE"
-    if momentum >= 30:
-        return "WEAKENING"
-    return "NEGATIVE MOMENTUM"
+def create_tables(c):
+    with c.cursor() as cur:
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS building_roi_summary (
+            id BIGSERIAL PRIMARY KEY,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            area_name TEXT, building_name TEXT, property_type TEXT, unit_segment TEXT,
+            sales_count BIGINT, rents_count BIGINT,
+            avg_sale_price NUMERIC, median_sale_price NUMERIC, avg_sale_psf NUMERIC, median_sale_psf NUMERIC,
+            avg_rent NUMERIC, median_rent NUMERIC,
+            gross_roi_percent NUMERIC, liquidity_score NUMERIC, investment_score NUMERIC,
+            economic_conclusion TEXT
+        );
+        CREATE TABLE IF NOT EXISTS area_roi_summary (
+            id BIGSERIAL PRIMARY KEY,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            area_name TEXT, property_type TEXT, unit_segment TEXT,
+            sales_count BIGINT, rents_count BIGINT,
+            avg_sale_price NUMERIC, median_sale_price NUMERIC, avg_sale_psf NUMERIC, median_sale_psf NUMERIC,
+            avg_rent NUMERIC, median_rent NUMERIC,
+            gross_roi_percent NUMERIC, liquidity_score NUMERIC, investment_score NUMERIC,
+            economic_conclusion TEXT
+        );
+        CREATE TABLE IF NOT EXISTS building_period_comparison (
+            id BIGSERIAL PRIMARY KEY,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            period_code TEXT, area_name TEXT, building_name TEXT, property_type TEXT, unit_segment TEXT,
+            current_sales_count BIGINT, previous_sales_count BIGINT, current_rents_count BIGINT, previous_rents_count BIGINT,
+            current_median_sale_price NUMERIC, previous_median_sale_price NUMERIC,
+            current_median_sale_psf NUMERIC, previous_median_sale_psf NUMERIC,
+            current_median_rent NUMERIC, previous_median_rent NUMERIC,
+            current_roi_percent NUMERIC, previous_roi_percent NUMERIC,
+            sale_price_change_percent NUMERIC, sale_psf_change_percent NUMERIC, rent_change_percent NUMERIC, roi_change_pp NUMERIC,
+            volume_change_percent NUMERIC, momentum_score NUMERIC, trend_label TEXT, professional_conclusion TEXT
+        );
+        CREATE TABLE IF NOT EXISTS area_period_comparison (LIKE building_period_comparison INCLUDING ALL);
+        CREATE TABLE IF NOT EXISTS market_period_summary (LIKE building_period_comparison INCLUDING ALL);
+        CREATE TABLE IF NOT EXISTS investment_recommendations (
+            id BIGSERIAL PRIMARY KEY,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            area_name TEXT, building_name TEXT, property_type TEXT, unit_segment TEXT,
+            investment_score NUMERIC, gross_roi_percent NUMERIC, liquidity_score NUMERIC,
+            avg_sale_price NUMERIC, median_rent NUMERIC, recommendation TEXT, reason TEXT
+        );
+        CREATE TABLE IF NOT EXISTS intelligence_status (
+            id BIGSERIAL PRIMARY KEY,
+            created_at TIMESTAMPTZ DEFAULT now(), status TEXT, details TEXT,
+            building_summaries_count BIGINT, area_summaries_count BIGINT, period_rows_count BIGINT
+        );
+        CREATE TABLE IF NOT EXISTS intelligence_sales (id BIGSERIAL PRIMARY KEY, created_at TIMESTAMPTZ DEFAULT now(), area_name TEXT, building_name TEXT, property_type TEXT, unit_segment TEXT, deals_count BIGINT, median_amount NUMERIC, median_psf NUMERIC);
+        CREATE TABLE IF NOT EXISTS intelligence_rents (id BIGSERIAL PRIMARY KEY, created_at TIMESTAMPTZ DEFAULT now(), area_name TEXT, building_name TEXT, property_type TEXT, unit_segment TEXT, deals_count BIGINT, median_amount NUMERIC, median_psf NUMERIC);
+        CREATE TABLE IF NOT EXISTS intelligence_roi (id BIGSERIAL PRIMARY KEY, created_at TIMESTAMPTZ DEFAULT now(), area_name TEXT, building_name TEXT, property_type TEXT, unit_segment TEXT, roi_percent NUMERIC, investment_score NUMERIC);
+        CREATE TABLE IF NOT EXISTS intelligence_market_stats (id BIGSERIAL PRIMARY KEY, created_at TIMESTAMPTZ DEFAULT now(), area_name TEXT, property_type TEXT, unit_segment TEXT, sales_count BIGINT, rents_count BIGINT, roi_percent NUMERIC);
+        CREATE TABLE IF NOT EXISTS intelligence_period_comparison (id BIGSERIAL PRIMARY KEY, created_at TIMESTAMPTZ DEFAULT now(), period_code TEXT, area_name TEXT, building_name TEXT, property_type TEXT, unit_segment TEXT, momentum_score NUMERIC);
+        CREATE INDEX IF NOT EXISTS idx_brs_lookup ON building_roi_summary (area_name, building_name, property_type, unit_segment);
+        CREATE INDEX IF NOT EXISTS idx_ars_lookup ON area_roi_summary (area_name, property_type, unit_segment);
+        CREATE INDEX IF NOT EXISTS idx_bpc_lookup ON building_period_comparison (period_code, area_name, building_name, property_type, unit_segment);
+        CREATE INDEX IF NOT EXISTS idx_apc_lookup ON area_period_comparison (period_code, area_name, property_type, unit_segment);
+        """)
+    c.commit()
 
 
-def period_conclusion(
-    scope: str,
-    name: str,
-    period_code: str,
-    property_type: str,
-    segment: str,
-    sale_change: Optional[float],
-    psf_change: Optional[float],
-    rent_change: Optional[float],
-    roi_change: Optional[float],
-    volume_change: Optional[float],
-    momentum: Optional[float],
-) -> str:
-    label = trend_label(momentum)
-
-    def fmt(v, suffix="%"):
-        return "нет данных" if v is None else f"{v:+.2f}{suffix}"
-
-    return (
-        f"{scope}: {name}. Период: {period_code}. Сегмент: {property_type}, {segment}. "
-        f"Динамика медианной цены: {fmt(sale_change)}. "
-        f"Динамика цены за sqft: {fmt(psf_change)}. "
-        f"Динамика аренды: {fmt(rent_change)}. "
-        f"Изменение ROI: {fmt(roi_change, ' п.п.')}. "
-        f"Изменение объёма сделок: {fmt(volume_change)}. "
-        f"Momentum score: {momentum or 0:.0f}/100. "
-        f"Рыночный вывод: {label}."
-    )
+def pct(new, old):
+    if new is None or old is None or float(old) == 0:
+        return None
+    return (float(new) - float(old)) / float(old) * 100
 
 
-def calculate_period_rows(
-    sales: List[dict],
-    rents: List[dict],
-    group_mode: str,
-) -> List[dict]:
-    now_aware = datetime.now(UTC)
-    calculated_at = now_aware.replace(tzinfo=None)
+def build_rows(sales: Dict, rents: Dict) -> List[dict]:
+    keys = set(sales) | set(rents)
     rows = []
-
-    for period_code, days in PERIOD_WINDOWS.items():
-        current_start = now_aware - timedelta(days=days)
-        previous_start = now_aware - timedelta(days=days * 2)
-        current_end = now_aware
-        previous_end = current_start
-
-        current_sales_all = filter_period(sales, current_start, current_end)
-        previous_sales_all = filter_period(sales, previous_start, previous_end)
-        current_rents_all = filter_period(rents, current_start, current_end)
-        previous_rents_all = filter_period(rents, previous_start, previous_end)
-
-        grouped: Dict[Tuple, Dict[str, List[dict]]] = {}
-
-        def key(d):
-            if group_mode == "building":
-                return key_for(d)
-            if group_mode == "area":
-                return area_key_for(d)
-            if group_mode == "market":
-                _area, _building, property_type, segment = key_for(d)
-                return property_type, segment
-            raise ValueError(group_mode)
-
-        for d in current_sales_all:
-            grouped.setdefault(key(d), {"cs": [], "ps": [], "cr": [], "pr": []})["cs"].append(d)
-        for d in previous_sales_all:
-            grouped.setdefault(key(d), {"cs": [], "ps": [], "cr": [], "pr": []})["ps"].append(d)
-        for d in current_rents_all:
-            grouped.setdefault(key(d), {"cs": [], "ps": [], "cr": [], "pr": []})["cr"].append(d)
-        for d in previous_rents_all:
-            grouped.setdefault(key(d), {"cs": [], "ps": [], "cr": [], "pr": []})["pr"].append(d)
-
-        for k, data in grouped.items():
-            current = metrics_for_deals(data["cs"], data["cr"])
-            previous = metrics_for_deals(data["ps"], data["pr"])
-
-            if current["volume"] < 3 and previous["volume"] < 3:
-                continue
-
-            sale_change = pct_change(current["median_sale_price"], previous["median_sale_price"])
-            psf_change = pct_change(current["median_sale_psf"], previous["median_sale_psf"])
-            rent_change = pct_change(current["median_rent"], previous["median_rent"])
-            roi_change = None
-            if current["roi"] is not None and previous["roi"] is not None:
-                roi_change = current["roi"] - previous["roi"]
-            volume_change = pct_change(current["volume"], previous["volume"])
-
-            components = []
-            if psf_change is not None:
-                components.append(score_0_100(psf_change, -15, 15))
-            if rent_change is not None:
-                components.append(score_0_100(rent_change, -15, 15))
-            if roi_change is not None:
-                components.append(score_0_100(roi_change, -3, 3))
-            if volume_change is not None:
-                components.append(score_0_100(volume_change, -50, 50))
-
-            momentum = avg(components) if components else None
-            label = trend_label(momentum)
-
-            if group_mode == "building":
-                area_name, building_name, property_type, segment = k
-                conclusion = period_conclusion(
-                    "Здание", f"{building_name}, {area_name}", period_code,
-                    property_type, segment, sale_change, psf_change,
-                    rent_change, roi_change, volume_change, momentum
-                )
-                rows.append({
-                    "group_mode": group_mode,
-                    "calculated_at": calculated_at,
-                    "period_code": period_code,
-                    "current_days": days,
-                    "previous_days": days,
-                    "area_name": area_name,
-                    "building_name": building_name,
-                    "property_type": property_type,
-                    "unit_segment": segment,
-                    "current": current,
-                    "previous": previous,
-                    "sale_change": sale_change,
-                    "psf_change": psf_change,
-                    "rent_change": rent_change,
-                    "roi_change": roi_change,
-                    "volume_change": volume_change,
-                    "momentum": momentum,
-                    "trend_label": label,
-                    "conclusion": conclusion,
-                })
-            elif group_mode == "area":
-                area_name, property_type, segment = k
-                conclusion = period_conclusion(
-                    "Район", area_name, period_code,
-                    property_type, segment, sale_change, psf_change,
-                    rent_change, roi_change, volume_change, momentum
-                )
-                rows.append({
-                    "group_mode": group_mode,
-                    "calculated_at": calculated_at,
-                    "period_code": period_code,
-                    "current_days": days,
-                    "previous_days": days,
-                    "area_name": area_name,
-                    "property_type": property_type,
-                    "unit_segment": segment,
-                    "current": current,
-                    "previous": previous,
-                    "sale_change": sale_change,
-                    "psf_change": psf_change,
-                    "rent_change": rent_change,
-                    "roi_change": roi_change,
-                    "volume_change": volume_change,
-                    "momentum": momentum,
-                    "trend_label": label,
-                    "conclusion": conclusion,
-                })
-            else:
-                property_type, segment = k
-                temperature = label
-                conclusion = period_conclusion(
-                    "Рынок Dubai", "All areas", period_code,
-                    property_type, segment, sale_change, psf_change,
-                    rent_change, roi_change, volume_change, momentum
-                )
-                rows.append({
-                    "group_mode": group_mode,
-                    "calculated_at": calculated_at,
-                    "period_code": period_code,
-                    "current_days": days,
-                    "previous_days": days,
-                    "property_type": property_type,
-                    "unit_segment": segment,
-                    "current": current,
-                    "previous": previous,
-                    "sale_change": sale_change,
-                    "psf_change": psf_change,
-                    "rent_change": rent_change,
-                    "roi_change": roi_change,
-                    "volume_change": volume_change,
-                    "market_temperature": temperature,
-                    "conclusion": conclusion,
-                })
-
+    for key in keys:
+        s, r = sales.get(key, {}), rents.get(key, {})
+        median_sale = s.get("median_amount")
+        median_rent = r.get("median_amount")
+        roi = (float(median_rent) / float(median_sale) * 100) if median_sale and median_rent else None
+        sales_count = int(s.get("deals_count") or 0)
+        rents_count = int(r.get("deals_count") or 0)
+        liquidity = min(100, (sales_count + rents_count) / 20)
+        score = calc_score(roi, sales_count, rents_count)
+        row = {
+            "area_name": key[0], "building_name": key[1], "property_type": key[2], "unit_segment": key[3],
+            "sales_count": sales_count, "rents_count": rents_count,
+            "avg_sale_price": s.get("avg_amount"), "median_sale_price": median_sale,
+            "avg_sale_psf": s.get("avg_psf"), "median_sale_psf": s.get("median_psf"),
+            "avg_rent": r.get("avg_amount"), "median_rent": median_rent,
+            "gross_roi_percent": roi, "liquidity_score": liquidity, "investment_score": score,
+        }
+        row["economic_conclusion"] = economic_text({**row, "gross_roi_percent": roi or 0})
+        rows.append(row)
     return rows
 
 
-def save_building_rows(conn, rows: List[dict]) -> None:
-    with conn.cursor() as cur:
-        if rows:
-            execute_values(
-                cur,
-                """
-                INSERT INTO building_roi_summary (
-                    calculated_at, area_name, building_name, property_type, unit_segment,
-                    sales_count, rents_count,
-                    avg_sale_price, median_sale_price, avg_sale_psf, median_sale_psf,
-                    avg_rent, median_rent, avg_rent_psf, median_rent_psf,
-                    gross_roi_percent, liquidity_score, yield_score, price_score, investment_score,
-                    price_position, recommendation, economic_conclusion
-                ) VALUES %s
-                """,
-                [
-                    (
-                        r["calculated_at"], r["area_name"], r["building_name"], r["property_type"], r["unit_segment"],
-                        r["sales_count"], r["rents_count"], r["avg_sale_price"], r["median_sale_price"],
-                        r["avg_sale_psf"], r["median_sale_psf"], r["avg_rent"], r["median_rent"],
-                        r["avg_rent_psf"], r["median_rent_psf"], r["gross_roi_percent"], r["liquidity_score"],
-                        r["yield_score"], r["price_score"], r["investment_score"], r["price_position"],
-                        r["recommendation"], r["economic_conclusion"],
-                    )
-                    for r in rows
-                ],
-                page_size=1000,
-            )
-    conn.commit()
+def area_rows_from_buildings(buildings: List[dict]) -> List[dict]:
+    groups: Dict[Tuple[str, str, str], dict] = {}
+    for b in buildings:
+        key = (b["area_name"], b["property_type"], b["unit_segment"])
+        g = groups.setdefault(key, {"items": [], "sales_count": 0, "rents_count": 0})
+        g["items"].append(b)
+        g["sales_count"] += b.get("sales_count") or 0
+        g["rents_count"] += b.get("rents_count") or 0
+    rows = []
+    for key, g in groups.items():
+        items = g["items"]
+        def wavg(field):
+            vals = [(x.get(field), (x.get("sales_count") or x.get("rents_count") or 1)) for x in items if x.get(field) is not None]
+            if not vals: return None
+            return sum(float(v)*w for v,w in vals) / sum(w for _,w in vals)
+        median_sale = wavg("median_sale_price")
+        median_rent = wavg("median_rent")
+        roi = (median_rent / median_sale * 100) if median_sale and median_rent else None
+        liquidity = min(100, (g["sales_count"] + g["rents_count"]) / 40)
+        score = calc_score(roi, g["sales_count"], g["rents_count"])
+        row = {
+            "area_name": key[0], "property_type": key[1], "unit_segment": key[2],
+            "sales_count": g["sales_count"], "rents_count": g["rents_count"],
+            "avg_sale_price": wavg("avg_sale_price"), "median_sale_price": median_sale,
+            "avg_sale_psf": wavg("avg_sale_psf"), "median_sale_psf": wavg("median_sale_psf"),
+            "avg_rent": wavg("avg_rent"), "median_rent": median_rent,
+            "gross_roi_percent": roi, "liquidity_score": liquidity, "investment_score": score,
+        }
+        row["economic_conclusion"] = economic_text({**row, "building_name": "area", "gross_roi_percent": roi or 0})
+        rows.append(row)
+    return rows
 
 
-def save_area_rows(conn, rows: List[dict]) -> None:
-    with conn.cursor() as cur:
-        if rows:
-            execute_values(
-                cur,
-                """
-                INSERT INTO area_roi_summary (
-                    calculated_at, area_name, property_type, unit_segment,
-                    sales_count, rents_count,
-                    avg_sale_price, median_sale_price, avg_sale_psf, median_sale_psf,
-                    avg_rent, median_rent, gross_roi_percent,
-                    liquidity_score, investment_score, recommendation, economic_conclusion
-                ) VALUES %s
-                """,
-                [
-                    (
-                        r["calculated_at"], r["area_name"], r["property_type"], r["unit_segment"],
-                        r["sales_count"], r["rents_count"], r["avg_sale_price"], r["median_sale_price"],
-                        r["avg_sale_psf"], r["median_sale_psf"], r["avg_rent"], r["median_rent"],
-                        r["gross_roi_percent"], r["liquidity_score"], r["investment_score"],
-                        r["recommendation"], r["economic_conclusion"],
-                    )
-                    for r in rows
-                ],
-                page_size=1000,
-            )
-    conn.commit()
+def period_rows(current_sales: Dict, prev_sales: Dict, current_rents: Dict, prev_rents: Dict, period_code: str, scope: str) -> List[dict]:
+    keys = set(current_sales) | set(prev_sales) | set(current_rents) | set(prev_rents)
+    rows = []
+    for key in keys:
+        cs, ps, cr, pr = current_sales.get(key, {}), prev_sales.get(key, {}), current_rents.get(key, {}), prev_rents.get(key, {})
+        cur_roi = (float(cr.get("median_amount")) / float(cs.get("median_amount")) * 100) if cr.get("median_amount") and cs.get("median_amount") else None
+        prev_roi = (float(pr.get("median_amount")) / float(ps.get("median_amount")) * 100) if pr.get("median_amount") and ps.get("median_amount") else None
+        price_ch = pct(cs.get("median_amount"), ps.get("median_amount"))
+        psf_ch = pct(cs.get("median_psf"), ps.get("median_psf"))
+        rent_ch = pct(cr.get("median_amount"), pr.get("median_amount"))
+        vol_cur = int(cs.get("deals_count") or 0) + int(cr.get("deals_count") or 0)
+        vol_prev = int(ps.get("deals_count") or 0) + int(pr.get("deals_count") or 0)
+        vol_ch = pct(vol_cur, vol_prev)
+        roi_ch = (cur_roi - prev_roi) if cur_roi is not None and prev_roi is not None else None
+        momentum = max(0, min(100, 50 + (price_ch or 0)*0.6 + (rent_ch or 0)*0.4 + (vol_ch or 0)*0.2 + (roi_ch or 0)*2))
+        trend = "STRONG UP" if momentum >= 70 else "STABLE / POSITIVE" if momentum >= 50 else "WEAK / NEGATIVE"
+        row = {
+            "period_code": period_code, "area_name": key[0], "building_name": key[1], "property_type": key[2], "unit_segment": key[3],
+            "current_sales_count": int(cs.get("deals_count") or 0), "previous_sales_count": int(ps.get("deals_count") or 0),
+            "current_rents_count": int(cr.get("deals_count") or 0), "previous_rents_count": int(pr.get("deals_count") or 0),
+            "current_median_sale_price": cs.get("median_amount"), "previous_median_sale_price": ps.get("median_amount"),
+            "current_median_sale_psf": cs.get("median_psf"), "previous_median_sale_psf": ps.get("median_psf"),
+            "current_median_rent": cr.get("median_amount"), "previous_median_rent": pr.get("median_amount"),
+            "current_roi_percent": cur_roi, "previous_roi_percent": prev_roi,
+            "sale_price_change_percent": price_ch, "sale_psf_change_percent": psf_ch, "rent_change_percent": rent_ch, "roi_change_pp": roi_ch,
+            "volume_change_percent": vol_ch, "momentum_score": momentum, "trend_label": trend,
+            "professional_conclusion": f"{period_code} trend is {trend}. DLD momentum score is {momentum:.0f}/100 based on price, rent, ROI and volume changes."
+        }
+        rows.append(row)
+    return rows
 
 
-def save_building_period_rows(conn, rows: List[dict]) -> None:
-    rows = [r for r in rows if r["group_mode"] == "building"]
-    with conn.cursor() as cur:
-        if rows:
-            execute_values(
-                cur,
-                """
-                INSERT INTO building_period_comparison (
-                    calculated_at, period_code, current_days, previous_days,
-                    area_name, building_name, property_type, unit_segment,
-                    current_sales_count, previous_sales_count, current_rents_count, previous_rents_count,
-                    current_median_sale_price, previous_median_sale_price, sale_price_change_percent,
-                    current_median_sale_psf, previous_median_sale_psf, sale_psf_change_percent,
-                    current_median_rent, previous_median_rent, rent_change_percent,
-                    current_roi_percent, previous_roi_percent, roi_change_pp,
-                    volume_change_percent, momentum_score, trend_label, professional_conclusion
-                ) VALUES %s
-                """,
-                [
-                    (
-                        r["calculated_at"], r["period_code"], r["current_days"], r["previous_days"],
-                        r["area_name"], r["building_name"], r["property_type"], r["unit_segment"],
-                        r["current"]["sales_count"], r["previous"]["sales_count"], r["current"]["rents_count"], r["previous"]["rents_count"],
-                        r["current"]["median_sale_price"], r["previous"]["median_sale_price"], r["sale_change"],
-                        r["current"]["median_sale_psf"], r["previous"]["median_sale_psf"], r["psf_change"],
-                        r["current"]["median_rent"], r["previous"]["median_rent"], r["rent_change"],
-                        r["current"]["roi"], r["previous"]["roi"], r["roi_change"],
-                        r["volume_change"], r["momentum"], r["trend_label"], r["conclusion"],
-                    )
-                    for r in rows
-                ],
-                page_size=1000,
-            )
-    conn.commit()
+def truncate_tables(c):
+    with c.cursor() as cur:
+        cur.execute("""
+            TRUNCATE building_roi_summary, area_roi_summary, building_period_comparison, area_period_comparison,
+            market_period_summary, investment_recommendations, intelligence_sales, intelligence_rents,
+            intelligence_roi, intelligence_market_stats, intelligence_period_comparison RESTART IDENTITY;
+        """)
+    c.commit()
 
 
-def save_area_period_rows(conn, rows: List[dict]) -> None:
-    rows = [r for r in rows if r["group_mode"] == "area"]
-    with conn.cursor() as cur:
-        if rows:
-            execute_values(
-                cur,
-                """
-                INSERT INTO area_period_comparison (
-                    calculated_at, period_code, current_days, previous_days,
-                    area_name, property_type, unit_segment,
-                    current_sales_count, previous_sales_count, current_rents_count, previous_rents_count,
-                    current_median_sale_price, previous_median_sale_price, sale_price_change_percent,
-                    current_median_sale_psf, previous_median_sale_psf, sale_psf_change_percent,
-                    current_median_rent, previous_median_rent, rent_change_percent,
-                    current_roi_percent, previous_roi_percent, roi_change_pp,
-                    volume_change_percent, momentum_score, trend_label, professional_conclusion
-                ) VALUES %s
-                """,
-                [
-                    (
-                        r["calculated_at"], r["period_code"], r["current_days"], r["previous_days"],
-                        r["area_name"], r["property_type"], r["unit_segment"],
-                        r["current"]["sales_count"], r["previous"]["sales_count"], r["current"]["rents_count"], r["previous"]["rents_count"],
-                        r["current"]["median_sale_price"], r["previous"]["median_sale_price"], r["sale_change"],
-                        r["current"]["median_sale_psf"], r["previous"]["median_sale_psf"], r["psf_change"],
-                        r["current"]["median_rent"], r["previous"]["median_rent"], r["rent_change"],
-                        r["current"]["roi"], r["previous"]["roi"], r["roi_change"],
-                        r["volume_change"], r["momentum"], r["trend_label"], r["conclusion"],
-                    )
-                    for r in rows
-                ],
-                page_size=1000,
-            )
-    conn.commit()
+def insert_buildings(c, rows: List[dict]):
+    if not rows: return
+    vals = [[r.get(k) for k in ["area_name","building_name","property_type","unit_segment","sales_count","rents_count","avg_sale_price","median_sale_price","avg_sale_psf","median_sale_psf","avg_rent","median_rent","gross_roi_percent","liquidity_score","investment_score","economic_conclusion"]] for r in rows]
+    with c.cursor() as cur:
+        execute_values(cur, """INSERT INTO building_roi_summary (area_name,building_name,property_type,unit_segment,sales_count,rents_count,avg_sale_price,median_sale_price,avg_sale_psf,median_sale_psf,avg_rent,median_rent,gross_roi_percent,liquidity_score,investment_score,economic_conclusion) VALUES %s""", vals, page_size=5000)
+        execute_values(cur, """INSERT INTO intelligence_sales (area_name,building_name,property_type,unit_segment,deals_count,median_amount,median_psf) VALUES %s""", [[r["area_name"],r["building_name"],r["property_type"],r["unit_segment"],r["sales_count"],r["median_sale_price"],r["median_sale_psf"]] for r in rows], page_size=5000)
+        execute_values(cur, """INSERT INTO intelligence_rents (area_name,building_name,property_type,unit_segment,deals_count,median_amount,median_psf) VALUES %s""", [[r["area_name"],r["building_name"],r["property_type"],r["unit_segment"],r["rents_count"],r["median_rent"],None] for r in rows], page_size=5000)
+        execute_values(cur, """INSERT INTO intelligence_roi (area_name,building_name,property_type,unit_segment,roi_percent,investment_score) VALUES %s""", [[r["area_name"],r["building_name"],r["property_type"],r["unit_segment"],r["gross_roi_percent"],r["investment_score"]] for r in rows], page_size=5000)
+    c.commit()
 
 
-def save_market_period_rows(conn, rows: List[dict]) -> None:
-    rows = [r for r in rows if r["group_mode"] == "market"]
-    with conn.cursor() as cur:
-        if rows:
-            execute_values(
-                cur,
-                """
-                INSERT INTO market_period_summary (
-                    calculated_at, period_code, current_days, previous_days,
-                    property_type, unit_segment,
-                    current_sales_count, previous_sales_count, current_rents_count, previous_rents_count,
-                    current_median_sale_price, previous_median_sale_price, sale_price_change_percent,
-                    current_median_sale_psf, previous_median_sale_psf, sale_psf_change_percent,
-                    current_median_rent, previous_median_rent, rent_change_percent,
-                    current_roi_percent, previous_roi_percent, roi_change_pp,
-                    volume_change_percent, market_temperature, professional_conclusion
-                ) VALUES %s
-                """,
-                [
-                    (
-                        r["calculated_at"], r["period_code"], r["current_days"], r["previous_days"],
-                        r["property_type"], r["unit_segment"],
-                        r["current"]["sales_count"], r["previous"]["sales_count"], r["current"]["rents_count"], r["previous"]["rents_count"],
-                        r["current"]["median_sale_price"], r["previous"]["median_sale_price"], r["sale_change"],
-                        r["current"]["median_sale_psf"], r["previous"]["median_sale_psf"], r["psf_change"],
-                        r["current"]["median_rent"], r["previous"]["median_rent"], r["rent_change"],
-                        r["current"]["roi"], r["previous"]["roi"], r["roi_change"],
-                        r["volume_change"], r["market_temperature"], r["conclusion"],
-                    )
-                    for r in rows
-                ],
-                page_size=1000,
-            )
-    conn.commit()
+def insert_areas(c, rows: List[dict]):
+    if not rows: return
+    vals = [[r.get(k) for k in ["area_name","property_type","unit_segment","sales_count","rents_count","avg_sale_price","median_sale_price","avg_sale_psf","median_sale_psf","avg_rent","median_rent","gross_roi_percent","liquidity_score","investment_score","economic_conclusion"]] for r in rows]
+    with c.cursor() as cur:
+        execute_values(cur, """INSERT INTO area_roi_summary (area_name,property_type,unit_segment,sales_count,rents_count,avg_sale_price,median_sale_price,avg_sale_psf,median_sale_psf,avg_rent,median_rent,gross_roi_percent,liquidity_score,investment_score,economic_conclusion) VALUES %s""", vals, page_size=5000)
+        execute_values(cur, """INSERT INTO intelligence_market_stats (area_name,property_type,unit_segment,sales_count,rents_count,roi_percent) VALUES %s""", [[r["area_name"],r["property_type"],r["unit_segment"],r["sales_count"],r["rents_count"],r["gross_roi_percent"]] for r in rows], page_size=5000)
+    c.commit()
 
 
-def save_recommendations(conn, rows: List[dict]) -> None:
-    top = sorted(
-        [r for r in rows if r.get("investment_score") is not None],
-        key=lambda x: x["investment_score"],
-        reverse=True,
-    )[:500]
-
-    now = datetime.now(UTC).replace(tzinfo=None)
-
-    with conn.cursor() as cur:
-        if top:
-            execute_values(
-                cur,
-                """
-                INSERT INTO investment_recommendations (
-                    calculated_at, area_name, building_name, property_type, unit_segment,
-                    investment_score, gross_roi_percent, liquidity_score,
-                    avg_sale_price, median_rent, recommendation, reason
-                ) VALUES %s
-                """,
-                [
-                    (
-                        now, r["area_name"], r["building_name"], r["property_type"], r["unit_segment"],
-                        r["investment_score"], r["gross_roi_percent"], r["liquidity_score"],
-                        r["avg_sale_price"], r["median_rent"], r["recommendation"], r["economic_conclusion"],
-                    )
-                    for r in top
-                ],
-                page_size=1000,
-            )
-    conn.commit()
+def insert_period(c, table: str, rows: List[dict]):
+    if not rows: return
+    keys = ["period_code","area_name","building_name","property_type","unit_segment","current_sales_count","previous_sales_count","current_rents_count","previous_rents_count","current_median_sale_price","previous_median_sale_price","current_median_sale_psf","previous_median_sale_psf","current_median_rent","previous_median_rent","current_roi_percent","previous_roi_percent","sale_price_change_percent","sale_psf_change_percent","rent_change_percent","roi_change_pp","volume_change_percent","momentum_score","trend_label","professional_conclusion"]
+    vals = [[r.get(k) for k in keys] for r in rows]
+    with c.cursor() as cur:
+        execute_values(cur, f"""INSERT INTO {table} ({','.join(keys)}) VALUES %s""", vals, page_size=5000)
+        if table == "building_period_comparison":
+            execute_values(cur, """INSERT INTO intelligence_period_comparison (period_code,area_name,building_name,property_type,unit_segment,momentum_score) VALUES %s""", [[r["period_code"],r["area_name"],r["building_name"],r["property_type"],r["unit_segment"],r["momentum_score"]] for r in rows], page_size=5000)
+    c.commit()
 
 
-def count_table(conn, schema: str, table: str) -> int:
-    if not has_table(conn, schema, table):
-        return 0
-    with conn.cursor() as cur:
-        cur.execute(f'SELECT COUNT(*) AS c FROM "{schema}"."{table}"')
-        return int(cur.fetchone()["c"])
+def insert_recommendations(c, rows: List[dict]):
+    rows = sorted(rows, key=lambda r: float(r.get("investment_score") or 0), reverse=True)[:500]
+    vals = [[r["area_name"],r["building_name"],r["property_type"],r["unit_segment"],r["investment_score"],r["gross_roi_percent"],r["liquidity_score"],r["avg_sale_price"],r["median_rent"],"Recommended based on DLD ROI, liquidity and market depth.",r["economic_conclusion"]] for r in rows]
+    if not vals: return
+    with c.cursor() as cur:
+        execute_values(cur, """INSERT INTO investment_recommendations (area_name,building_name,property_type,unit_segment,investment_score,gross_roi_percent,liquidity_score,avg_sale_price,median_rent,recommendation,reason) VALUES %s""", vals, page_size=1000)
+    c.commit()
 
 
-def run_cycle(live_conn, archive_conn, intel_conn) -> None:
-    logging.info("Creating intelligence tables...")
-    create_tables(intel_conn)
+def run_cycle():
+    logging.info("="*80)
+    logging.info("Dubai DLD Professional Intelligence Engine v4 production started")
+    logging.info("Mode: archive + live + intelligence; SQL aggregation; no full raw loading")
+    logging.info("="*80)
+    with db(INTELLIGENCE_DATABASE_URL) as ic:
+        create_tables(ic)
+        truncate_tables(ic)
 
-    logging.info("Loading sales from archive...")
-    archive_sales = fetch_normalized_deals(archive_conn, [SALE_TABLES[0]], "sale")
+    sale_rows = []
+    rent_rows = []
+    for s in SALE_SOURCES:
+        sale_rows.extend(source_aggregate(s, "sale"))
+    for s in RENT_SOURCES:
+        rent_rows.extend(source_aggregate(s, "rent"))
 
-    logging.info("Loading sales from live...")
-    live_sales = fetch_normalized_deals(live_conn, [SALE_TABLES[1]], "sale")
+    sales = merge_aggs(sale_rows)
+    rents = merge_aggs(rent_rows)
+    buildings = build_rows(sales, rents)
+    areas = area_rows_from_buildings(buildings)
+    logging.info("Final building rows: %s | area rows: %s", len(buildings), len(areas))
 
-    logging.info("Loading rents from archive...")
-    archive_rents = fetch_normalized_deals(archive_conn, [RENT_TABLES[0]], "rent")
+    period_all = []
+    for code, days in PERIODS.items():
+        cs_rows, ps_rows, cr_rows, pr_rows = [], [], [], []
+        for s in SALE_SOURCES:
+            cs_rows.extend(source_aggregate(s, "sale", days, False))
+            ps_rows.extend(source_aggregate(s, "sale", days, True))
+        for s in RENT_SOURCES:
+            cr_rows.extend(source_aggregate(s, "rent", days, False))
+            pr_rows.extend(source_aggregate(s, "rent", days, True))
+        period_all.extend(period_rows(merge_aggs(cs_rows), merge_aggs(ps_rows), merge_aggs(cr_rows), merge_aggs(pr_rows), code, "building"))
 
-    logging.info("Loading rents from live...")
-    live_rents = fetch_normalized_deals(live_conn, [RENT_TABLES[1]], "rent")
-
-    sales = archive_sales + live_sales
-    rents = archive_rents + live_rents
-
-    logging.info("Sales loaded: %s", len(sales))
-    logging.info("Rents loaded: %s", len(rents))
-
-    logging.info("Calculating building ROI summary by area/building/property_type/rooms...")
-    building_rows = calculate_building_summary(sales, rents)
-    logging.info("Building summaries calculated: %s", len(building_rows))
-
-    logging.info("Calculating area ROI summary by area/property_type/rooms...")
-    area_rows = calculate_area_summary(building_rows)
-    logging.info("Area summaries calculated: %s", len(area_rows))
-
-    logging.info("Calculating building period comparisons...")
-    building_period_rows = calculate_period_rows(sales, rents, "building")
-    logging.info("Building period rows calculated: %s", len(building_period_rows))
-
-    logging.info("Calculating area period comparisons...")
-    area_period_rows = calculate_period_rows(sales, rents, "area")
-    logging.info("Area period rows calculated: %s", len(area_period_rows))
-
-    logging.info("Calculating market period summaries...")
-    market_period_rows = calculate_period_rows(sales, rents, "market")
-    logging.info("Market period rows calculated: %s", len(market_period_rows))
-
-    logging.info("Saving building summaries...")
-    save_building_rows(intel_conn, building_rows)
-
-    logging.info("Saving area summaries...")
-    save_area_rows(intel_conn, area_rows)
-
-    logging.info("Saving building period comparisons...")
-    save_building_period_rows(intel_conn, building_period_rows)
-
-    logging.info("Saving area period comparisons...")
-    save_area_period_rows(intel_conn, area_period_rows)
-
-    logging.info("Saving market period summaries...")
-    save_market_period_rows(intel_conn, market_period_rows)
-
-    logging.info("Saving investment recommendations...")
-    save_recommendations(intel_conn, building_rows)
-
-    live_sales_count = count_table(live_conn, "public", "dld_transactions_full")
-    live_rents_count = count_table(live_conn, "public", "dld_rents_full")
-    archive_sales_count = count_table(archive_conn, "public", "dld_sale_archive")
-    archive_rents_count = count_table(archive_conn, "public", "dld_rent_archive")
-
-    with intel_conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO intelligence_status (
-                created_at,
-                live_sales_count,
-                live_rents_count,
-                archive_sales_count,
-                archive_rents_count,
-                building_summaries_count,
-                area_summaries_count,
-                building_period_rows_count,
-                area_period_rows_count,
-                market_period_rows_count,
-                status
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                datetime.now(UTC).replace(tzinfo=None),
-                live_sales_count,
-                live_rents_count,
-                archive_sales_count,
-                archive_rents_count,
-                len(building_rows),
-                len(area_rows),
-                len(building_period_rows),
-                len(area_period_rows),
-                len(market_period_rows),
-                "ok",
-            ),
-        )
-
-    intel_conn.commit()
+    with db(INTELLIGENCE_DATABASE_URL) as ic:
+        insert_buildings(ic, buildings)
+        insert_areas(ic, areas)
+        insert_period(ic, "building_period_comparison", period_all)
+        # area period from building rows grouped at area level: reuse rows with building as 'Market'
+        area_period = []
+        for r in period_all:
+            rr = dict(r); rr["building_name"] = "Area Summary"; area_period.append(rr)
+        insert_period(ic, "area_period_comparison", area_period)
+        market_period = []
+        for r in period_all[:200]:
+            rr = dict(r); rr["area_name"] = "Dubai"; rr["building_name"] = "Market Summary"; market_period.append(rr)
+        insert_period(ic, "market_period_summary", market_period)
+        insert_recommendations(ic, buildings)
+        with ic.cursor() as cur:
+            cur.execute("""INSERT INTO intelligence_status (status, details, building_summaries_count, area_summaries_count, period_rows_count) VALUES (%s,%s,%s,%s,%s)""", ("ok", "v4 production SQL aggregation completed", len(buildings), len(areas), len(period_all)))
+        ic.commit()
     logging.info("Intelligence status updated successfully")
-    logging.info("Cycle completed successfully")
 
 
-def main() -> None:
-    require_env()
-
-    logging.info("=" * 80)
-    logging.info("Dubai DLD Professional Intelligence Engine v3 started")
-    logging.info("Mode: archive + live + intelligence")
-    logging.info("Static analytics: ROI / yield / liquidity / recommendations")
-    logging.info("Temporal analytics: 30d / 90d / 180d / 365d period comparisons")
-    logging.info("Grouping: area + building + property type + rooms/unit segment")
-    logging.info("Note: current DLD tables do not expose exact unit_number; transaction_id/contract_id are source identifiers only.")
-    logging.info("=" * 80)
-
-    live_conn = connect(LIVE_DATABASE_URL)
-    archive_conn = connect(ARCHIVE_DATABASE_URL)
-    intel_conn = connect(INTELLIGENCE_DATABASE_URL)
-
-    logging.info("LIVE DB connected")
-    logging.info("ARCHIVE DB connected")
-    logging.info("INTELLIGENCE DB connected")
-
+def main():
     while True:
         try:
-            run_cycle(live_conn, archive_conn, intel_conn)
-        except Exception as exc:
-            logging.exception("Intelligence cycle failed: %s", exc)
-
-            for conn in (live_conn, archive_conn, intel_conn):
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
-
+            run_cycle()
+        except Exception:
+            logging.exception("Intelligence cycle failed")
+            try:
+                with db(INTELLIGENCE_DATABASE_URL) as ic:
+                    with ic.cursor() as cur:
+                        cur.execute("INSERT INTO intelligence_status (status, details) VALUES (%s,%s)", ("error", "cycle failed; see Railway logs"))
+                    ic.commit()
+            except Exception:
+                pass
         logging.info("Sleeping %s seconds before next intelligence cycle...", CYCLE_SECONDS)
         time.sleep(CYCLE_SECONDS)
 
