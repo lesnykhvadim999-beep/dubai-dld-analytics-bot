@@ -2723,6 +2723,13 @@ async def main_handler(message: Message):
         if text in ["💼 Заявка", "💼 Консультация"]:
             await handle_consultation_request(message)
             return
+
+        # v67: если пользователь уже находится внутри результата/отчёта,
+        # кнопки отчёта не должны запускать глобальные сценарии заново.
+        if state.get("step") in ["choose_report", "result"]:
+            if await _handle_current_report_button_v67(message, text, state):
+                return
+
         if text == "🔁 Изменить":
             user_states[user_id] = {"step": None, "history": []}
             await message.answer("🔁 Выберите новый сценарий.", reply_markup=main_menu(user_id))
@@ -5521,6 +5528,355 @@ def find_areas(query, limit=10):
     for source in _active_sources():
         rows.extend(_call_on_source(source, _source_find_areas_v66, query, limit, default=[]) or [])
     return _merge_group_rows(rows, ["area_name_en"], limit=limit, sort_field="deals", avg_fields=())
+
+
+
+# =========================
+# FLOW + DATA + PDF HARD PATCH v67
+# =========================
+# Fixes:
+# 1) report buttons no longer restart global scenarios when user is already inside a report flow;
+# 2) deals/stats use direct schema-aware archive+live queries with fuzzy building/area matching;
+# 3) PDF uses a Cyrillic-capable font and strips emoji glyphs to avoid black squares.
+
+LAST_REPORTS = globals().setdefault("LAST_REPORTS", {})
+
+
+def set_last_report(user_id, title, html, scope=None):
+    LAST_REPORTS[user_id] = {"title": title, "html": html, "scope": scope, "ts": time.time()}
+    st = user_states.get(user_id, {}) or {}
+    st.update({"step": "result", "last_report_title": title, "last_report_html": html, "scope": scope or st.get("scope")})
+    user_states[user_id] = st
+
+
+def _strip_emoji_for_pdf(text):
+    if not text:
+        return ""
+    # Keep letters/numbers/punctuation; remove Telegram emoji which often render as black boxes in PDFs.
+    return re.sub(r"[\U00010000-\U0010ffff]", "", text)
+
+
+def _pdf_font_path_v67():
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    ]
+    for fp in candidates:
+        if os.path.exists(fp):
+            return fp
+    # Railway slim images may not have system fonts. Matplotlib bundles DejaVuSans.
+    try:
+        import matplotlib
+        fp = os.path.join(os.path.dirname(matplotlib.__file__), "mpl-data", "fonts", "ttf", "DejaVuSans.ttf")
+        if os.path.exists(fp):
+            return fp
+    except Exception:
+        pass
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "matplotlib"], timeout=240)
+        import matplotlib
+        fp = os.path.join(os.path.dirname(matplotlib.__file__), "mpl-data", "fonts", "ttf", "DejaVuSans.ttf")
+        if os.path.exists(fp):
+            return fp
+    except Exception as e:
+        print("PDF_FONT_INSTALL_ERROR:", repr(e))
+    return None
+
+
+def build_pdf_bytes(title, content):
+    if not _ensure_reportlab():
+        return None
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import cm
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    import html as _html
+
+    buffer = tempfile.SpooledTemporaryFile(max_size=8_000_000)
+    font_name = "Helvetica"
+    font_path = _pdf_font_path_v67()
+    if font_path:
+        try:
+            pdfmetrics.registerFont(TTFont("DLDUnicode", font_path))
+            font_name = "DLDUnicode"
+        except Exception as e:
+            print("PDF_FONT_REGISTER_ERROR:", repr(e))
+
+    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=1.35*cm, rightMargin=1.35*cm, topMargin=1.2*cm, bottomMargin=1.2*cm)
+    styles = getSampleStyleSheet()
+    h = ParagraphStyle("LuxuryHeadingV67", parent=styles["Heading1"], fontName=font_name, fontSize=14, leading=18, spaceAfter=12)
+    n = ParagraphStyle("LuxuryNormalV67", parent=styles["Normal"], fontName=font_name, fontSize=9.8, leading=14.5, spaceAfter=3)
+
+    plain_title = _strip_emoji_for_pdf(_html_to_plain(title)).strip() or "Dubai DLD Analytics Report"
+    plain_content = _strip_emoji_for_pdf(_html_to_plain(content))
+    story = [Paragraph(_html.escape(plain_title), h), Paragraph("Dubai DLD Intelligence Report · " + datetime.now().strftime("%Y-%m-%d %H:%M"), n), Spacer(1, 0.25*cm)]
+    for raw in plain_content.splitlines():
+        line = raw.strip()
+        if line:
+            story.append(Paragraph(_html.escape(line), n))
+        else:
+            story.append(Spacer(1, 0.13*cm))
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.read()
+
+
+def _v67_table_plan(deal_type=None):
+    if is_sale_deal(deal_type):
+        return [("archive", "public.dld_sale_archive"), ("live", "public.dld_transactions_full")]
+    if is_rent_deal(deal_type):
+        return [("archive", "public.dld_rent_archive"), ("live", "public.dld_rents_full")]
+    return [
+        ("archive", "public.dld_sale_archive"),
+        ("archive", "public.dld_rent_archive"),
+        ("live", "public.dld_transactions_full"),
+        ("live", "public.dld_rents_full"),
+    ]
+
+
+def _date_expr_v67(cols):
+    for c in ["transaction_date", "instance_date", "contract_start_date", "contract_end_date", "load_timestamp", "created_at", "date"]:
+        if c in cols:
+            qc = qcol(c) if 'qcol' in globals() else '"' + c + '"'
+            return f"CASE WHEN {qc}::text ~ '^\\d{{4}}-\\d{{2}}-\\d{{2}}' THEN ({qc}::text)::date ELSE NULL END"
+    return "NULL::date"
+
+
+def _num_expr_v67(cols, names):
+    for c in names:
+        if c in cols:
+            qc = qcol(c) if 'qcol' in globals() else '"' + c + '"'
+            return f"NULLIF(regexp_replace(COALESCE({qc}::text,''), '[^0-9.]', '', 'g'), '')::numeric"
+    return "NULL::numeric"
+
+
+def _txt_expr2_v67(cols, names):
+    found = [n for n in names if n in cols]
+    if not found:
+        return "''"
+    parts = []
+    for c in found:
+        qc = qcol(c) if 'qcol' in globals() else '"' + c + '"'
+        parts.append(f"NULLIF({qc}::text,'')")
+    return "COALESCE(" + ", ".join(parts) + ", '')"
+
+
+def _meta_v67(table):
+    cols = _cols_v66(table) if '_cols_v66' in globals() else set(table_columns(table))
+    building = _txt_expr2_v67(cols, [
+        "building_name_en", "building_name", "building_en", "building", "project_name_en", "project_name", "project_en", "project",
+        "master_project_en", "master_project", "property_name_en", "property_name", "nearest_landmark_en", "nearest_landmark"
+    ])
+    area = _txt_expr2_v67(cols, ["area_name_en", "area_en", "area_name", "area", "procedure_area", "location_en", "location"])
+    rooms = _txt_expr2_v67(cols, ["rooms_en", "rooms", "bedrooms", "bedroom", "room", "rooms_count"])
+    ptype = _txt_expr2_v67(cols, ["property_type_en", "property_type", "prop_type_en", "property_usage_en", "property_usage"])
+    subtype = _txt_expr2_v67(cols, ["property_sub_type_en", "property_sub_type", "prop_sub_type_en", "unit_type", "property_category"])
+    is_rent_table = "rent" in table.lower()
+    price = _num_expr_v67(cols, [
+        "annual_amount", "contract_amount", "contract_value", "rent_value", "rent_amount", "actual_worth", "amount"
+    ] if is_rent_table else ["actual_worth", "procedure_value", "transaction_value", "sale_price", "price", "amount"])
+    size = _num_expr_v67(cols, ["actual_area", "area", "procedure_area", "size_sqft", "property_size_sqft", "property_size", "area_size_sqft"])
+    meter = _num_expr_v67(cols, ["meter_sale_price", "meter_price", "price_per_meter", "price_per_sqft"])
+    meter = f"COALESCE({meter}, CASE WHEN ({size}) > 0 THEN ({price}) / ({size}) ELSE NULL END)"
+    return {"cols": cols, "building": building, "area": area, "rooms": rooms, "ptype": ptype, "subtype": subtype, "price": price, "size": size, "meter": meter, "date": _date_expr_v67(cols)}
+
+
+def _scope_where_v67(scope, name, meta):
+    if not name or scope == "dubai":
+        return "", []
+    aliases = _query_aliases_v66(name) if '_query_aliases_v66' in globals() else [name]
+    if scope == "area":
+        search = meta["area"]
+    else:
+        search = " || ' ' || ".join([meta["building"], meta["area"]])
+    parts, params = [], []
+    for a in aliases:
+        parts.append(f"({search}) ILIKE %s")
+        params.append(f"%{a}%")
+    return "AND (" + " OR ".join(parts) + ")", params
+
+
+def _prop_where_v67(prop, meta):
+    if not prop:
+        return "", []
+    p = str(prop).lower().strip()
+    if p in ["⏭ пропустить", "skip", "any", "all", "все"]:
+        return "", []
+    search = "LOWER(" + " || ' ' || ".join([meta["rooms"], meta["ptype"], meta["subtype"]]) + ")"
+    if "studio" in p:
+        return f"AND ({search} LIKE %s OR {search} LIKE %s)", ["%studio%", "%студ%"]
+    m = re.search(r"(\d+)\s*br", p)
+    if m:
+        n = m.group(1)
+        words = {"1":"one", "2":"two", "3":"three", "4":"four", "5":"five"}.get(n, n)
+        return f"AND ({search} LIKE %s OR {search} LIKE %s OR {search} LIKE %s OR {search} LIKE %s)", [f"%{n} br%", f"%{n} b/r%", f"%{n} bedroom%", f"%{words} bedroom%"]
+    if "villa" in p.lower() or "вилл" in p.lower():
+        return f"AND {search} LIKE %s", ["%villa%"]
+    if "town" in p.lower() or "таун" in p.lower():
+        return f"AND {search} LIKE %s", ["%town%"]
+    return f"AND {search} LIKE %s", [f"%{p}%"]
+
+
+def _period_where_v67(period, meta):
+    months = period_months(period) if 'period_months' in globals() else None
+    if not months:
+        return "", []
+    return f"AND {meta['date']} >= CURRENT_DATE - INTERVAL '{int(months)} months'", []
+
+
+def _run_source_sql_v67(source, table, sql, params):
+    old = globals().get("_ACTIVE_SOURCE", "live")
+    try:
+        _set_data_source(source)
+        with db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                return cur.fetchall()
+    except Exception as e:
+        print("RUN_SOURCE_SQL_V67_ERROR:", source, table, repr(e))
+        return []
+    finally:
+        try:
+            _set_data_source(old)
+        except Exception:
+            pass
+
+
+def get_latest_deals(scope="building", name=None, prop=None, period=None, deal_type=None, limit=7, unit_query=None):
+    rows = []
+    for source, table in _v67_table_plan(deal_type):
+        if source not in _active_sources():
+            continue
+        old_src = globals().get("_ACTIVE_SOURCE", "live")
+        try:
+            _set_data_source(source)
+            meta = _meta_v67(table)
+        finally:
+            try:
+                _set_data_source(old_src)
+            except Exception:
+                pass
+        if not meta["cols"]:
+            continue
+        sw, sp = _scope_where_v67(scope, name, meta)
+        pw, pp = _prop_where_v67(prop, meta)
+        tw, tp = _period_where_v67(period, meta)
+        sql = f"""
+            SELECT
+                {meta['date']} AS safe_date,
+                NULLIF({meta['building']}, '') AS building_name_en,
+                NULLIF({meta['area']}, '') AS area_name_en,
+                NULLIF({meta['rooms']}, '') AS rooms_en,
+                NULLIF({meta['ptype']}, '') AS property_type_en,
+                NULLIF({meta['subtype']}, '') AS property_sub_type_en,
+                {meta['price']} AS price,
+                {meta['meter']} AS meter_price
+            FROM {table}
+            WHERE {meta['price']} IS NOT NULL AND {meta['price']} > 0
+              {sw} {pw} {tw}
+            ORDER BY safe_date DESC NULLS LAST
+            LIMIT %s
+        """
+        rows.extend(_run_source_sql_v67(source, table, sql, sp + pp + tp + [limit]))
+    return _merge_latest_rows(rows, limit=limit) if '_merge_latest_rows' in globals() else rows[:limit]
+
+
+def get_stats(scope="dubai", name=None, prop=None, period=None, deal_type=None):
+    parts = []
+    for source, table in _v67_table_plan(deal_type):
+        if source not in _active_sources():
+            continue
+        old_src = globals().get("_ACTIVE_SOURCE", "live")
+        try:
+            _set_data_source(source)
+            meta = _meta_v67(table)
+        finally:
+            try:
+                _set_data_source(old_src)
+            except Exception:
+                pass
+        if not meta["cols"]:
+            continue
+        sw, sp = _scope_where_v67(scope, name, meta)
+        pw, pp = _prop_where_v67(prop, meta)
+        tw, tp = _period_where_v67(period, meta)
+        sql = f"""
+            SELECT
+                COUNT(*)::bigint AS deals,
+                COUNT(DISTINCT NULLIF({meta['building']}, ''))::bigint AS buildings,
+                COUNT(DISTINCT NULLIF({meta['area']}, ''))::bigint AS areas,
+                AVG({meta['price']})::numeric AS avg_price,
+                MIN({meta['price']})::numeric AS min_price,
+                MAX({meta['price']})::numeric AS max_price,
+                AVG({meta['meter']})::numeric AS avg_meter,
+                MIN({meta['date']}) AS first_deal,
+                MAX({meta['date']}) AS last_deal,
+                STRING_AGG(DISTINCT NULLIF({meta['rooms']}, ''), ', ') AS rooms_list,
+                STRING_AGG(DISTINCT NULLIF({meta['ptype']}, ''), ', ') AS property_types,
+                STRING_AGG(DISTINCT NULLIF({meta['subtype']}, ''), ', ') AS property_sub_types
+            FROM {table}
+            WHERE {meta['price']} IS NOT NULL AND {meta['price']} > 0
+              {sw} {pw} {tw}
+        """
+        got = _run_source_sql_v67(source, table, sql, sp + pp + tp)
+        if got and _int(got[0].get("deals")) > 0:
+            parts.append(got[0])
+    return _merge_stats_rows(parts) if parts and '_merge_stats_rows' in globals() else (parts[0] if parts else None)
+
+
+def get_stats_smart(scope="dubai", name=None, prop=None, period=None, deal_type=None):
+    attempts = [
+        (prop, period, deal_type),
+        (prop, None, deal_type),
+        (None, period, deal_type),
+        (None, None, deal_type),
+    ]
+    # If strict sale/rent has no data, we still DO NOT mix sale/rent; only broaden property/period.
+    for p, per, dt in attempts:
+        row = get_stats(scope, name, p, per, dt)
+        if row and _int(row.get("deals")) > 0:
+            return row, p, per, dt
+    return None, prop, period, deal_type
+
+
+def get_latest_deals_smart(scope, name, prop=None, period=None, deal_type=None, limit=7, unit_query=None):
+    attempts = [
+        (prop, period, deal_type),
+        (prop, None, deal_type),
+        (None, period, deal_type),
+        (None, None, deal_type),
+    ]
+    for p, per, dt in attempts:
+        rows = get_latest_deals(scope, name, p, per, dt, limit=limit, unit_query=unit_query)
+        if rows:
+            return rows, p, per, dt
+    return [], prop, period, deal_type
+
+
+async def _handle_current_report_button_v67(message, text, state):
+    user_id = message.from_user.id
+    scope = state.get("scope", "dubai")
+    name = state.get("name")
+    prop = state.get("property")
+    period = state.get("period")
+    deal_type = state.get("deal_type")
+    if text in ["📊 Аналитика", tr(user_id, "full_report"), "💼 Резюме"]:
+        await send_full_report(message, scope, name, prop, period, deal_type, "Полная аналитика")
+        return True
+    if text in ["🧾 Сделки", tr(user_id, "last_deals"), "📊 По сделкам"]:
+        await send_deals_report(message, scope, name, prop, period, deal_type)
+        return True
+    if text in ["📈 Периоды", tr(user_id, "period_compare")]:
+        await send_period_report(message, scope, name, prop, period, deal_type)
+        return True
+    return False
+
+print("Loaded flow/data/pdf hard patch v67")
 
 print("Loaded robust search patch v66")
 
