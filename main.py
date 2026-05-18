@@ -3656,21 +3656,37 @@ async def main_handler(message: Message):
             candidates = safe_call(smart_pick_candidates, state.get("goal"), state.get("budget"), state.get("risk"), state.get("timing"), default=[]) or []
             if not candidates:
                 candidates = smart_fallback_candidates(state.get("goal"), state.get("budget"), state.get("risk"), state.get("timing"))
-            best = candidates[0] if candidates else {}
+
             title = "🧠 Инвестиционный подбор"
-            html = (
-                "🧠 <b>Инвестиционный подбор</b>\n\n"
-                "🏆 <b>Лучший сценарий</b>\n"
-                f"📍 Район: <b>{best.get('area') or 'JVC'}</b>\n"
-                f"🏠 Формат: <b>{best.get('property') or best.get('unit_segment') or '1 BR'}</b>\n"
-                f"📊 Сделки: <b>{format_int(best.get('deals'))}</b>\n"
-                f"💰 Средняя цена: <b>{format_money(best.get('avg_price'))}</b>\n"
-                f"📐 Средняя цена за метр: <b>{format_money(best.get('avg_meter'))}</b>\n\n"
-                "🧠 <b>Экономическое заключение 360°</b>\n\n"
-                "По выбранному профилю нужно начинать с локации с достаточной ликвидностью, понятным уровнем входа и широкой базой арендаторов. "
-                "После выбора конкретного объекта обязательно сравните цену юнита с последними DLD-сделками и арендным ориентиром.\n\n"
-                "💼 Для точной проверки конкретного варианта можно оставить заявку на консультацию."
-            )
+
+            # v93 targeted fix: the smart-pick flow previously built a hardcoded short
+            # conclusion here, so the external economic_engine.py was never used for
+            # this scenario. Do not touch menus/DB/UI; only route the final smart
+            # recommendation through show_smart_recommendation(), which is overridden
+            # later by v92 to call the external economic engine.
+            try:
+                html = show_smart_recommendation(
+                    state.get("goal"),
+                    state.get("budget"),
+                    state.get("timing"),
+                    state.get("risk"),
+                    candidates,
+                )
+            except Exception as e:
+                print("SMART_RECOMMENDATION_ENGINE_ERROR:", repr(e))
+                best = candidates[0] if candidates else {}
+                html = (
+                    "🧠 <b>Инвестиционный подбор</b>\n\n"
+                    "🏆 <b>Лучший сценарий</b>\n"
+                    f"📍 Район: <b>{best.get('area') or 'JVC'}</b>\n"
+                    f"🏠 Формат: <b>{best.get('property') or best.get('unit_segment') or '1 BR'}</b>\n"
+                    f"📊 Сделки: <b>{format_int(best.get('deals'))}</b>\n"
+                    f"💰 Средняя цена: <b>{format_money(best.get('avg_price'))}</b>\n"
+                    f"📐 Средняя цена за метр: <b>{format_money(best.get('avg_meter'))}</b>\n\n"
+                    "🧠 <b>Экономическое заключение 360°</b>\n\n"
+                    "Недостаточно данных для полного экономического отчёта. Расширьте период или фильтр."
+                )
+
             user_states[user_id] = {"step": "result", "scope": "dubai", "last_report_title": title, "last_report_html": html, "history": []}
             await message.answer(html, reply_markup=post_result_menu(user_id, "dubai"))
             return
