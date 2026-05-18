@@ -2555,9 +2555,15 @@ async def _execute_selected_report_v72(message, state):
     kind = state.get("report_kind") or "full"
     scope = state.get("scope", "dubai")
     name = state.get("name")
-    prop = state.get("property")
-    period = state.get("period")
-    deal_type = state.get("deal_type")
+    prop = _skip_to_none_v86(state.get("property"))
+    period = _skip_to_none_v86(state.get("period"))
+    deal_type = _skip_to_none_v86(state.get("deal_type"))
+
+    # Store normalized values back into state so downstream PDF/Заявка and report buttons
+    # do not receive raw ⏭ Пропустить / empty filters.
+    state["property"] = prop
+    state["period"] = period
+    state["deal_type"] = deal_type
 
     # Зафиксировать результатное состояние до отправки отчёта, чтобы PDF/Заявка работали с последним отчётом.
     user_states[message.from_user.id] = {
@@ -2648,6 +2654,29 @@ def _normalize_property_from_text(user_id, text):
     if text == tr(user_id, "skip"):
         return None
     return text
+
+
+def _skip_to_none_v86(value):
+    """Treat Skip/All/empty values as no filter.
+    Targeted fix: prevents report flows from crashing when user presses ⏭ Пропустить
+    for property type and/or period.
+    """
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    low = s.lower()
+    skip_values = {
+        "skip", "any", "all", "none", "null",
+        "⏭ пропустить", "пропустить", "все", "всё", "любой", "любая",
+        "📅 всё время", "всё время", "все время",
+        "⏭ skip", "skip", "all time",
+        "تخطي", "الكل"
+    }
+    if low in skip_values:
+        return None
+    return value
 
 
 def _final_actions_menu(user_id, scope=None):
@@ -3083,21 +3112,21 @@ async def main_handler(message: Message):
 
         # Универсальная воронка фильтров — после неё сразу отчёт, без лишнего вопроса.
         if state.get("step") == "choose_deal_type":
-            state["deal_type"] = _normalize_deal_type_from_text(user_id, text)
+            state["deal_type"] = _skip_to_none_v86(_normalize_deal_type_from_text(user_id, text))
             state["step"] = "choose_property"
             user_states[user_id] = state
             await message.answer("🏠 <b>Шаг 2 из 3</b>\n\nВыберите тип недвижимости или комнатность.", reply_markup=property_menu(user_id))
             return
 
         if state.get("step") == "choose_property":
-            state["property"] = _normalize_property_from_text(user_id, text)
+            state["property"] = _skip_to_none_v86(_normalize_property_from_text(user_id, text))
             state["step"] = "choose_period"
             user_states[user_id] = state
             await message.answer("📅 <b>Шаг 3 из 3</b>\n\nВыберите период анализа.", reply_markup=period_menu(user_id))
             return
 
         if state.get("step") == "choose_period":
-            state["period"] = _normalize_period_from_text(user_id, text)
+            state["period"] = _skip_to_none_v86(_normalize_period_from_text(user_id, text))
             await _execute_selected_report_v72(message, state)
             return
 
