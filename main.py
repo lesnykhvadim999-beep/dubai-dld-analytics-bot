@@ -7999,3 +7999,375 @@ def show_smart_recommendation(goal, budget, timing, risk, rows):
     return text
 
 print('Loaded v90 deep format comparison economics only')
+
+
+# =========================
+# v91 DEEP ECONOMICS + AREA OUTPUT FIX ONLY
+# Scope:
+# 1) connect the full 360 economic conclusion to final reports;
+# 2) restore deal area display using robust area extraction / price ÷ price-per-meter fallback;
+# 3) keep all menus, states, buttons and existing flows unchanged.
+# =========================
+
+def _v91_available_area_expr():
+    """Return robust SQL expression for area in m² across live/archive schema variants."""
+    candidates = [
+        "actual_area",
+        "procedure_area",
+        "area_size",
+        "property_size",
+        "property_area",
+        "built_up_area",
+        "bua",
+        "plot_area",
+        "land_area",
+        "meter_area",
+        "actual_size",
+    ]
+    try:
+        cols = available_columns()
+    except Exception:
+        cols = set()
+
+    existing = [c for c in candidates if c in cols]
+    if not existing:
+        # Safe default for the known archive schema used in this project.
+        existing = ["actual_area"]
+
+    parts = []
+    for c in existing:
+        try:
+            parts.append(num_sql(c))
+        except Exception:
+            pass
+    if not parts:
+        return "NULL::numeric"
+    return "COALESCE(" + ", ".join(parts) + ")"
+
+
+def _v91_safe_number(x, default=None):
+    try:
+        if x is None:
+            return default
+        return float(x)
+    except Exception:
+        return default
+
+
+def _v91_enrich_area_rows(rows):
+    """If DLD did not return area, calculate it from price / price-per-m² where possible."""
+    if not rows:
+        return rows
+    for r in rows:
+        try:
+            area = _v91_safe_number(r.get("area_size"))
+            price = _v91_safe_number(r.get("price"))
+            meter = _v91_safe_number(r.get("meter_price"))
+            if (not area or area <= 0) and price and meter and meter > 0:
+                r["area_size"] = price / meter
+        except Exception:
+            continue
+    return rows
+
+
+def get_latest_deals(scope, name, prop=None, period=None, deal_type=None, limit=5, unit_query=None):
+    """v91 override: same logic, but area is extracted robustly and back-calculated if needed."""
+    prop_sql, prop_args = property_condition(prop)
+    deal_sql, deal_args = make_deal_type_condition(deal_type)
+    p_sql = period_condition(period)
+    value_expr = deal_value_expr(deal_type)
+    unit_sql, unit_args = make_unit_condition(unit_query)
+    area_expr = _v91_available_area_expr()
+
+    if scope == "area":
+        scope_sql, scope_args = make_area_exact_condition(name)
+    elif scope == "building":
+        scope_sql, scope_args = building_exact_condition_for_name(name)
+    else:
+        scope_sql, scope_args = "", []
+
+    params = scope_args + prop_args + deal_args + unit_args + [limit]
+
+    try:
+        with db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT
+                        safe_date,
+                        COALESCE(procedure_name_en::text, '') AS procedure_name_en,
+                        COALESCE(rooms_en::text, '') AS rooms_en,
+                        COALESCE(property_type_en::text, '') AS property_type_en,
+                        COALESCE(property_sub_type_en::text, '') AS property_sub_type_en,
+                        {value_expr} AS price,
+                        {area_expr} AS area_size,
+                        {METER_PRICE} AS meter_price,
+                        COALESCE(building_name_en::text, '') AS building_name_en,
+                        COALESCE(area_name_en::text, '') AS area_name_en
+                    {base_from()}
+                      {scope_sql}
+                      AND {value_expr} IS NOT NULL
+                      {prop_sql}
+                      {deal_sql}
+                      {p_sql}
+                      {unit_sql}
+                    ORDER BY safe_date DESC NULLS LAST
+                    LIMIT %s
+                """, params)
+                rows = cur.fetchall()
+                if scope == "building" and name:
+                    target = normalize_search_text(name)
+                    rows = [r for r in rows if normalize_search_text(r.get("building_name_en", "")) == target]
+                return _v91_enrich_area_rows(rows)
+    except Exception as e:
+        print("GET_LATEST_DEALS_V91_AREA_ERROR:", repr(e))
+        return []
+
+
+def _v91_format_label(prop):
+    p = str(prop or "").lower()
+    if any(x in p for x in ["villa", "вилл"]):
+        return "виллы"
+    if any(x in p for x in ["town", "таун"]):
+        return "таунхаусы"
+    if any(x in p for x in ["land", "plot", "зем"]):
+        return "земельные участки"
+    if any(x in p for x in ["office", "shop", "commercial", "коммер"]):
+        return "коммерческая недвижимость"
+    if any(x in p for x in ["1", "2", "3", "4", "5", "studio", "flat", "unit", "apartment", "br", "b/r"]):
+        return "апартаменты"
+    return "выбранный формат"
+
+
+def _v91_strategy_by_format(prop):
+    p = str(prop or "").lower()
+    if "town" in p or "таун" in p:
+        return (
+            "Таунхаус обычно работает как промежуточный инвестиционный актив: вход ниже полноценной виллы, "
+            "семейный спрос выше, чем у части апартаментов, а ликвидность зависит от community и качества проекта. "
+            "Главный плюс — баланс между lifestyle-спросом и перепродажей. Главный риск — более узкая аудитория, чем у апартаментов."
+        )
+    if "villa" in p or "вилл" in p:
+        return (
+            "Вилла — более капиталоёмкий актив. Она может давать сильный прирост при дефиците семейного продукта, "
+            "но требует большего бюджета, более длинного горизонта и аккуратной проверки community, участка, состояния и сервисных расходов. "
+            "Это формат не для быстрой спекуляции, а для стратегического входа."
+        )
+    if "land" in p or "plot" in p or "зем" in p:
+        return (
+            "Земельный участок — отдельная модель. Здесь доходность зависит не от текущей аренды, а от потенциала застройки, "
+            "плотности, назначения, инфраструктуры и будущего спроса. Такой актив требует ручной юридической и градостроительной проверки."
+        )
+    return (
+        "Апартаменты — самый ликвидный и массовый формат. Их проще сравнивать по DLD, проще сдавать, проще перепродавать, "
+        "и у них шире база покупателей. Главный риск — высокая конкуренция внутри здания и района, поэтому входить нужно ниже средней цены по последним сделкам."
+    )
+
+
+def _v91_generic_deep_article(row, scope=None, name=None, report_kind=None, prop=None, period=None, deal_type=None):
+    deals = _v90_int(row.get("deals") if row else 0)
+    avg_price = _v90_num(row.get("avg_price") if row else None)
+    min_price = _v90_num(row.get("min_price") if row else None)
+    max_price = _v90_num(row.get("max_price") if row else None)
+    avg_meter = _v90_num(row.get("avg_meter") if row else None)
+    is_rent = is_rent_deal_type(deal_type)
+    fmt_label = _v91_format_label(prop or row.get("property_sub_types") or row.get("property_types"))
+    location = name or ("Dubai" if scope == "dubai" else "выбранная локация")
+
+    if deals >= 1000:
+        liquidity = "очень высокая"
+        exit_risk = "низкий"
+        growth_model = 0.075
+    elif deals >= 300:
+        liquidity = "высокая"
+        exit_risk = "умеренный"
+        growth_model = 0.06
+    elif deals >= 100:
+        liquidity = "средняя"
+        exit_risk = "контролируемый, но требует проверки конкретного объекта"
+        growth_model = 0.045
+    else:
+        liquidity = "ограниченная"
+        exit_risk = "повышенный из-за небольшой выборки"
+        growth_model = 0.03
+
+    good_low = min_price if min_price and min_price > 0 else (avg_price * 0.90 if avg_price else None)
+    good_high = avg_price * 0.95 if avg_price else None
+    resale_1 = avg_price * (1 + growth_model) if avg_price and not is_rent else None
+    resale_3 = avg_price * ((1 + growth_model) ** 3) if avg_price and not is_rent else None
+    resale_5 = avg_price * ((1 + growth_model) ** 5) if avg_price and not is_rent else None
+
+    text = (
+        "\n\n🧠 <b>Экономическое заключение 360°</b>\n\n"
+        f"<b>Объект анализа:</b> {location}; формат — <b>{fmt_label}</b>; "
+        f"выборка DLD — <b>{format_int(deals)}</b> сделок.\n\n"
+        "<b>1) Рыночный ориентир</b>\n"
+        f"Средний рыночный уровень по выбранному фильтру — <b>{format_money(avg_price)}</b>. "
+        f"Средняя цена за м² — <b>{format_money(avg_meter)}</b>. "
+        f"Диапазон сделок в DLD: от <b>{format_money(min_price)}</b> до <b>{format_money(max_price)}</b>. "
+        "Этот диапазон нужен не для слепого копирования, а для понимания реальной зоны переговоров и отсечения переоценённых вариантов.\n\n"
+        "<b>2) Ликвидность и риск выхода</b>\n"
+        f"Ликвидность по DLD-сделкам: <b>{liquidity}</b>. "
+        f"Риск выхода из позиции: <b>{exit_risk}</b>. "
+        "Чем выше количество сделок, тем легче проверить справедливую цену, быстрее найти покупателя/арендатора и ниже риск зависнуть с объектом.\n\n"
+        "<b>3) Логика формата</b>\n"
+        f"{_v91_strategy_by_format(fmt_label)}\n\n"
+    )
+
+    if not is_rent:
+        text += (
+            "<b>4) Цена входа и перепродажа</b>\n"
+            f"Интересная зона входа: <b>{format_money(good_low)}</b> — <b>{format_money(good_high)}</b>. "
+            "Покупка выше средней DLD-цены допустима только если у объекта есть объективная премия: вид, этаж, планировка, редкость, состояние, готовая аренда или сильный дефицит аналогов.\n\n"
+            f"Сценарный ориентир перепродажи: через 1 год — <b>{format_money(resale_1)}</b>, "
+            f"через 3 года — <b>{format_money(resale_3)}</b>, "
+            f"через 5 лет — <b>{format_money(resale_5)}</b>. "
+            f"Модельный темп роста заложен осторожно: около <b>{growth_model * 100:.1f}% в год</b>; это ориентир по ликвидности, а не гарантия рынка.\n\n"
+        )
+    else:
+        text += (
+            "<b>4) Арендная логика</b>\n"
+            f"Среднегодовой ориентир аренды — <b>{format_money(avg_price)}</b>. "
+            "Сильная арендная сделка — это объект, который находится ниже среднего рынка, но не имеет слабого состояния, плохого вида или юридических ограничений. "
+            "Для финального решения нужно проверить фактический контракт, срок окончания аренды, сервисные платежи и реальную вакантность.\n\n"
+        )
+
+    # Add comparative format context where possible, but never break the old flow.
+    try:
+        compare_rows, compare_notes = _v90_collect_format_comparison(
+            scope=scope or "dubai",
+            area=name if scope == "area" else None,
+            budget=None,
+            goal="сбалансировано",
+            period=period,
+        )
+        if compare_rows:
+            best = compare_rows[0]
+            text += "<b>5) Сравнение форматов: апартаменты / виллы / таунхаусы</b>\n"
+            for r in compare_rows:
+                text += (
+                    f"• <b>{_v90_format_ru(r.get('format')).capitalize()}</b>: "
+                    f"{format_int(r.get('deals'))} сделок, "
+                    f"средняя цена {format_money(r.get('avg_price'))}, "
+                    f"цена за м² {format_money(r.get('avg_meter'))}, "
+                    f"арендная доходность {format_pct(r.get('yield_pct'))}, "
+                    f"индекс {r.get('score')}/100.\n"
+                )
+            text += (
+                f"\nПо сравнительной модели сильнее выглядит <b>{_v90_format_ru(best.get('format'))}</b>, "
+                "потому что этот формат даёт лучший баланс цены входа, ликвидности, арендной логики и вероятности выхода.\n\n"
+            )
+        else:
+            text += "<b>5) Сравнение форматов</b>\nПо апартаментам, виллам и таунхаусам в текущем фильтре недостаточно единой выборки; для сравнения лучше расширить период или смотреть весь Dubai.\n\n"
+    except Exception as e:
+        print("V91_COMPARE_CONTEXT_ERROR:", repr(e))
+
+    text += (
+        "<b>6) Практическая рекомендация</b>\n"
+        "Не входить только потому, что цена выглядит красивой. Правильная последовательность: "
+        "сначала проверить формат и район, затем последние DLD-сделки по зданию/community, затем площадь, этаж, вид, состояние, сервисные сборы, арендный контракт и мотивацию продавца. "
+        "Оптимальная покупка — та, где цена ниже или около DLD-средней, но качество объекта не хуже рынка."
+    )
+    return text
+
+
+def _build_360_conclusion(row, scope=None, name=None, report_kind=None):
+    """v91 override: full economic article instead of short legacy placeholder."""
+    try:
+        return _v91_generic_deep_article(row, scope=scope, name=name, report_kind=report_kind)
+    except Exception as e:
+        print("BUILD_360_V91_ERROR:", repr(e))
+        deals = _int(row.get("deals") if row else 0) or 0
+        avg_price = row.get("avg_price") if row else None
+        avg_meter = row.get("avg_meter") if row else None
+        return (
+            "\n\n🧠 <b>Экономическое заключение 360°</b>\n\n"
+            f"Выборка: <b>{format_int(deals)}</b> сделок. "
+            f"Средняя цена: <b>{format_money(avg_price)}</b>, средняя цена за метр: <b>{format_money(avg_meter)}</b>. "
+            "Для точного решения нужно сравнить конкретный объект с последними DLD-сделками, площадью, этажом, видом, состоянием, сервисными сборами и реальной арендной ставкой."
+        )
+
+
+def show_smart_recommendation(goal, budget, timing, risk, rows):
+    """v91 override: investment selection always ends with expanded comparative economics."""
+    if not rows:
+        return "❌ По этим параметрам не найдено достаточно сильных вариантов.\n\nПопробуйте расширить бюджет или выбрать другой риск-профиль."
+
+    best = rows[0]
+    area = best.get('area') or '—'
+    prop = best.get('property') or '—'
+    good_low = best.get('min_price') or ((_v90_num(best.get('avg_price')) or 0) * 0.90 if best.get('avg_price') else None)
+    good_high = (_v90_num(best.get('avg_price')) or 0) * 0.95 if best.get('avg_price') else None
+
+    text = (
+        "🧠 <b>Инвестиционный подбор</b>\n\n"
+        "🏆 <b>Лучший сценарий</b>\n"
+        f"📍 <b>Район:</b> {area}\n"
+        f"🏠 <b>Формат:</b> {prop}\n"
+        f"📊 <b>Сделки:</b> {format_int(best.get('deals'))}\n"
+        f"💰 <b>Средняя цена:</b> {format_money(best.get('avg_price'))}\n"
+        f"✅ <b>Комфортная цена входа:</b> {format_money(good_low)} — {format_money(good_high)}\n"
+        f"📐 <b>Средняя цена за метр:</b> {format_money(best.get('avg_meter'))}\n\n"
+    )
+
+    try:
+        compare_rows, compare_notes = _v90_collect_format_comparison(
+            scope='area',
+            area=area,
+            budget=budget,
+            goal=goal,
+            period='36',
+        )
+        if not compare_rows:
+            compare_rows, compare_notes = _v90_collect_format_comparison(
+                scope='dubai',
+                area=None,
+                budget=budget,
+                goal=goal,
+                period='36',
+            )
+
+        if compare_notes:
+            text += "📌 <b>Адаптивный сравнительный фильтр</b>\n"
+            for n in compare_notes[:4]:
+                text += f"• {n}\n"
+            text += "\n"
+
+        if compare_rows:
+            selected_key = _v84_prop_key(prop)
+            selected_compare = None
+            for r in compare_rows:
+                if _v84_prop_key(r.get('format')) == selected_key or selected_key in str(r.get('format')).lower():
+                    selected_compare = r
+                    break
+            compare_best = selected_compare or compare_rows[0]
+
+            text += "⚖️ <b>Сравнение форматов</b>\n\n"
+            for r in compare_rows:
+                mark = "🏆" if r is compare_best else "▫️"
+                text += (
+                    f"{mark} <b>{_v90_format_ru(r.get('format')).capitalize()}</b>: "
+                    f"{format_money(r.get('avg_price'))}, "
+                    f"{format_int(r.get('deals'))} сделок, "
+                    f"доходность {format_pct(r.get('yield_pct'))}, "
+                    f"индекс {r.get('score')}/100\n"
+                )
+            text += "\n"
+            text += _v90_deep_economic_article(compare_best, compare_rows, goal=goal, budget=budget, area=area)
+        else:
+            text += _v91_generic_deep_article(best, scope="area", name=area, prop=prop, period="36", deal_type="sale")
+    except Exception as e:
+        print("SMART_RECOMMENDATION_V91_COMPARE_ERROR:", repr(e))
+        text += _v91_generic_deep_article(best, scope="area", name=area, prop=prop, period="36", deal_type="sale")
+
+    if len(rows) > 1:
+        text += "\n\n📋 <b>Альтернативы</b>\n\n"
+        for i, r in enumerate(rows[1:], 2):
+            text += f"{i}. <b>{r.get('area')}</b> · {r.get('property')}\n   💰 {format_money(r.get('avg_price'))} · 📊 {format_int(r.get('deals'))} сделок\n\n"
+
+    text += (
+        "\n⚠️ <b>Важно:</b> это аналитический ориентир по DLD. Перед покупкой нужно отдельно проверить конкретный объект: "
+        "этаж, вид, состояние, сервисные платежи, срочность продавца, арендный контракт и юридическую чистоту сделки."
+    )
+    return text
+
+print("Loaded v91 deep economics and area output fix only")
