@@ -9922,6 +9922,261 @@ async def send_period_report(message, scope, name=None, prop=None, period=None, 
     await message.answer(html, reply_markup=_final_actions_menu(user_id, scope))
 
 
+# =========================
+# v104 GRACEFUL BEST-OBJECT FALLBACK FIX
+# Purpose: best-object flow must not hard-fail when one exact slice is narrow.
+# It must degrade gracefully by using the same market logic, preserving goal/deal type,
+# and only relaxing filters step-by-step. This fixes the "По выбранным фильтрам..." nonsense.
+# =========================
+
+def _v104_goal_requires_sale(goal):
+    g = str(goal or '').lower()
+    return any(x in g for x in ['перепрод', 'resale', 'flip', 'рост капитала', 'capital'])
+
+
+def _v104_goal_requires_rent(goal):
+    g = str(goal or '').lower()
+    return any(x in g for x in ['аренд', 'roi', 'доход', 'rent', 'yield'])
+
+
+def _v104_best_deal_type(state):
+    # For resale/capital growth the market basis must be sales even if user selected "неважно".
+    if _v104_goal_requires_sale((state or {}).get('goal')):
+        return '🏠 Продажа'
+    dt = (state or {}).get('deal_type')
+    if not dt or str(dt).lower() in ['none', 'неважно', '📊 неважно', 'skip', 'пропустить']:
+        return '🏠 Продажа'
+    return dt
+
+
+def _v104_clean_best_object_state(state):
+    st = dict(state or {})
+    st['deal_type'] = _v104_best_deal_type(st)
+    fmt = st.get('object_format')
+    # Land/commercial cannot carry bedroom filters from previous state.
+    if fmt and any(x in str(fmt).lower() for x in ['plot', 'land', 'зем', 'плот', 'office', 'shop', 'commercial', 'retail']):
+        st['rooms'] = None
+    return st
+
+
+def _v104_query_top(kind, state, relaxed_budget=False, relaxed_rooms=False, relaxed_format=False, limit=3, min_count=1):
+    """More tolerant version of _v95_query_top.
+    Keeps the same architecture/table helpers but avoids hard failure on narrow slices.
+    """
+    st = _v104_clean_best_object_state(state)
+    deal_type = st.get('deal_type') or '🏠 Продажа'
+    src = _v95_value_source(deal_type)
+    value_expr = src['value']
+    meter_expr = src['meter']
+    fmt_sql, fmt_args = ("", []) if relaxed_format else _v95_format_clause(st.get('object_format'), _v95_is_rent(deal_type))
+    room_sql, room_args = ("", []) if relaxed_rooms else _v95_rooms_clause(st.get('rooms'))
+    budget_sql, budget_args = ("", []) if relaxed_budget else _v95_budget_clause(value_expr, st.get('budget'))
+    group_col = 'area_name_en' if kind == 'area' else 'building_name_en'
+    extra_select = 'COUNT(DISTINCT building_name_en) AS buildings,' if kind == 'area' else 'MAX(area_name_en) AS area_name_en,'
+    not_empty = f"AND NULLIF({group_col}::text, '') IS NOT NULL"
+
+    # For best-object search, current 36-month filter can be too harsh in a sparse slice.
+    # We first keep it, then caller will retry with date relaxed by passing relaxed_period=True through state.
+    date_filter = "" if st.get('_v104_relaxed_period') else src['date_filter']
+
+    params = fmt_args + room_args + budget_args + [min_count, limit]
+    sql = f"""
+        SELECT
+            {group_col} AS name,
+            {extra_select}
+            COUNT(*) AS deals,
+            AVG({value_expr}) AS avg_price,
+            MIN({value_expr}) AS min_price,
+            MAX({value_expr}) AS max_price,
+            AVG({meter_expr}) AS avg_meter,
+            MIN(safe_date) AS first_deal,
+            MAX(safe_date) AS last_deal
+        {src['base']}
+          {fmt_sql}
+          {room_sql}
+          {budget_sql}
+          {date_filter}
+          {not_empty}
+          AND {value_expr} IS NOT NULL
+          AND {value_expr} > 0
+        GROUP BY {group_col}
+        HAVING COUNT(*) >= %s
+        ORDER BY deals DESC, avg_price ASC NULLS LAST
+        LIMIT %s
+    """
+    try:
+        with db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                rows = cur.fetchall()
+        cleaned = []
+        for r in rows or []:
+            avg = _v95_num(r.get('avg_price'), None)
+            if avg is None or avg <= 0:
+                continue
+            # Guard dirty values in best-object output.
+            r['min_price'] = _v101_clean_min_price(r.get('min_price'), avg, st.get('budget'))
+            r['score'] = _v95_score(r, st.get('goal'))
+            cleaned.append(r)
+        return sorted(cleaned, key=lambda r: (_v95_num(r.get('score')), _v95_num(r.get('deals'))), reverse=True)[:limit]
+    except Exception as e:
+        print('V104_TOP_QUERY_ERROR', kind, repr(e))
+        return []
+
+
+def _v104_top_areas_and_buildings(state):
+    """Graceful degradation for best-object only.
+    Order is intentional:
+    1) exact;
+    2) remove period limit;
+    3) widen budget;
+    4) remove rooms;
+    5) remove rooms + widen budget;
+    6) only then remove format as Dubai benchmark.
+    """
+    base = _v104_clean_best_object_state(state)
+    attempts = [
+        ({}, 'точный фильтр'),
+        ({'_v104_relaxed_period': True}, 'расширил период анализа'),
+        ({'_v104_relaxed_period': True, '_relaxed_budget': True}, 'расширил период и бюджетный коридор'),
+        ({'_v104_relaxed_period': True, '_relaxed_rooms': True}, 'расширил период и снял комнатность'),
+        ({'_v104_relaxed_period': True, '_relaxed_budget': True, '_relaxed_rooms': True}, 'расширил период, бюджет и снял комнатность'),
+        ({'_v104_relaxed_period': True, '_relaxed_budget': True, '_relaxed_rooms': True, '_relaxed_format': True}, 'использовал рыночный benchmark без формата только как последний ориентир'),
+    ]
+    tried_notes = []
+    for flags, label in attempts:
+        st = dict(base)
+        st.update(flags)
+        areas = _v104_query_top('area', st, relaxed_budget=bool(flags.get('_relaxed_budget')), relaxed_rooms=bool(flags.get('_relaxed_rooms')), relaxed_format=bool(flags.get('_relaxed_format')), limit=3, min_count=1)
+        buildings = _v104_query_top('building', st, relaxed_budget=bool(flags.get('_relaxed_budget')), relaxed_rooms=bool(flags.get('_relaxed_rooms')), relaxed_format=bool(flags.get('_relaxed_format')), limit=3, min_count=1)
+        if areas or buildings:
+            notes = []
+            if label != 'точный фильтр':
+                notes.append('Точная выборка была узкой, поэтому я не остановил сценарий, а ' + label + '.')
+            if flags.get('_relaxed_format'):
+                notes.append('Формат снят только как benchmark; финальное решение по объекту нужно подтверждать по конкретному формату.')
+            return areas, buildings, notes
+        tried_notes.append(label)
+    return [], [], tried_notes
+
+
+def _v104_best_object_limited_report(state):
+    st = _v104_clean_best_object_state(state)
+    return (
+        '⚠️ <b>Лучший объект</b>\n\n'
+        'По выбранной комбинации фильтров не нашёл даже расширенной DLD-выборки, достаточной для честного ранжирования.\n\n'
+        f'📊 <b>Сделка:</b> {st.get("deal_type") or "продажа"}\n'
+        f'🏠 <b>Формат:</b> {st.get("object_format") or "любой формат"}\n'
+        f'💰 <b>Бюджет:</b> {st.get("budget") or "не указан"}\n'
+        f'🛏 <b>Комнаты:</b> {st.get("rooms") or "неважно"}\n'
+        f'🎯 <b>Цель:</b> {st.get("goal") or "сбалансированно"}\n\n'
+        '📌 <b>Что это значит:</b> это не рекомендация отказаться от покупки. Это значит, что для автоматического рейтинга мало сопоставимых DLD-сделок. '\
+        'Следующий правильный шаг — проверить конкретный объект вручную: последние сделки в здании/районе, площадь, этаж, вид, сервисные платежи и срочность продавца.'
+    )
+
+
+def build_best_object_report_v95(state):
+    """v104 override: graceful degradation instead of hard no-data failure."""
+    payload = _ir_v96_prepare(state, 'best object')
+    normalized = _v104_clean_best_object_state(state or {})
+    if payload:
+        req = payload.request
+        fmt_map = {
+            'apartment': 'Apartment', 'townhouse': 'Townhouse', 'villa': 'Villa',
+            'land': 'Plot', 'plot': 'Plot', 'office': 'Office', 'shop': 'Shop',
+            'retail': 'Shop', 'commercial': 'Commercial', 'penthouse': 'Penthouse', 'duplex': 'Duplex',
+        }
+        normalized['deal_type'] = _v104_best_deal_type(normalized)
+        if req.property_format:
+            normalized['object_format'] = fmt_map.get(req.property_format, normalized.get('object_format'))
+        if req.property_format in {'land', 'plot', 'office', 'shop', 'retail', 'commercial', 'warehouse', 'full_building'}:
+            normalized['rooms'] = None
+        elif req.bedrooms:
+            normalized['rooms'] = req.bedrooms.title().replace(' Br', ' BR')
+        normalized['goal'] = _v96_goal_text(payload, normalized)
+
+    areas, buildings, notes = _v104_top_areas_and_buildings(normalized)
+    if not areas and not buildings:
+        return _v104_best_object_limited_report(normalized)
+
+    best_area = areas[0] if areas else None
+    best_building = buildings[0] if buildings else None
+    chosen = best_building or best_area or {}
+
+    deal_type = normalized.get('deal_type') or '🏠 Продажа'
+    obj_format = normalized.get('object_format') or 'любой формат'
+    budget = normalized.get('budget') or 'не указан'
+    rooms = normalized.get('rooms') or 'неважно'
+    goal = normalized.get('goal') or 'сбалансированная стратегия'
+
+    avg_price = _v95_num(chosen.get('avg_price'), None)
+    min_price = _v101_clean_min_price(chosen.get('min_price'), avg_price, budget)
+    entry_low, entry_high = _v101_entry_range(chosen, budget)
+
+    html = '🏆 <b>Лучший объект</b>\n\n'
+    html += _ir_v96_notes_html(payload)
+    html += (
+        f'📊 <b>Сделка:</b> {deal_type}\n'
+        f'🏠 <b>Формат:</b> {obj_format}\n'
+        f'💰 <b>Бюджет:</b> {budget}\n'
+        f'🛏 <b>Комнаты:</b> {rooms}\n'
+        f'🎯 <b>Цель:</b> {goal}\n\n'
+    )
+
+    if notes:
+        html += '📌 <b>Адаптивная логика</b>\n' + '\n'.join([f'• {n}' for n in notes]) + '\n\n'
+
+    if best_area:
+        html += f'🥇 <b>Лучший район:</b> {best_area.get("name")}\n'
+    if best_building:
+        html += f'🥇 <b>Лучший объект / здание:</b> {best_building.get("name")}'
+        if best_building.get('area_name_en'):
+            html += f' — {best_building.get("area_name_en")} '
+        html += '\n'
+
+    html += (
+        f'💰 <b>Средний ориентир:</b> {format_money(avg_price)}\n'
+        f'✅ <b>Комфортная зона входа:</b> {format_money(entry_low)} — {format_money(entry_high)}\n'
+        f'🔥 <b>Сильная точка входа:</b> ниже среднего DLD или ближе к нижним подтверждённым сделкам {format_money(min_price)}\n\n'
+    )
+
+    if areas:
+        html += '🏙 <b>Топ-3 района под цель</b>\n\n'
+        for i, r in enumerate(areas[:3], 1):
+            html += _v95_line(i, r, 'area') + '\n'
+    if buildings:
+        html += '🏢 <b>Топ-3 объекта / здания</b>\n\n'
+        for i, r in enumerate(buildings[:3], 1):
+            html += _v95_line(i, r, 'building') + '\n'
+
+    # Goal-aware conclusion. Do not require rent model for resale.
+    g = str(goal or '').lower()
+    if _v104_goal_requires_sale(goal):
+        strategy = (
+            'Для перепродажи главный критерий — ликвидность и цена входа ниже DLD-средней. '
+            'Система ранжирует варианты по количеству сделок, среднему уровню цены, диапазону min/avg/max и глубине рынка. '
+            'Арендные данные здесь вторичны: их отсутствие не должно останавливать анализ перепродажи.'
+        )
+    elif _v104_goal_requires_rent(goal):
+        strategy = (
+            'Для ROI важны две проверки: цена покупки по sale-DLD и арендный потенциал по rent-DLD. '
+            'Если rent-выборка узкая, решение не блокируется, но confidence по доходности снижается и объект нужно проверить вручную.'
+        )
+    else:
+        strategy = (
+            'Для сбалансированной стратегии важны ликвидность района, понятный формат, справедливая цена входа и возможность выхода без сильного дисконта.'
+        )
+
+    html += (
+        '🧠 <b>Экономическое заключение 360°</b>\n\n'
+        f'{strategy}\n\n'
+        '📌 <b>Практический вывод:</b> используйте топ как short-list. Перед депозитом проверьте конкретный unit: площадь, этаж, вид, состояние, сервисные платежи, последние DLD-сделки и мотивацию продавца.'
+    )
+    return html
+
+print('Loaded v104 graceful best-object fallback fix')
+
+
 print('Loaded v103 building format and strict comparison fix')
 
 
