@@ -101,14 +101,14 @@ def _format_strategy(fmt: str) -> str:
 def _score(row: Dict[str, Any]) -> float:
     explicit = _num(row.get("score"))
     if explicit is not None:
-        return explicit
+        return max(0.0, min(100.0, explicit))
     deals = _int(row.get("deals"))
     avg_price = _num(row.get("avg_price"), 0) or 0
     y = _num(row.get("yield_pct"), 0) or 0
     liq = min(40, math.log10(max(deals, 1)) * 10)
     affordability = 30 if avg_price <= 1500000 else 20 if avg_price <= 3000000 else 12
     yield_score = min(30, y * 4)
-    return round(liq + affordability + yield_score, 1)
+    return max(0.0, min(100.0, round(liq + affordability + yield_score, 1)))
 
 
 def rank_formats(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
