@@ -9659,5 +9659,271 @@ def show_smart_recommendation(goal, budget, timing, risk, rows):
 print('Loaded v101 economic consistency fix only')
 
 
+# =========================
+# v103 BUILDING FORMAT + STRICT COMPARISON FIX
+# Scope: fix apartment towers being analyzed as townhouse/villa; prevent Dubai-wide contamination
+# in building/area comparison; hide economic comparison when comparable data is insufficient.
+# =========================
+
+V103_BUILDING_FORMAT_OVERRIDES = {
+    "grande signature residences": "Apartment",
+    "grande signature": "Apartment",
+    "grande": "Apartment",
+    "address residences dubai opera": "Apartment",
+    "the address residences dubai opera": "Apartment",
+    "address opera": "Apartment",
+    "binghatti corner": "Apartment",
+}
+
+V103_APARTMENT_BUILDING_KEYWORDS = [
+    "residence", "residences", "tower", "towers", "apartments", "apartment",
+    "grande", "address", "opera", "binghatti", "burj", "marina gate", "damac maison",
+]
+
+
+def _v103_norm_name(value):
+    try:
+        return normalize_search_text(value)
+    except Exception:
+        return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+
+def _v103_forced_format_for_building(name):
+    q = _v103_norm_name(name)
+    if not q:
+        return None
+    if q in V103_BUILDING_FORMAT_OVERRIDES:
+        return V103_BUILDING_FORMAT_OVERRIDES[q]
+    for key, fmt in V103_BUILDING_FORMAT_OVERRIDES.items():
+        if key and key in q:
+            return fmt
+    # Safe heuristic: named vertical residential towers are apartments, not villas/townhouses.
+    if any(k in q for k in V103_APARTMENT_BUILDING_KEYWORDS):
+        return "Apartment"
+    return None
+
+
+def _v103_apply_selected_format_override(selected, scope=None, name=None):
+    row = dict(selected or {})
+    if scope == "building":
+        fmt = _v103_forced_format_for_building(name or row.get("building_name_en") or row.get("building"))
+        if fmt:
+            row["format"] = fmt
+            row["property"] = fmt
+            row["forced_format"] = True
+            row["format_note"] = "Формат принудительно определён по типу здания: apartment tower."
+    # Studio/BR are bedroom segments of Apartment, not separate asset classes.
+    if _v101_asset_format(row.get("format") or row.get("property")) == "Apartment":
+        row["format"] = "Apartment"
+    return row
+
+
+# v103: strict stats may expand period only. It must never jump from selected area/building to Dubai-wide
+# inside comparison, because that creates fake villa/townhouse benchmarks for apartment towers.
+def _v101_get_stats_strict(scope, area, prop, period, deal_type):
+    attempts = [(period, scope, area)]
+    if period:
+        attempts.append((None, scope, area))
+    for per, sc, ar in attempts:
+        try:
+            row = get_stats(sc, ar, prop, per, deal_type)
+            if row and _v90_int(row.get('deals')) > 0:
+                return row, sc, ar, per
+        except Exception as e:
+            print('V103_STRICT_STATS_ERROR:', sc, ar, prop, per, deal_type, repr(e))
+    return None, scope, area, period
+
+
+def _v90_one_format_stats(scope, area, fmt, period, budget=None):
+    """v103 strict format stats: same scope/area only; no broad fallback contamination."""
+    sale_row, used_scope, used_area, used_period = _v101_get_stats_strict(scope or 'dubai', area, fmt, period, 'sale')
+    if not sale_row or _v90_int(sale_row.get('deals')) <= 0:
+        return None
+
+    avg_price = _v90_num(sale_row.get('avg_price'), None)
+    deals = _v90_int(sale_row.get('deals'))
+    if avg_price is None or avg_price <= 0 or deals <= 0:
+        return None
+
+    in_budget = _row_matches_budget(sale_row, budget) if budget else True
+
+    rent_row, _, _, _ = _v101_get_stats_strict(used_scope, used_area, fmt, used_period, 'rent')
+    avg_rent = _v90_num((rent_row or {}).get('avg_price'), None)
+    rent_deals = _v90_int((rent_row or {}).get('deals'))
+    yield_pct = None
+    if avg_price and avg_rent and 0 < avg_rent < avg_price * 0.20:
+        yield_pct = avg_rent / avg_price * 100
+    elif avg_price and avg_rent:
+        avg_rent = None
+
+    avg_meter = _v90_num(sale_row.get('avg_meter'), None)
+    liquidity_index = min(100, round(deals / 250 * 100, 1))
+    if deals >= 1000:
+        liquidity_text = 'очень высокая'; growth_base = 0.075
+    elif deals >= 300:
+        liquidity_text = 'высокая'; growth_base = 0.060
+    elif deals >= 100:
+        liquidity_text = 'средняя'; growth_base = 0.045
+    else:
+        liquidity_text = 'ограниченная'; growth_base = 0.030
+
+    af = _v101_asset_format(fmt).lower()
+    if af == 'apartment':
+        exit_risk = 'ниже из-за широкой базы покупателей и арендаторов'; growth_adj = 0.000
+    elif af == 'villa':
+        exit_risk = 'выше по чеку, но сильнее при дефиците качественных семейных объектов'; growth_adj = 0.012
+    else:
+        exit_risk = 'средний: чек ниже виллы, но семейный спрос сильнее, чем у части апартаментов'; growth_adj = 0.008
+    annual_growth = growth_base + growth_adj
+
+    score = _score_format_row({**sale_row, 'format': fmt}, 'сбалансировано')
+    score += 10 if in_budget else -30
+    if yield_pct:
+        score += min(yield_pct, 12) * 1.2
+    score = max(0, min(100, round(score, 1)))
+
+    return {
+        'format': _v101_asset_format(fmt),
+        'sale': sale_row,
+        'rent': rent_row,
+        'deals': deals,
+        'rent_deals': rent_deals,
+        'avg_price': avg_price,
+        'min_price': _v101_clean_min_price(sale_row.get('min_price'), avg_price, budget),
+        'max_price': _v90_num(sale_row.get('max_price'), None),
+        'avg_meter': avg_meter,
+        'avg_rent': avg_rent,
+        'yield_pct': yield_pct,
+        'liquidity_index': liquidity_index,
+        'liquidity_text': liquidity_text,
+        'annual_growth': annual_growth * 100,
+        'resale_1y': avg_price * ((1 + annual_growth) ** 1),
+        'resale_3y': avg_price * ((1 + annual_growth) ** 3),
+        'resale_5y': avg_price * ((1 + annual_growth) ** 5),
+        'score': score,
+        'in_budget': in_budget,
+        'used_period': used_period,
+        'exit_risk': exit_risk,
+        'budget_segment': _budget_label_from_row(sale_row),
+        'used_scope': used_scope,
+        'used_area': used_area,
+        'comparison_scope_valid': True,
+    }
+
+
+def _v90_collect_format_comparison(scope='dubai', area=None, budget=None, goal=None, period=None):
+    """v103: compare only formats available in the exact requested market.
+    Area/building requests must not silently expand to Dubai-wide villas/townhouses.
+    """
+    # Building-level format comparison is usually meaningless. A tower is normally one asset class;
+    # comparing it to Dubai-wide villas created the previous bug.
+    if scope == 'building':
+        return [], ['сравнение форматов отключено для конкретного здания, чтобы не смешивать здание с рынком Дубая']
+
+    rows, notes = [], []
+    seen = set()
+    for fmt in _V90_FORMATS:
+        r = _v90_one_format_stats(scope, area, fmt, period, budget)
+        if not r:
+            notes.append(f'по формату {_v90_format_ru(fmt)} недостаточно стабильных DLD-данных в этом же рынке')
+            continue
+        key = (round(_v90_num(r.get('avg_price'), 0) or 0), _v90_int(r.get('deals')), round(_v90_num(r.get('avg_meter'), 0) or 0))
+        if key in seen:
+            notes.append(f'формат {_v90_format_ru(fmt)} исключён: данные совпали с другим форматом, вероятен общий fallback')
+            continue
+        seen.add(key)
+        rows.append(r)
+
+    if not rows:
+        return [], notes
+
+    if budget:
+        in_budget = [r for r in rows if r.get('in_budget')]
+        out_budget = [r for r in rows if not r.get('in_budget')]
+        if in_budget:
+            rows = sorted(in_budget, key=lambda x: (x.get('score') or 0, x.get('deals') or 0), reverse=True) + \
+                   sorted(out_budget, key=lambda x: (x.get('score') or 0, x.get('deals') or 0), reverse=True)
+            if out_budget:
+                notes.append('форматы вне бюджета оставлены только как benchmark и не могут быть победителем: ' + ', '.join(_v90_format_ru(r['format']) for r in out_budget))
+        else:
+            rows = []
+            notes.append('в выбранном бюджете нет устойчивой единой выборки по форматам; сравнение скрыто, чтобы не рекомендовать актив вне бюджета')
+    else:
+        rows.sort(key=lambda x: (x.get('score') or 0, x.get('deals') or 0), reverse=True)
+
+    # Need at least two formats for a real comparison.
+    if len(rows) < 2:
+        notes.append('для честного сравнения нужно минимум два формата в одном и том же рынке; секция сравнения скрыта')
+    return rows, notes
+
+
+def _v92_build_comparison_for_context(scope=None, name=None, prop=None, period=None, deal_type=None, budget=None, goal=None):
+    """v103: strict comparison context. No automatic Dubai fallback from building/area."""
+    try:
+        if scope == 'building':
+            return []
+        area = name if scope == 'area' else None
+        rows, notes = _v90_collect_format_comparison(
+            scope=scope or 'dubai',
+            area=area,
+            budget=budget,
+            goal=goal,
+            period=period,
+        )
+        if len(rows) < 2:
+            return []
+        return rows or []
+    except Exception as e:
+        print('V103_CONTEXT_COMPARE_ERROR:', repr(e))
+        return []
+
+
+def _build_360_conclusion(row, scope=None, name=None, report_kind=None):
+    """v103: external engine with forced building format and strict comparison isolation."""
+    try:
+        selected = _v103_apply_selected_format_override(row or {}, scope=scope, name=name)
+        if _EXT_BUILD_ECONOMIC_REPORT:
+            comparisons = _v92_build_comparison_for_context(scope=scope, name=name, period=None)
+            return _EXT_BUILD_ECONOMIC_REPORT(
+                selected=selected,
+                comparisons=comparisons,
+                goal=report_kind or 'аналитика DLD',
+                budget=None,
+                period=None,
+                area=name or selected.get('area'),
+                deal_type=None,
+            )
+    except Exception as e:
+        print('BUILD_360_V103_ENGINE_ERROR:', repr(e))
+    try:
+        return _v91_generic_deep_article(row, scope=scope, name=name, report_kind=report_kind)
+    except Exception as e:
+        print('BUILD_360_V103_FALLBACK_ERROR:', repr(e))
+        return "\n\n🧠 <b>Экономическое заключение 360°</b>\n\nНедостаточно данных для полного экономического отчёта. Расширьте период или фильтр."
+
+
+async def send_period_report(message, scope, name=None, prop=None, period=None, deal_type=None):
+    """v103: do not append economic conclusion when period comparison itself is insufficient."""
+    user_id = message.from_user.id
+    await send_processing(message)
+    period = period or '12'
+    comparison = get_comparison(scope, name, prop, period, deal_type)
+    if not comparison:
+        await message.answer(no_data_message('Сравнение периодов'), reply_markup=report_menu(user_id) if scope in ['building', 'area'] else main_menu(user_id))
+        return
+    current, previous = comparison
+    if not current or not previous or not _int(current.get('deals')) or not _int(previous.get('deals')):
+        await message.answer(no_data_message('Сравнение периодов'), reply_markup=report_menu(user_id) if scope in ['building', 'area'] else main_menu(user_id))
+        return
+    title = _human_report_title(scope, name, 'Сравнение периодов')
+    html = show_comparison(f"<b>{title}</b>", current, previous, period, deal_type)
+    html += _build_360_conclusion(current, scope, name, 'period')
+    set_last_report(user_id, title, html, scope)
+    await message.answer(html, reply_markup=_final_actions_menu(user_id, scope))
+
+
+print('Loaded v103 building format and strict comparison fix')
+
+
 if __name__ == "__main__":
     asyncio.run(main())
