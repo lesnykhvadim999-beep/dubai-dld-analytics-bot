@@ -55,6 +55,41 @@ bot = Bot(
 
 dp = Dispatcher()
 
+# v53: aiogram global error handler
+try:
+    import error_logger as _err_logger
+except Exception:
+    _err_logger = None
+
+
+@dp.errors()
+async def _analytics_global_error_handler(event):
+    try:
+        exc = event.exception
+        upd = event.update
+        user_id = None
+        ctx = {}
+        handler = "aiogram"
+        if upd:
+            if upd.message:
+                user_id = upd.message.from_user.id if upd.message.from_user else None
+                ctx["text"] = (upd.message.text or "")[:200]
+                handler = "message_handler"
+            elif upd.callback_query:
+                user_id = upd.callback_query.from_user.id if upd.callback_query.from_user else None
+                ctx["data"] = (upd.callback_query.data or "")[:200]
+                handler = "callback_handler"
+        import traceback as _tb
+        print(f"[analytics-error] {type(exc).__name__}: {exc}", flush=True)
+        if _err_logger:
+            _err_logger.log_error("analytics", handler, str(exc),
+                                    error_class=type(exc).__name__,
+                                    user_id=user_id, context=ctx,
+                                    tb=_tb.format_exc()[-1500:])
+    except Exception:
+        pass
+    return True
+
 TABLE = "public.dld_transactions_full"
 
 user_languages = {}
@@ -191,7 +226,7 @@ def sale_identity_condition_sql():
 
 TEXTS = {
     "ru": {
-        "choose_lang": '🏙 <b>Dubai DLD Analytics Bot</b>\n\nВаш аналитический помощник по рынку недвижимости Дубая.\n\nЧто умеет бот:\n• искать здания и похожие названия;\n• показывать статистику по районам;\n• анализировать сделки DLD;\n• сравнивать периоды;\n• оценивать выгодность конкретной сделки;\n• подбирать район и формат юнита под бюджет и цель.\n\nВыберите язык:',
+        "choose_lang": '🏙 <b>Dubai DLD Analytics</b>\n\nВаш аналитический помощник по рынку недвижимости Дубая.\n\nЧто умеет система:\n• искать здания и похожие названия;\n• показывать статистику по районам;\n• анализировать сделки DLD;\n• сравнивать периоды;\n• оценивать выгодность конкретной сделки;\n• подбирать район и формат юнита под бюджет и цель.\n\nВыберите язык:',
         "lang_selected": "✅ Язык выбран: <b>Русский</b>\n\nГлавное меню:",
         "main_menu": "🏠 <b>Главное меню</b>\n\nВыберите раздел:",
         "view_deals": "🧾 Сделки",
@@ -231,7 +266,7 @@ TEXTS = {
         "both": "📊 Всё",
     },
     "en": {
-        "choose_lang": "🏙 <b>Dubai DLD Analytics Bot</b>\n\nChoose language:",
+        "choose_lang": "🏙 <b>Dubai DLD Analytics</b>\n\nChoose language:",
         "lang_selected": "✅ Language selected: <b>English</b>\n\nMain menu:",
         "main_menu": "🏠 <b>Main menu</b>\n\nChoose section:",
         "view_deals": "📊 View deals",
@@ -271,7 +306,7 @@ TEXTS = {
         "both": "📊 All",
     },
     "ar": {
-        "choose_lang": "🏙 <b>Dubai DLD Analytics Bot</b>\n\nاختر اللغة:",
+        "choose_lang": "🏙 <b>Dubai DLD Analytics</b>\n\nاختر اللغة:",
         "lang_selected": "✅ تم اختيار اللغة: <b>العربية</b>\n\nالقائمة الرئيسية:",
         "main_menu": "🏠 <b>القائمة الرئيسية</b>\n\nاختر القسم:",
         "view_deals": "📊 عرض الصفقات",
@@ -1948,7 +1983,7 @@ except NameError:
     ORIG_get_stats_smart = None
     ORIG_get_latest_deals_smart = None
 
-RENT_TABLE = "public.dld_rents"
+RENT_TABLE = "public.dld_rents_full"
 
 
 def is_rent_deal(deal_type):
@@ -2084,13 +2119,55 @@ def rent_base_from():
     """
 
 
+_RENT_COLS_CACHE = {}
+
+
+def _rent_col(field):
+    """v52 FIX: schema-aware колонка для rent tables.
+    Реальные колонки в dld_rents_full: area_en, project_en (нет building_en/building_name_en!),
+    prop_type_en, prop_sub_type_en, rooms_en, annual_amount, contract_amount.
+    Раньше hardcoded building_name_en / area_name_en / property_sub_type_en —
+    SQL крэшил → user видел "no data".
+    """
+    candidates = {
+        "building": ["building_name_en", "building_en", "building", "project_en", "project_name_en"],
+        "area":     ["area_name_en", "area_en", "area"],
+        "rooms":    ["rooms_en", "rooms"],
+        "prop_type":     ["property_type_en", "prop_type_en"],
+        "prop_subtype":  ["property_sub_type_en", "prop_sub_type_en"],
+    }
+    if field in _RENT_COLS_CACHE:
+        return _RENT_COLS_CACHE[field]
+    # Try to find which one exists in RENT_TABLE
+    try:
+        cols = set()
+        for t in ("dld_rents_full", "dld_rent_archive"):
+            try:
+                tcols = table_columns(t)
+                cols.update(tcols or [])
+            except Exception:
+                pass
+        lowered = {c.lower(): c for c in cols}
+        for cand in candidates.get(field, []):
+            if cand.lower() in lowered:
+                _RENT_COLS_CACHE[field] = lowered[cand.lower()]
+                return _RENT_COLS_CACHE[field]
+    except Exception:
+        pass
+    # Fallback: first candidate name (queries will use it; if missing, fail gracefully)
+    _RENT_COLS_CACHE[field] = candidates.get(field, [""])[0]
+    return _RENT_COLS_CACHE[field]
+
+
 def rent_scope_condition(scope, name):
     if not name:
         return "", []
     if scope == "building":
-        return " AND building_name_en ILIKE %s", [f"%{name}%"]
+        col = _rent_col("building")
+        return f" AND {col} ILIKE %s" if col else "", [f"%{name}%"] if col else []
     if scope == "area":
-        return " AND area_name_en ILIKE %s", [f"%{name}%"]
+        col = _rent_col("area")
+        return f" AND {col} ILIKE %s" if col else "", [f"%{name}%"] if col else []
     return "", []
 
 
@@ -2119,18 +2196,24 @@ def rent_previous_condition(period_key):
 
 
 def rent_property_condition(prop):
+    """v52 FIX: schema-aware rent columns. property_sub_type_en → prop_sub_type_en in dld_rents_full."""
     if not prop:
         return "", []
+    rooms_col = _rent_col("rooms") or "rooms_en"
+    pt_col    = _rent_col("prop_type") or "prop_type_en"
+    pst_col   = _rent_col("prop_subtype") or "prop_sub_type_en"
     p = str(prop).lower().strip()
     if p == "studio":
-        return "AND (rooms_en ILIKE %s OR property_sub_type_en ILIKE %s)", ["%studio%", "%studio%"]
+        return f"AND ({rooms_col} ILIKE %s OR {pst_col} ILIKE %s)", ["%studio%", "%studio%"]
     if p in ["1 br", "2 br", "3 br", "4 br"]:
         n = p.split()[0]
-        return "AND (rooms_en ILIKE %s OR rooms_en = %s OR property_sub_type_en ILIKE %s)", [f"%{n}%", n, f"%{n}%"]
+        return (f"AND ({rooms_col} ILIKE %s OR {rooms_col} = %s OR {pst_col} ILIKE %s)",
+                [f"%{n}%", n, f"%{n}%"])
     if p == "5 br+":
-        return "AND (rooms_en ILIKE %s OR rooms_en ILIKE %s OR rooms_en ILIKE %s OR rooms_en ILIKE %s OR rooms_en ILIKE %s)", ["%5%", "%6%", "%7%", "%8%", "%9%"]
+        return (f"AND ({rooms_col} ILIKE %s OR {rooms_col} ILIKE %s OR {rooms_col} ILIKE %s OR {rooms_col} ILIKE %s OR {rooms_col} ILIKE %s)",
+                ["%5%", "%6%", "%7%", "%8%", "%9%"])
     val = f"%{prop}%"
-    return "AND (property_type_en ILIKE %s OR property_sub_type_en ILIKE %s)", [val, val]
+    return f"AND ({pt_col} ILIKE %s OR {pst_col} ILIKE %s)", [val, val]
 
 
 def rent_unit_condition(unit_query):
@@ -2486,16 +2569,109 @@ def safe_call(fn, *args, default=None):
         return default
 
 
-def no_data_message(title="Аналитика"):
-    return (
-        f"⚠️ <b>{title}</b>\n\n"
-        "По выбранным фильтрам не удалось получить стабильную выборку DLD.\n\n"
+def no_data_message(title="Аналитика", *, scope=None, name=None,
+                     prop=None, period=None, deal_type=None, user_id=None):
+    """v52: enrich сообщение реальной подсказкой + log event для мониторинга."""
+    # Async-ish DB log so we know what users hit this
+    try:
+        _log_no_data_event(title, scope, name, prop, period, deal_type, user_id)
+    except Exception:
+        pass
+
+    # Smart hint: try wider periods + show counts
+    hint_lines = []
+    if name and scope in ("area", "building"):
+        try:
+            cnts = _count_deals_by_period(scope, name)
+            if cnts:
+                if cnts.get(365):
+                    hint_lines.append(f"💡 За год по «{name}» в DLD: <b>{cnts[365]:,} сделок</b>.")
+                if cnts.get(730):
+                    hint_lines.append(f"💡 За 2 года: <b>{cnts[730]:,} сделок</b>.")
+                if cnts.get('all'):
+                    hint_lines.append(f"💡 Всего в архиве: <b>{cnts['all']:,} сделок</b>.")
+        except Exception as _e:
+            print(f"[no_data hint err] {_e}")
+
+    msg = f"⚠️ <b>{title}</b>\n\n"
+    msg += "По выбранным фильтрам нет достаточных данных за этот период.\n\n"
+    if hint_lines:
+        msg += "\n".join(hint_lines) + "\n\n"
+    msg += (
         "Что можно сделать:\n"
-        "• выбрать «Всё время»;\n"
+        "• выбрать «Всё время» — увидите все сделки;\n"
+        "• увеличить период до 6 / 12 месяцев;\n"
         "• выбрать «Пропустить» в типе юнита;\n"
         "• попробовать 1 BR / 2 BR / Studio;\n"
         "• проверить другое здание или район."
     )
+    return msg
+
+
+def _count_deals_by_period(scope, name):
+    """Quick count of deals для 365д / 730д / всё время. Без блокировки UI (best-effort)."""
+    if not name or scope not in ("area", "building"):
+        return None
+    out = {}
+    try:
+        with _archive_conn() as ac, ac.cursor() as cur:
+            col = "building_name_en" if scope == "building" else "area_name_en"
+            for days_label, where in [
+                (365, "CASE WHEN instance_date ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN instance_date::date ELSE NULL END > CURRENT_DATE - INTERVAL '365 days'"),
+                (730, "CASE WHEN instance_date ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN instance_date::date ELSE NULL END > CURRENT_DATE - INTERVAL '730 days'"),
+                ('all', "1=1"),
+            ]:
+                try:
+                    cur.execute(f"""
+                        SELECT COUNT(*) FROM dld_sale_archive
+                         WHERE LOWER(TRIM({col})) = LOWER(TRIM(%s))
+                           AND NULLIF(actual_worth,'')::numeric > 100000
+                           AND {where}
+                    """, (name,))
+                    out[days_label] = cur.fetchone()[0]
+                except Exception:
+                    pass
+    except Exception:
+        return None
+    return out
+
+
+def _archive_conn():
+    """Helper для no_data hint queries. Использует ARCHIVE_DATABASE_URL."""
+    import psycopg2
+    url = os.environ.get("ARCHIVE_DATABASE_URL") or os.environ.get("DATABASE_URL")
+    return psycopg2.connect(url, cursor_factory=RealDictCursor)
+
+
+def _log_no_data_event(title, scope, name, prop, period, deal_type, user_id):
+    """Логирует в intelligence DB событие 'no_data' чтобы watchdog мог отчитываться о таких UX-fail."""
+    intel_url = os.environ.get("INTELLIGENCE_DATABASE_URL") or os.environ.get("DATABASE_URL")
+    if not intel_url:
+        return
+    try:
+        import psycopg2
+        with psycopg2.connect(intel_url, connect_timeout=3) as c, c.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS user_no_data_events (
+                    id BIGSERIAL PRIMARY KEY,
+                    created_at TIMESTAMPTZ DEFAULT now(),
+                    user_id BIGINT,
+                    title TEXT,
+                    scope TEXT,
+                    name TEXT,
+                    prop TEXT,
+                    period TEXT,
+                    deal_type TEXT
+                )
+            """)
+            cur.execute("""
+                INSERT INTO user_no_data_events (user_id, title, scope, name, prop, period, deal_type)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (user_id, title[:100], scope, (name or '')[:100],
+                  (prop or '')[:50], (period or '')[:20], (deal_type or '')[:10]))
+            c.commit()
+    except Exception as e:
+        print(f"[no_data log err] {e}")
 
 
 # FORMAT COMPARISON ADDON v87
@@ -2824,7 +3000,43 @@ def show_format_best_buildings(prop, area=None, period=None):
 
 @dp.message(CommandStart())
 async def start_handler(message: Message):
-    user_states[message.from_user.id] = {}
+    user_id = message.from_user.id
+    user_states[user_id] = {}
+    # v52: parse deep-link payload from other bots
+    # /start bld-NAME → pre-load building report
+    # /start area-NAME → pre-load area report
+    # /start from_XXX → just welcome screen
+    text = (message.text or "").strip()
+    payload = ""
+    if " " in text:
+        payload = text.split(" ", 1)[1].strip()
+    if payload.startswith("bld-") or payload.startswith("bld_"):
+        bld = payload[4:].replace("_", " ").strip()
+        if bld:
+            user_states[user_id] = {"step": "full_report_done", "history": []}
+            try:
+                await send_full_market_report(message, "building", bld)
+                return
+            except Exception as e:
+                print(f"[deeplink bld] {e}")
+    elif payload.startswith("area-") or payload.startswith("area_"):
+        area = payload[5:].replace("_", " ").strip()
+        if area:
+            user_states[user_id] = {"step": "full_report_done", "history": []}
+            try:
+                await send_full_market_report(message, "area", area)
+                return
+            except Exception as e:
+                print(f"[deeplink area] {e}")
+    # default: show welcome / language picker (with logo if available)
+    try:
+        from aiogram.types import FSInputFile
+        import os as _os
+        _logo = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "analytics_logo.png")
+        if _os.path.isfile(_logo):
+            await message.answer_photo(FSInputFile(_logo))
+    except Exception as _e:
+        print(f"[welcome logo] {_e}")
     await message.answer(TEXTS["ru"]["choose_lang"], reply_markup=language_menu())
 
 
@@ -2854,7 +3066,16 @@ def main_menu(user_id):
         ["🏆 Лучший объект"],
         ["🏙 Район", "🧾 Сделки"],
         ["📊 Рейтинги", "⚖️ Сравнение форматов"],
-        ["🌆 Дубай"],
+        ["🌆 Дубай", "📑 Полный отчёт"],
+    ])
+
+
+def full_report_menu(user_id):
+    return kb([
+        ["🌆 Отчёт Дубай"],
+        ["🏙 Отчёт район", "🏘 Несколько районов"],
+        ["🏢 Отчёт здание"],
+        [tr(user_id, "main")],
     ])
 
 
@@ -3021,7 +3242,7 @@ async def send_processing(message, text=None):
 
 
 def _is_main_button(user_id, text):
-    return text in ["🧠 Подбор", "🏢 Здание", "🏆 Лучший объект", "🏙 Район", "📊 Рейтинги", "⚖️ Сравнение форматов", "🧾 Сделки", "🌆 Дубай"]
+    return text in ["🧠 Подбор", "🏢 Здание", "🏆 Лучший объект", "🏙 Район", "📊 Рейтинги", "⚖️ Сравнение форматов", "🧾 Сделки", "🌆 Дубай", "📑 Полный отчёт"]
 
 
 def _normalize_period_from_text(user_id, text):
@@ -3165,7 +3386,11 @@ async def send_period_report(message, scope, name=None, prop=None, period=None, 
     period = period or "12"
     comparison = get_comparison(scope, name, prop, period, deal_type)
     if not comparison:
-        await message.answer(no_data_message("Сравнение периодов"), reply_markup=report_menu(user_id) if scope in ["building", "area"] else main_menu(user_id))
+        await message.answer(
+            no_data_message("Сравнение периодов", scope=scope, name=name,
+                             prop=prop, period=period, deal_type=deal_type, user_id=user_id),
+            reply_markup=report_menu(user_id) if scope in ["building", "area"] else main_menu(user_id)
+        )
         return
     current, previous = comparison
     title = _human_report_title(scope, name, "Сравнение периодов")
@@ -3178,9 +3403,32 @@ async def send_period_report(message, scope, name=None, prop=None, period=None, 
 async def send_deals_report(message, scope, name=None, prop=None, period=None, deal_type=None):
     user_id = message.from_user.id
     await send_processing(message)
-    rows, used_prop, used_period, used_deal_type = get_latest_deals_smart(scope, name, prop, period, deal_type)
+    # v52 FIX: try/except + централизованный error_logger
+    try:
+        rows, used_prop, used_period, used_deal_type = get_latest_deals_smart(scope, name, prop, period, deal_type)
+    except Exception as e:
+        print("SEND_DEALS_REPORT_SQL_ERROR:", repr(e), "scope=", scope, "name=", name, "prop=", prop, "period=", period, "deal_type=", deal_type)
+        try:
+            import error_logger as _el, traceback as _tb
+            _el.log_error("analytics", "send_deals_report", str(e),
+                           error_class=type(e).__name__, user_id=user_id,
+                           context={"scope": scope, "name": name, "prop": prop,
+                                    "period": period, "deal_type": deal_type},
+                           tb=_tb.format_exc()[-1500:])
+        except Exception:
+            pass
+        await message.answer(
+            no_data_message("Последние сделки", scope=scope, name=name,
+                             prop=prop, period=period, deal_type=deal_type, user_id=user_id),
+            reply_markup=report_menu(user_id) if scope in ["building", "area"] else main_menu(user_id)
+        )
+        return
     if not rows:
-        await message.answer(no_data_message("Последние сделки"), reply_markup=report_menu(user_id) if scope in ["building", "area"] else main_menu(user_id))
+        await message.answer(
+            no_data_message("Последние сделки", scope=scope, name=name,
+                             prop=prop, period=period, deal_type=deal_type, user_id=user_id),
+            reply_markup=report_menu(user_id) if scope in ["building", "area"] else main_menu(user_id)
+        )
         return
     title = _human_report_title(scope, name, "Последние сделки")
     html = f"🧾 <b>{title}</b>\n"
@@ -3304,6 +3552,14 @@ async def start_area_search_from_text(message, text):
 async def main_handler(message: Message):
     user_id = message.from_user.id
     text = (message.text or "").strip()
+    # v51 ANTISPAM: bypass для admin
+    try:
+        import antispam as _as
+        is_adm = user_id in ADMIN_IDS
+        if _as.is_spam(user_id, text, is_admin=is_adm):
+            return
+    except Exception:
+        pass
     state = user_states.get(user_id, {}) or {}
 
     try:
@@ -3317,6 +3573,18 @@ async def main_handler(message: Message):
             return
         if text in ["/admin", "👑 Админ", "👑 Админ-панель"]:
             await handle_admin_dashboard(message)
+            return
+        # v50/v51: admin trigger for daily_reports (manual regen if cron failed)
+        # FIX: was ADMIN_ID undefined → use ADMIN_IDS set
+        if text in ["/trigger_daily_reports", "/run_reports"] and user_id in ADMIN_IDS:
+            await message.answer("⏳ Запускаю daily_reports.run_daily() …")
+            try:
+                import daily_reports, asyncio as _asyncio
+                loop = _asyncio.get_event_loop()
+                await loop.run_in_executor(None, daily_reports.run_daily, 150, 300)
+                await message.answer("✅ Отчёты обновлены.")
+            except Exception as _e:
+                await message.answer(f"❌ Ошибка: {_e}")
             return
         if text == "/help":
             await message.answer(
@@ -3406,6 +3674,50 @@ async def main_handler(message: Message):
         if text == "🌆 Дубай":
             st = {"step": "dubai_action", "scope": "dubai", "name": None, "history": []}
             await _ask_action_menu_v72(message, st)
+            return
+        if text == "📑 Полный отчёт":
+            user_states[user_id] = {"step": "full_report_menu", "history": []}
+            await message.answer(
+                "📑 <b>Полный аналитический отчёт</b>\n\n"
+                "Готовые ежедневные отчёты с медианными ценами по типам квартир, "
+                "ROI, динамикой за месяц/год. Выберите масштаб:",
+                reply_markup=full_report_menu(user_id),
+            )
+            return
+        # Меню полного отчёта.
+        if state.get("step") == "full_report_menu":
+            if text == "🌆 Отчёт Дубай":
+                await send_full_market_report(message, "dubai", None)
+                return
+            if text == "🏙 Отчёт район":
+                user_states[user_id] = {"step": "full_report_area_query", "history": state.get("history", [])}
+                await message.answer("Введите название района (например: Dubai Marina):", reply_markup=back_menu(user_id))
+                return
+            if text == "🏘 Несколько районов":
+                user_states[user_id] = {"step": "full_report_multi_areas", "areas": [], "history": state.get("history", [])}
+                await message.answer(
+                    "Введите названия районов через запятую (например: Dubai Marina, Business Bay, JVC):",
+                    reply_markup=back_menu(user_id),
+                )
+                return
+            if text == "🏢 Отчёт здание":
+                user_states[user_id] = {"step": "full_report_building_query", "history": state.get("history", [])}
+                await message.answer("Введите название здания:", reply_markup=back_menu(user_id))
+                return
+            await message.answer("Выберите масштаб отчёта.", reply_markup=full_report_menu(user_id))
+            return
+        if state.get("step") == "full_report_area_query":
+            await send_full_market_report(message, "area", text.strip())
+            return
+        if state.get("step") == "full_report_multi_areas":
+            areas = [a.strip() for a in text.split(",") if a.strip()]
+            if not areas:
+                await message.answer("Не понял список. Введите районы через запятую.", reply_markup=back_menu(user_id))
+                return
+            await send_multi_area_report(message, areas)
+            return
+        if state.get("step") == "full_report_building_query":
+            await send_full_market_report(message, "building", text.strip())
             return
 
         # Рейтинги.
@@ -3800,6 +4112,15 @@ async def main_handler(message: Message):
 
     except Exception as e:
         print("MAIN_ROUTER_V72_ERROR:", repr(e))
+        # v52 LOGGING: пишем в bot_error_events чтобы watchdog мог alert'нуть
+        try:
+            import error_logger as _el, traceback as _tb
+            _el.log_error("analytics", "main_handler", str(e),
+                           error_class=type(e).__name__, user_id=user_id,
+                           context={"text": text[:200] if text else "", "state_step": state.get("step")},
+                           tb=_tb.format_exc()[-1500:])
+        except Exception:
+            pass
         await message.answer("⚠️ Произошла техническая ошибка в сценарии. Нажмите «Главное меню» и повторите запрос.", reply_markup=main_menu(user_id))
 
 
@@ -3953,7 +4274,7 @@ def selftest_deal_type_logic():
 # Если по зданию нет прямого совпадения в dld_rents, бот ищет аренду по району здания,
 # а если и это пусто — мягко расширяет фильтр, чтобы не отдавать ложное "нет сделок".
 
-RENT_TABLE = "public.dld_rents"
+RENT_TABLE = "public.dld_rents_full"
 
 
 def is_rent_deal(deal_type):
@@ -5136,21 +5457,21 @@ def base_from():
                  ELSE NULL::numeric END
         )
     """
+    # ВНИМАНИЕ: используем `_norm` суффикс для derived колонок чтобы избежать
+    # AmbiguousColumn — реальная таблица содержит колонки `rooms_en/building_name_en/
+    # area_name_en/property_type_en/property_sub_type_en/procedure_name_en`, и
+    # `SELECT *, ... AS rooms_en` создавало 2 колонки с одинаковым именем →
+    # любая ссылка на rooms_en во внешнем SELECT падала с AmbiguousColumn.
     return f"""
         FROM (
             SELECT
                 *,
                 {m['date']} AS safe_date,
-                {m['building']} AS building_name_en,
-                {m['building']} AS building_en,
-                {m['area']} AS area_name_en,
-                {m['area']} AS area_en,
-                {m['rooms']} AS rooms_en,
-                {m['ptype']} AS property_type_en,
-                {m['ptype']} AS prop_type_en,
-                {m['subtype']} AS property_sub_type_en,
-                {m['subtype']} AS prop_sub_type_en,
-                {m['procedure']} AS procedure_name_en,
+                {m['building']} AS building_name_norm,
+                {m['area']} AS area_name_norm,
+                {m['rooms']} AS rooms_norm,
+                {m['ptype']} AS property_type_norm,
+                {m['subtype']} AS property_sub_type_norm,
                 {m['procedure']} AS procedure_name_norm,
                 {m['unit']} AS unit_number_norm,
                 {m['price']} AS actual_worth_norm,
@@ -5169,13 +5490,16 @@ def base_from():
 
 
 # Важно: переопределяем выражения после base_from alias-фикса.
+# Используем `_norm` derived колонки чтобы избежать AmbiguousColumn:
+# реальная DB имеет rooms_en/building_name_en/area_name_en, и SELECT * приносит
+# их же — поэтому ссылка на `rooms_en` без префикса падает в UNION-контексте.
 PRICE = "actual_worth_norm"
 METER_PRICE = "meter_sale_price_norm"
-BUILDING_NAME = "COALESCE(NULLIF(building_name_en::text, ''), NULLIF(building_en::text, ''), NULLIF(project_en::text, ''), '')"
-AREA_TXT = "COALESCE(area_name_en::text, '')"
-BUILDING_TXT = "COALESCE(building_name_en::text, '')"
-ROOMS_TXT = "COALESCE(rooms_en::text, '')"
-PROPERTY_TYPE_TXT = "COALESCE(property_type_en::text, '')"
+BUILDING_NAME = "building_name_norm"
+AREA_TXT = "COALESCE(area_name_norm::text, '')"
+BUILDING_TXT = "COALESCE(building_name_norm::text, '')"
+ROOMS_TXT = "COALESCE(rooms_norm::text, '')"
+PROPERTY_TYPE_TXT = "COALESCE(property_type_norm::text, '')"
 PROPERTY_SUB_TYPE_TXT = "COALESCE(property_sub_type_en::text, '')"
 PROCEDURE_TXT = "COALESCE(procedure_name_en::text, procedure_name_norm::text, '')"
 
@@ -6014,7 +6338,7 @@ async def handle_consultation_request(message):
         await message.answer("⌛️ Заявку можно отправить один раз в 10 минут. Попробуйте немного позже.", reply_markup=result_menu(user_id))
         return
     LAST_LEAD_TS[user_id] = now
-    await message.answer(f"💼 <b>Консультация</b>\n\nПерейдите в бот для заявки:\n{LEAD_BOT_URL}", reply_markup=result_menu(user_id))
+    await message.answer(f"💼 <b>Консультация</b>\n\nОставьте заявку Вадиму:\n{LEAD_BOT_URL}", reply_markup=result_menu(user_id))
 
 
 async def handle_admin_dashboard(message):
@@ -8011,11 +8335,12 @@ def _v84_prop_key(prop):
 
 
 def _v84_property_text_expr():
+    """v52 FIX: убран property_usage_en — этой колонки нет в текущей DLD схеме,
+    из-за чего UndefinedColumn ломал все деал-запросы (user видел 'no data')."""
     return "LOWER(" \
         "COALESCE(rooms_en::text, '') || ' ' || " \
         "COALESCE(property_type_en::text, '') || ' ' || " \
-        "COALESCE(property_sub_type_en::text, '') || ' ' || " \
-        "COALESCE(property_usage_en::text, '')" \
+        "COALESCE(property_sub_type_en::text, '')" \
         ")"
 
 
@@ -8555,27 +8880,47 @@ def get_latest_deals(scope, name, prop=None, period=None, deal_type=None, limit=
     try:
         with db() as conn:
             with conn.cursor() as cur:
+                # v92 fix: AmbiguousColumn ("rooms_en is ambiguous") fired in scope='area'
+                # because base_from() subquery exposed physical `rooms_en` via `SELECT *`
+                # AND outer SELECT created `... AS rooms_en` alias. property_condition()
+                # plain `rooms_en` reference in WHERE then was ambiguous in some PG paths.
+                # Fix: wrap result in outer SELECT — WHERE goes on inner scope where only
+                # subquery's physical rooms_en exists (no outer alias conflict).
                 cur.execute(f"""
                     SELECT
                         safe_date,
-                        COALESCE(procedure_name_en::text, '') AS procedure_name_en,
-                        COALESCE(rooms_en::text, '') AS rooms_en,
-                        COALESCE(property_type_en::text, '') AS property_type_en,
-                        COALESCE(property_sub_type_en::text, '') AS property_sub_type_en,
-                        {value_expr} AS price,
-                        {area_expr} AS area_size,
-                        {METER_PRICE} AS meter_price,
-                        COALESCE(building_name_en::text, '') AS building_name_en,
-                        COALESCE(area_name_en::text, '') AS area_name_en
-                    {base_from()}
-                      {scope_sql}
-                      AND {value_expr} IS NOT NULL
-                      {prop_sql}
-                      {deal_sql}
-                      {p_sql}
-                      {unit_sql}
-                    ORDER BY safe_date DESC NULLS LAST
-                    LIMIT %s
+                        procedure_name_en,
+                        rooms_en,
+                        property_type_en,
+                        property_sub_type_en,
+                        price,
+                        area_size,
+                        meter_price,
+                        building_name_en,
+                        area_name_en
+                    FROM (
+                        SELECT
+                            safe_date,
+                            COALESCE(procedure_name_norm::text, '') AS procedure_name_en,
+                            {ROOMS_TXT} AS rooms_en_norm,
+                            rooms_en AS rooms_en,
+                            COALESCE(property_type_norm::text, '') AS property_type_en,
+                            COALESCE(property_sub_type_norm::text, '') AS property_sub_type_en,
+                            {value_expr} AS price,
+                            {area_expr} AS area_size,
+                            {METER_PRICE} AS meter_price,
+                            {BUILDING_TXT} AS building_name_en,
+                            {AREA_TXT} AS area_name_en
+                        {base_from()}
+                          {scope_sql}
+                          AND {value_expr} IS NOT NULL
+                          {prop_sql}
+                          {deal_sql}
+                          {p_sql}
+                          {unit_sql}
+                        ORDER BY safe_date DESC NULLS LAST
+                        LIMIT %s
+                    ) v91_inner
                 """, params)
                 rows = cur.fetchall()
                 if scope == "building" and name:
@@ -9902,14 +10247,119 @@ def _build_360_conclusion(row, scope=None, name=None, report_kind=None):
         return "\n\n🧠 <b>Экономическое заключение 360°</b>\n\nНедостаточно данных для полного экономического отчёта. Расширьте период или фильтр."
 
 
+def _unified_period_html_block(scope, name, deal_type=None):
+    """v104/v50: добавляет блок «совокупная динамика archive + live» к отчёту по периодам.
+    Источник — unified_analytics: month-over-month, quarter-over-quarter, year-ago.
+    Для rent показывает уведомление вместо тихого пропуска.
+    """
+    if scope not in ('building', 'area') or not name:
+        return ''
+    # Rent: показываем report_api данные если есть (отдельный fallback вместо silent skip)
+    dt = str(deal_type or '').lower()
+    is_rent = any(x in dt for x in ('аренд', 'rent', 'rental'))
+    if is_rent:
+        # Try to pull rent data from daily_market_reports — там есть rent_365d за район
+        try:
+            import report_api
+            rep = report_api.get_area_report(name) if scope == 'area' else report_api.get_building_report(name)
+            if rep:
+                breakdown = rep.get('bedroom_breakdown') or {}
+                rows = []
+                for bucket in ['Studio', '1BR', '2BR', '3BR', '4BR+']:
+                    bk = breakdown.get(bucket) or {}
+                    r365 = bk.get('rent_365d') or {}
+                    n = r365.get('n') or 0
+                    med = r365.get('median_rent') or r365.get('avg_rent')
+                    if n and med:
+                        rows.append(f"  • <b>{bucket}</b>: {n} контрактов · медиана AED {int(med):,}/год")
+                if rows:
+                    lines = ["\n\n<b>🔑 Аренда — DLD контракты за 365 дней</b>"]
+                    lines.extend(rows)
+                    lines.append("<i>(совокупная динамика по продажам недоступна для деал-типа «аренда»; "
+                                 "переключите фильтр на «Продажа» для полного отчёта)</i>")
+                    return "\n".join(lines)
+        except Exception as _e:
+            print(f"[unified] rent fallback err: {_e}")
+        return ("\n\n<i>📌 Совокупная динамика рынка доступна только для продаж. "
+                "Переключите тип сделки на «🏠 Продажа» для полного отчёта.</i>")
+    try:
+        import unified_analytics as ua
+    except Exception as e:
+        print(f"[unified] import skip: {e}")
+        return ''
+    try:
+        if scope == 'area':
+            summary = ua.area_period_summary(name)
+        else:
+            summary = ua.building_period_summary(name)
+    except Exception as e:
+        print(f"[unified] summary err: {e}")
+        return ''
+    if not summary:
+        return ''
+
+    cm = summary.get('current_month') or {}
+    n_cur = cm.get('n') or 0
+
+    def _arrow(v):
+        if v is None:
+            return '—'
+        if v > 0:
+            return f"📈 +{v}%"
+        if v < 0:
+            return f"📉 {v}%"
+        return f"➖ 0%"
+
+    vm = summary.get('vs_prev_month') or {}
+    vq = summary.get('vs_prev_quarter') or {}
+    vy = summary.get('vs_year_ago') or {}
+
+    lines = ["\n\n<b>📊 Совокупная динамика (archive + live)</b>"]
+    if cm.get('median_price'):
+        lines.append(f"• Медиана цены (тек. месяц): <b>AED {int(cm['median_price']):,}</b>")
+    if cm.get('median_psf'):
+        lines.append(f"• Медиана /sqft: <b>AED {int(cm['median_psf']):,}</b>")
+    lines.append(f"• Сделок в этом месяце: <b>{n_cur}</b>")
+    lines.append("")
+    lines.append("<b>vs предыдущий месяц</b>")
+    lines.append(f"  Сделки: {_arrow(vm.get('tx_change_pct'))}  •  Медиана: {_arrow(vm.get('median_change_pct'))}")
+    lines.append("<b>vs предыдущий квартал</b>")
+    lines.append(f"  Сделки: {_arrow(vq.get('tx_change_pct'))}  •  Медиана: {_arrow(vq.get('median_change_pct'))}")
+    lines.append("<b>vs год назад (тот же месяц)</b>")
+    lines.append(f"  Сделки: {_arrow(vy.get('tx_change_pct'))}  •  Медиана: {_arrow(vy.get('median_change_pct'))}")
+
+    try:
+        ai = ua.ai_period_insight(summary, lang='ru')
+        if ai:
+            lines.append("")
+            lines.append(f"<i>🤖 {ai.strip()}</i>")
+    except Exception as e:
+        print(f"[unified] ai err: {e}")
+
+    return "\n".join(lines)
+
+
 async def send_period_report(message, scope, name=None, prop=None, period=None, deal_type=None):
-    """v103: do not append economic conclusion when period comparison itself is insufficient."""
+    """v104+v52: v103 + UnifiedAnalytics period block + try/except защита от SQL crash."""
     user_id = message.from_user.id
     await send_processing(message)
     period = period or '12'
-    comparison = get_comparison(scope, name, prop, period, deal_type)
+    try:
+        comparison = get_comparison(scope, name, prop, period, deal_type)
+    except Exception as e:
+        print("SEND_PERIOD_REPORT_SQL_ERROR:", repr(e), "scope=", scope, "name=", name, "prop=", prop, "period=", period, "deal_type=", deal_type)
+        await message.answer(
+            no_data_message('Сравнение периодов', scope=scope, name=name,
+                             prop=prop, period=period, deal_type=deal_type, user_id=user_id),
+            reply_markup=report_menu(user_id) if scope in ['building', 'area'] else main_menu(user_id)
+        )
+        return
     if not comparison:
-        await message.answer(no_data_message('Сравнение периодов'), reply_markup=report_menu(user_id) if scope in ['building', 'area'] else main_menu(user_id))
+        await message.answer(
+            no_data_message('Сравнение периодов', scope=scope, name=name,
+                             prop=prop, period=period, deal_type=deal_type, user_id=user_id),
+            reply_markup=report_menu(user_id) if scope in ['building', 'area'] else main_menu(user_id)
+        )
         return
     current, previous = comparison
     if not current or not previous or not _int(current.get('deals')) or not _int(previous.get('deals')):
@@ -9918,6 +10368,10 @@ async def send_period_report(message, scope, name=None, prop=None, period=None, 
     title = _human_report_title(scope, name, 'Сравнение периодов')
     html = show_comparison(f"<b>{title}</b>", current, previous, period, deal_type)
     html += _build_360_conclusion(current, scope, name, 'period')
+    try:
+        html += _unified_period_html_block(scope, name, deal_type=deal_type)
+    except Exception as e:
+        print(f"[unified] block err: {e}")
     set_last_report(user_id, title, html, scope)
     await message.answer(html, reply_markup=_final_actions_menu(user_id, scope))
 
@@ -10178,6 +10632,735 @@ print('Loaded v104 graceful best-object fallback fix')
 
 
 print('Loaded v103 building format and strict comparison fix')
+
+
+# =========================================================================
+# v105 DAILY MARKET REPORTS UI
+# =========================================================================
+# Wires daily_reports + report_api into the bot UI. Pulls precomputed reports
+# from intelligence DB — no on-the-fly aggregation.
+
+def _fmt_aed(v):
+    if v is None: return "—"
+    try: return f"AED {int(v):,}"
+    except: return str(v)
+
+
+def _fmt_pct(v):
+    if v is None: return "—"
+    if v > 0: return f"📈 +{v}%"
+    if v < 0: return f"📉 {v}%"
+    return "➖ 0%"
+
+
+def _format_market_report(report: dict) -> str:
+    """Форматирует полный отчёт в HTML для Telegram."""
+    if not report:
+        return ("📑 <b>Отчёт ещё не сгенерирован</b>\n\n"
+                "Запустите daily_reports.run_daily() или подождите ночного крона.")
+
+    scope = report.get("scope") or "?"
+    entity = report.get("entity") or "Дубай"
+    meta = report.get("_meta") or {}
+    rpt_date = meta.get("report_date") or report.get("report_date") or "—"
+    stale_mark = " ⚠️ устарел" if meta.get("stale") else ""
+
+    totals = report.get("totals") or {}
+    dyn = report.get("dynamics") or {}
+    vsm = dyn.get("vs_prev_month") or {}
+    vsy = dyn.get("vs_year_ago") or {}
+    breakdown = report.get("bedroom_breakdown") or {}
+
+    scope_emoji = {"dubai": "🌆", "area": "🏙", "building": "🏢"}.get(scope, "📑")
+    lines = [f"{scope_emoji} <b>Полный отчёт — {entity}</b>"]
+    lines.append(f"<i>Дата отчёта: {rpt_date}{stale_mark}</i>")
+    lines.append("")
+    lines.append("<b>📊 Ключевые метрики (30 дней)</b>")
+    lines.append(f"• Сделок:          <b>{totals.get('deals_30d') or 0}</b>")
+    lines.append(f"• Медиана цены:    <b>{_fmt_aed(totals.get('median_price_30d'))}</b>")
+    lines.append(f"• Медиана /sqft:   <b>{_fmt_aed(totals.get('median_psf_30d'))}</b>")
+    lines.append(f"• Сделок за 90д:   <b>{totals.get('deals_90d') or 0}</b>")
+    lines.append(f"• Сделок за 365д:  <b>{totals.get('deals_365d') or 0}</b>")
+    lines.append("")
+    lines.append("<b>📈 Динамика</b>")
+    lines.append(f"vs предыдущий месяц:  сделки {_fmt_pct(vsm.get('deals_change_pct'))}  •  медиана {_fmt_pct(vsm.get('median_change_pct'))}")
+    lines.append(f"vs год назад:         сделки {_fmt_pct(vsy.get('deals_change_pct'))}  •  медиана {_fmt_pct(vsy.get('median_change_pct'))}")
+    lines.append("")
+    lines.append("<b>🛏 По типам квартир (медианы за 30д сделок + ROI)</b>")
+
+    for bucket in ["Studio", "1BR", "2BR", "3BR", "4BR+"]:
+        bk = breakdown.get(bucket) or {}
+        s30 = bk.get("sales_30d") or {}
+        s365 = bk.get("sales_365d") or {}
+        r365 = bk.get("rent_365d") or {}
+        n = s30.get("n") or s365.get("n") or 0
+        price = s30.get("median_price") or s365.get("median_price")
+        psf = s30.get("median_psf") or s365.get("median_psf")
+        rent = r365.get("median_rent") or r365.get("avg_rent")
+        roi = bk.get("roi_pct_365d")
+        if n == 0 and not price and not rent:
+            continue
+        parts = [f"<b>{bucket}</b> ({n} сд.)"]
+        if price: parts.append(f"цена {_fmt_aed(price)}")
+        if psf:   parts.append(f"{_fmt_aed(psf)}/sqft")
+        if rent:  parts.append(f"аренда {_fmt_aed(rent)}/год")
+        if roi:   parts.append(f"ROI <b>{roi}%</b>")
+        lines.append("  • " + "  •  ".join(parts))
+
+    return "\n".join(lines)
+
+
+async def send_full_market_report(message, scope: str, name=None):
+    """Достаёт отчёт из intelligence DB и отправляет пользователю."""
+    user_id = message.from_user.id
+    await send_processing(message)
+    try:
+        import report_api
+    except Exception as e:
+        await message.answer(f"❌ report_api не доступен: {e}", reply_markup=main_menu(user_id))
+        return
+
+    rep = None
+    try:
+        if scope == "dubai":
+            rep = report_api.get_dubai_report()
+        elif scope == "area":
+            rep = report_api.get_area_report(name)
+        elif scope == "building":
+            rep = report_api.get_building_report(name)
+    except Exception as e:
+        await message.answer(f"❌ Ошибка чтения отчёта: {e}", reply_markup=main_menu(user_id))
+        return
+
+    if not rep:
+        # Fallback: попытаемся посчитать на лету (медленно, но что-то покажем)
+        try:
+            from daily_reports import build_report
+            built, n, med, psf = build_report(scope, name)
+            built["_meta"] = {"stale": False, "report_date": built.get("report_date")}
+            rep = built
+        except Exception as e:
+            await message.answer(
+                f"📑 По запросу <b>{name or 'Дубай'}</b> отчёт не найден.\n"
+                f"Возможно, район/здание написано иначе, либо отчёт ещё не сгенерирован.\n"
+                f"(err: {e})",
+                reply_markup=main_menu(user_id),
+            )
+            return
+
+    html = _format_market_report(rep)
+
+    # AI-нарратив (best effort, опциональный)
+    try:
+        from llm_chain import llm_call
+        totals = rep.get("totals") or {}
+        dyn = rep.get("dynamics") or {}
+        prompt = (
+            f"Ты — старший аналитик рынка Дубая. На основе сухих метрик ниже напиши КОРОТКОЕ "
+            f"(2-3 предложения, до 350 символов) экспертное мнение по-русски. Будь конкретен.\n\n"
+            f"Объект: {scope}/{name or 'Дубай'}\n"
+            f"Сделок за 30д: {totals.get('deals_30d')}\n"
+            f"Медиана цены: {totals.get('median_price_30d')}\n"
+            f"Медиана /sqft: {totals.get('median_psf_30d')}\n"
+            f"Динамика vs пред. месяц: {dyn.get('vs_prev_month')}\n"
+            f"Динамика vs год назад: {dyn.get('vs_year_ago')}\n\n"
+            f"Вердикт (только проза):"
+        )
+        ai = llm_call(prompt, max_tokens=200, timeout=10)
+        if ai:
+            html += f"\n\n<i>🤖 {ai.strip()}</i>"
+    except Exception as e:
+        print(f"[full_report ai] {e}")
+
+    # v47/v49 ECOSYSTEM cross-nav (inline urls — рядом с отчётом)
+    # Telegram /start payload только [A-Za-z0-9_] (64 char max). Очищаем Cyrillic/&/+/?
+    def _safe_payload(s):
+        import re as _re
+        if not s:
+            return ""
+        s2 = s.replace(" ", "_")
+        # Оставляем только ASCII alphanumeric и _ (Telegram req)
+        s2 = _re.sub(r"[^A-Za-z0-9_]", "", s2)
+        return s2[:30] or "x"
+
+    cross_nav_html = "\n\n<b>🔗 Связанные сервисы:</b>\n"
+    if scope == "area" and name:
+        nm_enc = _safe_payload(name)
+        cross_nav_html += (
+            f"🏘 <a href=\"https://t.me/dubai_resale_fpr_bot?start=area_{nm_enc}\">Готовое жильё в районе</a>\n"
+            f"🏗 <a href=\"https://t.me/dubai_projects_monitor_bot?start=area_{nm_enc}\">Новостройки в районе</a>\n"
+            f"📊 <a href=\"https://t.me/dubai_roi_fpr_bot?start=area_{nm_enc}\">Рассчитать ROI</a>\n"
+        )
+    elif scope == "building" and name:
+        nm_enc = _safe_payload(name)
+        cross_nav_html += (
+            f"🏘 <a href=\"https://t.me/dubai_resale_fpr_bot?start=bld_{nm_enc}\">Готовое жильё в здании</a>\n"
+            f"📊 <a href=\"https://t.me/dubai_roi_fpr_bot?start=from_analytics\">ROI калькулятор</a>\n"
+        )
+    else:
+        cross_nav_html += (
+            f"🏘 <a href=\"https://t.me/dubai_resale_fpr_bot?start=from_analytics\">Готовое жильё</a>  •  "
+            f"🏗 <a href=\"https://t.me/dubai_projects_monitor_bot?start=from_analytics\">Новостройки</a>  •  "
+            f"📊 <a href=\"https://t.me/dubai_roi_fpr_bot?start=from_analytics\">ROI</a>\n"
+        )
+    # Lead-bot deep-link: префикс area-/bld- + sanitized name
+    lead_payload = (
+        f"area-{_safe_payload(name)}" if scope == "area" and name
+        else f"bld-{_safe_payload(name)}" if scope == "building" and name
+        else "analytics"
+    )
+    cross_nav_html += (
+        f"💼 <a href=\"https://t.me/dubai_fpr_lead_bot?start={lead_payload}\">"
+        f"Оставить заявку Вадиму</a>"
+    )
+    html += cross_nav_html
+
+    await message.answer(html, reply_markup=main_menu(user_id))
+
+
+async def send_multi_area_report(message, area_names):
+    """Объединённый отчёт по нескольким районам."""
+    user_id = message.from_user.id
+    await send_processing(message)
+    try:
+        import report_api
+        combined = report_api.get_multi_area_report(area_names)
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}", reply_markup=main_menu(user_id))
+        return
+
+    if not combined or not combined.get("per_area"):
+        await message.answer(
+            f"📑 По районам [{', '.join(area_names)}] отчёты не найдены.\n"
+            f"Возможно названия указаны иначе или отчёты ещё не сгенерированы.",
+            reply_markup=main_menu(user_id),
+        )
+        return
+
+    totals = combined.get("totals") or {}
+    per = combined.get("per_area") or {}
+    lines = [f"📑 <b>Объединённый отчёт по районам</b>"]
+    lines.append(f"<i>{', '.join(area_names)}</i>")
+    lines.append("")
+    lines.append("<b>📊 Сводные метрики (30д, взвешено по сделкам)</b>")
+    lines.append(f"• Сделок:        <b>{totals.get('deals_30d') or 0}</b>")
+    lines.append(f"• Сделок 90д:    <b>{totals.get('deals_90d') or 0}</b>")
+    lines.append(f"• Сделок 365д:   <b>{totals.get('deals_365d') or 0}</b>")
+    lines.append(f"• Медиана цены:  <b>{_fmt_aed(totals.get('median_price_30d'))}</b>")
+    lines.append(f"• Медиана /sqft: <b>{_fmt_aed(totals.get('median_psf_30d'))}</b>")
+    lines.append("")
+    lines.append("<b>📍 По районам</b>")
+    # компактный rank по сделкам
+    sorted_areas = sorted(
+        per.items(),
+        key=lambda kv: -((kv[1].get("totals") or {}).get("deals_30d") or 0),
+    )
+    for a, rep in sorted_areas:
+        t = rep.get("totals") or {}
+        dyn = (rep.get("dynamics") or {}).get("vs_year_ago") or {}
+        lines.append(
+            f"• <b>{a}</b>: {t.get('deals_30d') or 0} сд.  •  "
+            f"медиана {_fmt_aed(t.get('median_price_30d'))}  •  "
+            f"YoY {_fmt_pct(dyn.get('median_change_pct'))}"
+        )
+
+    await message.answer("\n".join(lines), reply_markup=main_menu(user_id))
+
+
+print('Loaded v105 daily market reports UI')
+
+
+# =========================
+# v106 USER-REPORTED BUG FIXES
+# Scope:
+#   Bug 1: "Аналитика" + "6 месяцев" падает в "нет стабильной выборки" даже когда
+#          в DLD за тот же период данные есть. Причина: get_stats_smart attempts
+#          могут получать SQL exceptions (AmbiguousColumn / UndefinedTable),
+#          which are swallowed inside _run_source_sql_v67. Если ВСЕ attempts
+#          молча вернули 0 — мы показываем no_data, но реально это не "нет данных",
+#          а "выборки за период нет; нужно расширить". Решение: добавляем явный
+#          retry на period=None ВНУТРИ send_full_report когда SMART вернул None;
+#          + лог об этом через error_logger.
+#
+#   Bug 2: Wizard "Сделки DLD" застрял на Шаге 1. После показа "Шаг 1 из 3" wizard
+#          у пользователя теряется state (race / новый сессионный poll), и нажатие
+#          на "🏠 Продажа" / "🔑 Аренда" попадает в финальный fallback, который
+#          шлёт main_menu. Решение: ловим эти 4 кнопки раньше финального fallback
+#          и форсим step=choose_deal_type если state пустой/потерян.
+#
+#   Bug 3: "Address Opera" не находится. Причина: _query_aliases_v66 не разворачивает
+#          такие алиасы как "the address residences dubai opera" / "opera grande".
+#          Решение: подменяем _query_aliases_v66 — добавляем алиасы для известных
+#          зданий + AND-токенный поиск как fallback (для запросов из 2+ слов).
+# =========================
+
+import re as _re_v106
+
+
+def _v106_log(scenario, err, **ctx):
+    try:
+        import error_logger as _el, traceback as _tb
+        _el.log_error("analytics", scenario, str(err),
+                       error_class=type(err).__name__ if isinstance(err, BaseException) else "InfoEvent",
+                       context=ctx,
+                       tb=_tb.format_exc()[-1500:])
+    except Exception:
+        pass
+
+
+# ---- Bug 3: расширенные алиасы поиска зданий ----------------------------------
+
+_V106_BUILDING_ALIASES = {
+    # Канонические building_name_en в архиве: 'The Address Residences Dubai Opera T1',
+    # 'The Address Residences Dubai Opera T2', 'Opera Grand', 'THE ADDRESS DUBAI OPERA'.
+    "address opera": [
+        "address opera",
+        "the address opera",
+        "address dubai opera",
+        "the address dubai opera",
+        "address residences dubai opera",
+        "the address residences dubai opera",
+        "The Address Residences Dubai Opera T1",
+        "The Address Residences Dubai Opera T2",
+        "THE ADDRESS DUBAI OPERA",
+        "Opera Grand",
+        "address residences",
+        "residences dubai opera",
+    ],
+    "the address opera": [
+        "address opera",
+        "the address opera",
+        "address residences dubai opera",
+        "the address residences dubai opera",
+        "address dubai opera",
+        "The Address Residences Dubai Opera T1",
+        "The Address Residences Dubai Opera T2",
+        "THE ADDRESS DUBAI OPERA",
+    ],
+    "address residences dubai opera": [
+        "address residences dubai opera",
+        "the address residences dubai opera",
+        "The Address Residences Dubai Opera T1",
+        "The Address Residences Dubai Opera T2",
+        "THE ADDRESS DUBAI OPERA",
+        "address opera",
+    ],
+    "the address residences dubai opera": [
+        "address residences dubai opera",
+        "the address residences dubai opera",
+        "The Address Residences Dubai Opera T1",
+        "The Address Residences Dubai Opera T2",
+        "THE ADDRESS DUBAI OPERA",
+        "address opera",
+    ],
+    "opera grand": [
+        "opera grand",
+        "Opera Grand",
+        "il primo",
+    ],
+    "opera grande": ["opera grande", "il primo", "the address residences dubai opera", "opera grand"],
+    "grande burj khalifa": ["grande signature", "grande burj khalifa", "the grande", "grande residence"],
+    "grande": ["grande signature", "the grande", "grande burj khalifa", "grande residence"],
+    "burj khalifa": ["burj khalifa", "burj views", "the residences", "armani residence"],
+    "binghatti corner": ["binghatti corner"],
+    "corner": ["binghatti corner", "marina corner"],
+    "marina gate": ["marina gate"],
+    "burj vista": ["burj vista"],
+    "address downtown": ["address downtown", "the address downtown"],
+    "address residences": ["address residences"],
+    "sobha hartland": ["sobha hartland"],
+}
+
+
+def _v106_query_aliases(q):
+    try:
+        cleaned = clean_query(q) if 'clean_query' in globals() else (str(q or "").strip())
+    except Exception:
+        cleaned = str(q or "").strip()
+    if not cleaned:
+        return []
+
+    low = cleaned.lower().strip()
+    aliases = [cleaned]
+
+    # Существующие area aliases (не теряем поведение v66).
+    try:
+        for k, vals in _AREA_ALIASES_V66.items():
+            if low == k or low in [v.lower() for v in vals]:
+                aliases.extend(vals)
+    except Exception:
+        pass
+    if low == "jvc":
+        aliases.append("Jumeirah Village Circle")
+
+    # Новые building aliases — точные подставки для известных зданий.
+    if low in _V106_BUILDING_ALIASES:
+        aliases.extend(_V106_BUILDING_ALIASES[low])
+    else:
+        # Частичный матч по ключам (например "address opera tower 2" → "address opera")
+        for k, vals in _V106_BUILDING_ALIASES.items():
+            if k in low or low in k:
+                aliases.extend(vals)
+                break
+
+    # dedup, preserve order
+    out = []
+    seen = set()
+    for a in aliases:
+        if not a:
+            continue
+        key = a.lower().strip()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(a)
+    return out
+
+
+# Override v66's alias resolver. Все downstream search функции v66 будут
+# использовать расширенный список алиасов.
+_query_aliases_v66 = _v106_query_aliases  # noqa: F811
+
+
+# Дополнительный robust find_buildings: если стандартный v66 search не дал
+# ничего по запросу из 2+ слов, делаем AND-токенный fallback на live таблицах.
+try:
+    _v106_original_find_buildings = find_buildings  # capture v66
+except NameError:
+    _v106_original_find_buildings = None
+
+
+def _v106_token_fallback_find(query, limit=10):
+    """AND-tokenized fallback search. v106.1: запускается ВСЕГДА и мёрджится с v66,
+    чтобы пользовательский ввод вида "Address Opera" (а в архиве канонические имена
+    содержат лишние слова "Residences Dubai") всё равно матчил T1/T2.
+    Ищем по building OR area по ВСЕМ токенам >=3 букв; матч если ВСЕ токены найдены.
+    """
+    q = str(query or "").strip()
+    if not q:
+        return []
+    # v106.1: ослабили требование — допускаем 1 токен >=3 букв (для "opera"),
+    # т.к. при коротком single-token запросе v66 может не найти из-за фильтра минимального деалов.
+    tokens = [t for t in _re_v106.split(r"\s+", q.lower()) if len(t) >= 3]
+    if not tokens:
+        return []
+    rows = []
+    try:
+        for source in _active_sources():
+            old_src = globals().get("_ACTIVE_SOURCE", "live")
+            try:
+                _set_data_source(source)
+                # Перебираем оба stable plan-source таблицы.
+                for _src, table in _v67_table_plan(None):
+                    if _src != source:
+                        continue
+                    try:
+                        cols = _cols_v66(table)
+                    except Exception:
+                        cols = set()
+                    if not cols:
+                        continue
+                    building = _txt_expr_v66(cols, [
+                        "building_name_en", "building_name", "building", "project_name_en", "project_name", "project_en", "project",
+                        "master_project_en", "master_project", "property_name_en", "property_name",
+                    ])
+                    area = _txt_expr_v66(cols, ["area_name_en", "area_en", "area_name", "area", "procedure_area"])
+                    if building == "''" and area == "''":
+                        continue
+                    haystack = f"({building} || ' ' || {area})"
+                    where_parts = [f"{haystack} ILIKE %s" for _ in tokens]
+                    params = [f"%{t}%" for t in tokens]
+                    sql = f"""
+                        SELECT
+                            NULLIF({building}, '') AS building_name_en,
+                            NULLIF({area}, '') AS area_name_en,
+                            COUNT(*)::bigint AS deals
+                        FROM {table}
+                        WHERE ({' AND '.join(where_parts)})
+                          AND NULLIF({building}, '') IS NOT NULL
+                        GROUP BY NULLIF({building}, ''), NULLIF({area}, '')
+                        ORDER BY deals DESC
+                        LIMIT %s
+                    """
+                    try:
+                        with db() as conn:
+                            with conn.cursor() as cur:
+                                cur.execute(sql, params + [limit])
+                                rows.extend(cur.fetchall())
+                    except Exception as e:
+                        _v106_log("find_buildings_token_fallback", e, table=table, source=source, q=q)
+            finally:
+                try:
+                    _set_data_source(old_src)
+                except Exception:
+                    pass
+    except Exception as e:
+        _v106_log("find_buildings_token_fallback_outer", e, q=q)
+    # dedup + sort
+    seen, out = set(), []
+    for r in sorted(rows, key=lambda r: -_int(r.get("deals"))):
+        key = (str(r.get("building_name_en") or "").lower().strip(),
+               str(r.get("area_name_en") or "").lower().strip())
+        if key in seen or not key[0]:
+            continue
+        seen.add(key)
+        out.append(r)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def find_buildings(query, limit=10):  # noqa: F811
+    """v106.1: всегда мёрджим v66 + token-fallback. Раньше fallback бежал только
+    при пустом v66 — но для "Address Opera" v66 находил "THE ADDRESS DUBAI OPERA"
+    с малым кол-вом сделок, а T1/T2 (где основной массив) терялись."""
+    rows = []
+    if _v106_original_find_buildings is not None:
+        try:
+            rows = _v106_original_find_buildings(query, limit) or []
+        except Exception as e:
+            _v106_log("find_buildings_primary", e, q=query)
+            rows = []
+    try:
+        fb = _v106_token_fallback_find(query, limit) or []
+    except Exception as e:
+        _v106_log("find_buildings_fallback_outer", e, q=query)
+        fb = []
+    if not rows and not fb:
+        return []
+    # Мёрдж: dedup по (building.lower, area.lower), сортировка по deals desc.
+    seen, merged = set(), []
+    for r in list(rows) + list(fb):
+        try:
+            key = (
+                str((r.get("building_name_en") if hasattr(r, "get") else r["building_name_en"]) or "").lower().strip(),
+                str((r.get("area_name_en") if hasattr(r, "get") else r["area_name_en"]) or "").lower().strip(),
+            )
+        except Exception:
+            continue
+        if not key[0] or key in seen:
+            continue
+        seen.add(key)
+        merged.append(r)
+    try:
+        merged.sort(key=lambda r: -_int(r.get("deals") if hasattr(r, "get") else r["deals"]))
+    except Exception:
+        pass
+    return merged[:limit]
+
+
+# ---- Bug 1: безопасный fallback для "Аналитика + 6 месяцев" -------------------
+
+try:
+    _v106_original_get_stats_smart = get_stats_smart  # v83/v67/etc
+except NameError:
+    _v106_original_get_stats_smart = None
+
+
+def get_stats_smart(scope="dubai", name=None, prop=None, period=None, deal_type=None):  # noqa: F811
+    """v106: оборачиваем существующий get_stats_smart, но если он вернул None
+    при заданном периоде — пробуем явно ещё раз с period=None и логируем событие.
+    Это исключает "ложно-пустую" выборку, когда DLD-данные в архиве идут не до
+    сегодняшней даты и узкий 6-месячный период падает в 0.
+    """
+    if _v106_original_get_stats_smart is None:
+        return None, prop, period, deal_type
+    try:
+        row, used_prop, used_period, used_deal_type = _v106_original_get_stats_smart(
+            scope, name, prop, period, deal_type
+        )
+    except Exception as e:
+        _v106_log("get_stats_smart_v106_outer", e,
+                  scope=scope, name=str(name)[:120] if name else None,
+                  prop=prop, period=period, deal_type=deal_type)
+        row, used_prop, used_period, used_deal_type = None, prop, period, deal_type
+
+    if row and _int(row.get("deals")) > 0:
+        return row, used_prop, used_period, used_deal_type
+
+    # v106.1: если v83 проглотил exception и вернул пусто — пробуем все периоды
+    # через прямой get_stats (минуя v83-обёртку), чтобы исключить тихие сбои.
+    direct_attempts = []
+    if period:
+        direct_attempts.append((prop, None, deal_type))     # тот же prop, без периода
+    direct_attempts.append((None, period, deal_type))       # без prop, заданный период
+    direct_attempts.append((None, None, deal_type))         # без всего, по deal_type
+    if deal_type:
+        direct_attempts.append((prop, period, None))        # снять deal_type фильтр
+        direct_attempts.append((None, None, None))          # полностью без фильтров (последний шанс)
+
+    for p_try, per_try, dt_try in direct_attempts:
+        try:
+            r2 = get_stats(scope, name, p_try, per_try, dt_try)
+            if r2 and _int(r2.get("deals")) > 0:
+                _v106_log("stats_smart_direct_fallback", "v83_returned_empty",
+                          scope=scope, name=str(name)[:120] if name else None,
+                          orig=(prop, period, deal_type),
+                          used=(p_try, per_try, dt_try))
+                return r2, p_try, per_try, dt_try
+        except Exception as e:
+            _v106_log("get_stats_smart_v106_direct", e,
+                      scope=scope, name=str(name)[:120] if name else None,
+                      attempt=(p_try, per_try, dt_try))
+            continue
+
+    return None, prop, period, deal_type
+
+
+# ---- Bug 1b: безопасный fallback для "Последние сделки" -----------------------
+
+try:
+    _v106_original_get_latest_deals_smart = get_latest_deals_smart  # v83
+except NameError:
+    _v106_original_get_latest_deals_smart = None
+
+
+def get_latest_deals_smart(scope, name, prop=None, period=None, deal_type=None, limit=7, unit_query=None):  # noqa: F811
+    """v106: оборачиваем v83 get_latest_deals_smart по образцу get_stats_smart.
+    Если v83 вернул [] при заданном period (например 6 месяцев) — пробуем явно
+    повторно через прямой get_latest_deals с расширением периода до None/all-time."""
+    if _v106_original_get_latest_deals_smart is None:
+        return [], prop, period, deal_type
+    try:
+        rows, used_prop, used_period, used_deal_type = _v106_original_get_latest_deals_smart(
+            scope, name, prop, period, deal_type, limit=limit, unit_query=unit_query
+        )
+    except Exception as e:
+        _v106_log("get_latest_deals_smart_v106_outer", e,
+                  scope=scope, name=str(name)[:120] if name else None,
+                  prop=prop, period=period, deal_type=deal_type)
+        rows, used_prop, used_period, used_deal_type = [], prop, period, deal_type
+
+    if rows:
+        return rows, used_prop, used_period, used_deal_type
+
+    direct_attempts = []
+    if period:
+        direct_attempts.append((prop, None, deal_type))
+    direct_attempts.append((None, period, deal_type))
+    direct_attempts.append((None, None, deal_type))
+    if deal_type:
+        direct_attempts.append((prop, period, None))
+        direct_attempts.append((None, None, None))
+
+    for p_try, per_try, dt_try in direct_attempts:
+        try:
+            r2 = get_latest_deals(scope, name, p_try, per_try, dt_try, limit=limit, unit_query=unit_query)
+            if r2:
+                _v106_log("latest_deals_direct_fallback", "v83_returned_empty",
+                          scope=scope, name=str(name)[:120] if name else None,
+                          orig=(prop, period, deal_type),
+                          used=(p_try, per_try, dt_try))
+                return r2, p_try, per_try, dt_try
+        except Exception as e:
+            _v106_log("get_latest_deals_smart_v106_direct", e,
+                      scope=scope, name=str(name)[:120] if name else None,
+                      attempt=(p_try, per_try, dt_try))
+            continue
+
+    return [], prop, period, deal_type
+
+
+# ---- Bug 1c: soft-period fallback в _period_where_v67 ------------------------
+# Оборачиваем get_stats / get_latest_deals чтобы при пустом результате с заданным
+# периодом автоматически расширять до 12 мес / all-time прозрачно для caller'а.
+# Это страховка на случай, когда smart-wrappers по какой-то причине обошли период.
+
+try:
+    _v106_original_get_stats_raw = get_stats
+except NameError:
+    _v106_original_get_stats_raw = None
+
+
+def get_stats(scope="dubai", name=None, prop=None, period=None, deal_type=None):  # noqa: F811
+    """v106 soft-period: при пустой выборке за заданный period — расширяем до None.
+    Возвращаемое значение остаётся обратно совместимым (просто dict)."""
+    if _v106_original_get_stats_raw is None:
+        return None
+    try:
+        row = _v106_original_get_stats_raw(scope, name, prop, period, deal_type)
+    except Exception as e:
+        _v106_log("get_stats_v106_outer", e,
+                  scope=scope, name=str(name)[:120] if name else None,
+                  prop=prop, period=period, deal_type=deal_type)
+        row = None
+    if row and _int(row.get("deals")) > 0:
+        return row
+    if not period:
+        return row
+    # Soft fallback: пробуем все время.
+    try:
+        row2 = _v106_original_get_stats_raw(scope, name, prop, None, deal_type)
+        if row2 and _int(row2.get("deals")) > 0:
+            _v106_log("get_stats_soft_period_expand", "period_to_all_time",
+                      scope=scope, name=str(name)[:120] if name else None,
+                      prop=prop, period=period, deal_type=deal_type)
+            return row2
+    except Exception as e:
+        _v106_log("get_stats_v106_softfallback", e,
+                  scope=scope, name=str(name)[:120] if name else None,
+                  prop=prop, period=period, deal_type=deal_type)
+    return row
+
+
+# ---- Bug 2: лечим потерю state у wizard "Сделки DLD" --------------------------
+
+_V106_DEAL_TYPE_BUTTONS = {"🏠 Продажа", "🔑 Аренда", "📊 Всё", "⏭ Пропустить"}
+_V106_PROPERTY_BUTTONS = {"Studio", "1 BR", "2 BR", "3 BR", "4 BR", "5 BR+",
+                          "Apartment", "Villa", "Townhouse", "Penthouse",
+                          "Office", "Shop"}
+_V106_PERIOD_BUTTONS = {"3 месяца", "6 месяцев", "1 год", "3 года", "📅 Всё время"}
+
+
+# Patch main_handler через middleware: вставляем pre-check перед общим dispatch.
+# Невозможно без переписать main_handler, поэтому используем aiogram outer middleware.
+
+try:
+    from aiogram import BaseMiddleware as _BaseMiddleware_v106
+    from aiogram.types import Message as _Message_v106
+
+    class _V106WizardRecoveryMiddleware(_BaseMiddleware_v106):
+        async def __call__(self, handler, event, data):
+            try:
+                if isinstance(event, _Message_v106):
+                    text = (event.text or "").strip()
+                    uid = event.from_user.id if event.from_user else None
+                    if uid is not None and text in _V106_DEAL_TYPE_BUTTONS:
+                        st = user_states.get(uid, {}) or {}
+                        step = st.get("step")
+                        # Если step не expects deal type выбор, но user всё равно
+                        # тыкает в кнопку из этого набора — восстанавливаем wizard.
+                        if step not in ("choose_deal_type", "best_object_deal_type"):
+                            # v106.1: НЕ перезаписываем state целиком — это уничтожало
+                            # report_kind / scope / name выбранные пользователем раньше.
+                            # Только in-place обновляем step и доустанавливаем недостающие
+                            # поля (scope/name/report_kind). Все прочие ключи сохраняются.
+                            scope = st.get("scope") or "dubai"
+                            name = st.get("name")
+                            report_kind = st.get("report_kind") or "deals"
+                            st["step"] = "choose_deal_type"
+                            st.setdefault("scope", scope)
+                            st.setdefault("name", name)
+                            st.setdefault("report_kind", report_kind)
+                            st.setdefault("history", st.get("history", []))
+                            user_states[uid] = st
+                            _v106_log("wizard_state_recovered", "deal_type_buttons_outside_wizard",
+                                      uid=uid, text=text, prev_step=step,
+                                      scope=scope, name=str(name)[:120] if name else None)
+            except Exception as e:
+                _v106_log("wizard_recovery_mw", e)
+            return await handler(event, data)
+
+    try:
+        dp.message.outer_middleware(_V106WizardRecoveryMiddleware())
+        print("Loaded v106 wizard recovery middleware")
+    except Exception as e:
+        _v106_log("wizard_recovery_register", e)
+except Exception as e:
+    _v106_log("wizard_recovery_import", e)
+
+
+print("Loaded v106 user-reported bug fixes (analytics period + wizard recovery + address opera search)")
 
 
 if __name__ == "__main__":
