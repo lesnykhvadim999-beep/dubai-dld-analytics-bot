@@ -403,14 +403,15 @@ def virtual_area_name(query):
 
 
 def lang(user_id):
-    return user_languages.get(user_id, "ru")
+    # Default language for new users is English; they pick from welcome screen.
+    return user_languages.get(user_id, "en")
 
 
 def tr(user_id, key):
     user_lang = lang(user_id)
     if user_lang not in TEXTS:
-        user_lang = "ru"
-    return TEXTS.get(user_lang, TEXTS["ru"]).get(key, TEXTS["ru"].get(key, key))
+        user_lang = "en"
+    return TEXTS.get(user_lang, TEXTS["en"]).get(key, TEXTS["en"].get(key, key))
 
 
 def kb(rows):
@@ -3037,7 +3038,7 @@ async def start_handler(message: Message):
             await message.answer_photo(FSInputFile(_logo))
     except Exception as _e:
         print(f"[welcome logo] {_e}")
-    await message.answer(TEXTS["ru"]["choose_lang"], reply_markup=language_menu())
+    await message.answer(TEXTS["en"]["choose_lang"], reply_markup=language_menu())
 
 
 @dp.message(lambda m: m.text in ["🇷🇺 Русский", "🇬🇧 English", "🇦🇪 العربية"])
@@ -9333,7 +9334,7 @@ def _ir_v96_state_to_kwargs(state):
         "period": state.get("period"),
         "goal": state.get("goal"),
         "risk": state.get("risk"),
-        "language": state.get("language", "ru"),
+        "language": state.get("language", "en"),
         "previous_context": state,
     }
 
