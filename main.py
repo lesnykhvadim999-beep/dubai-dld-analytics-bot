@@ -11374,34 +11374,59 @@ except NameError:
 
 
 def get_stats(scope="dubai", name=None, prop=None, period=None, deal_type=None):  # noqa: F811
-    """v106 soft-period: при пустой выборке за заданный period — расширяем до None.
-    Возвращаемое значение остаётся обратно совместимым (просто dict)."""
-    if _v106_original_get_stats_raw is None:
-        return None
+    """v110 READ-MODEL ONLY: get_stats теперь всегда идёт через read-model.
+    Raw DLD больше НЕ опрашивается (вызывало зависания). Если данных в
+    read-model нет — возвращаем None и пусть caller сам решит.
+    """
+    # v110: read-model fast-path
     try:
-        row = _v106_original_get_stats_raw(scope, name, prop, period, deal_type)
+        # Используем уже определённый READ_MODEL глобал из v107
+        if _READ_MODEL_OK and _read_model:
+            months = _v107_period_to_months(period)
+            scope_l = (scope or "").lower()
+            if not name and scope_l in ("dubai", "city", "market", ""):
+                mo = _read_model.try_market_overview(months)
+                if mo and mo.get("deals"):
+                    return {
+                        "deals": int(mo["deals"]),
+                        "avg": float(mo["avg_price"]) if mo.get("avg_price") else None,
+                        "avg_price": float(mo["avg_price"]) if mo.get("avg_price") else None,
+                        "median": float(mo["median_price"]) if mo.get("median_price") else None,
+                        "median_price": float(mo["median_price"]) if mo.get("median_price") else None,
+                        "top_quartile": float(mo["top_quartile_price"]) if mo.get("top_quartile_price") else None,
+                        "top_quartile_price": float(mo["top_quartile_price"]) if mo.get("top_quartile_price") else None,
+                        "yoy_growth_pct": float(mo["yoy_growth_pct"]) if mo.get("yoy_growth_pct") is not None else None,
+                        "yoy_growth_top_pct": float(mo["yoy_growth_top_pct"]) if mo.get("yoy_growth_top_pct") is not None else None,
+                        "sum": float(mo["total_volume"]) if mo.get("total_volume") else None,
+                        "total_volume": float(mo["total_volume"]) if mo.get("total_volume") else None,
+                        "_source": "read_model_market_overview",
+                    }
+                return None
+            if name and isinstance(name, str):
+                row = None
+                kind = "area"
+                if scope_l in ("area", "areas", "district"):
+                    row = _read_model.try_area_stats(name, months, prop=prop, rooms=None, deal_type=deal_type)
+                elif scope_l in ("building", "buildings", "project", "tower"):
+                    row = _read_model.try_building_stats(name, months, rooms=None, deal_type=deal_type)
+                    kind = "building"
+                else:
+                    row = _read_model.try_area_stats(name, months, prop=prop, rooms=None, deal_type=deal_type)
+                    if not row:
+                        row = _read_model.try_building_stats(name, months, rooms=None, deal_type=deal_type)
+                        kind = "building"
+                shaped = _v107_row_for_smart(row, kind)
+                if shaped and shaped.get("deals", 0) > 0:
+                    return shaped
     except Exception as e:
-        _v106_log("get_stats_v106_outer", e,
-                  scope=scope, name=str(name)[:120] if name else None,
-                  prop=prop, period=period, deal_type=deal_type)
-        row = None
-    if row and _int(row.get("deals")) > 0:
-        return row
-    if not period:
-        return row
-    # Soft fallback: пробуем все время.
-    try:
-        row2 = _v106_original_get_stats_raw(scope, name, prop, None, deal_type)
-        if row2 and _int(row2.get("deals")) > 0:
-            _v106_log("get_stats_soft_period_expand", "period_to_all_time",
+        try:
+            _v106_log("get_stats_v110_read_model_err", e,
                       scope=scope, name=str(name)[:120] if name else None,
                       prop=prop, period=period, deal_type=deal_type)
-            return row2
-    except Exception as e:
-        _v106_log("get_stats_v106_softfallback", e,
-                  scope=scope, name=str(name)[:120] if name else None,
-                  prop=prop, period=period, deal_type=deal_type)
-    return row
+        except Exception:
+            pass
+    # v110: НЕ откатываемся в raw — это причина зависаний. None означает «нет данных».
+    return None
 
 
 # ---- Bug 2: лечим потерю state у wizard "Сделки DLD" --------------------------
@@ -11557,38 +11582,69 @@ except NameError:
 
 
 def get_stats_smart(scope="dubai", name=None, prop=None, period=None, deal_type=None):  # noqa: F811
-    """v107 fast-path: сначала пытаемся ответить из read-model.
-    Если данных нет — спокойно отдаём управление v106."""
-    # Read-model работает только для area / building с явным именем
-    if _READ_MODEL_OK and _read_model and name and isinstance(name, str):
+    """v110 READ-MODEL ONLY: вся аналитика идёт только из агрегатов
+    (area_stats / building_stats / market_overview). Raw DLD больше НЕ
+    используется в этом пути — он зависает и таймаутит. Если данных
+    в read-model нет — отдаём (None, ...), UI покажет "нет данных"
+    или вышестоящий код возьмёт смежный fallback (market overview).
+    """
+    # Read-model: scope=dubai → market_overview, иначе area/building
+    if _READ_MODEL_OK and _read_model:
         try:
             months = _v107_period_to_months(period)
-            row = None
             scope_l = (scope or "").lower()
-            if scope_l in ("area", "areas", "district"):
-                row = _read_model.try_area_stats(name, months, prop=prop, rooms=None, deal_type=deal_type)
-                kind = "area"
-            elif scope_l in ("building", "buildings", "project", "tower"):
-                row = _read_model.try_building_stats(name, months, rooms=None, deal_type=deal_type)
-                kind = "building"
-            else:
-                # auto: пробуем сначала area, потом building
-                row = _read_model.try_area_stats(name, months, prop=prop, rooms=None, deal_type=deal_type)
-                kind = "area"
-                if not row:
+            row = None
+            kind = "area"
+
+            if not name and scope_l in ("dubai", "city", "market", ""):
+                # Общий обзор Дубая — берём из market_overview
+                mo = _read_model.try_market_overview(months)
+                if mo and mo.get("deals"):
+                    shaped = {
+                        "deals": int(mo["deals"]),
+                        "avg": float(mo["avg_price"]) if mo.get("avg_price") else None,
+                        "avg_price": float(mo["avg_price"]) if mo.get("avg_price") else None,
+                        "median": float(mo["median_price"]) if mo.get("median_price") else None,
+                        "median_price": float(mo["median_price"]) if mo.get("median_price") else None,
+                        "top_quartile": float(mo["top_quartile_price"]) if mo.get("top_quartile_price") else None,
+                        "top_quartile_price": float(mo["top_quartile_price"]) if mo.get("top_quartile_price") else None,
+                        "yoy_growth_pct": float(mo["yoy_growth_pct"]) if mo.get("yoy_growth_pct") is not None else None,
+                        "yoy_growth_top_pct": float(mo["yoy_growth_top_pct"]) if mo.get("yoy_growth_top_pct") is not None else None,
+                        "sum": float(mo["total_volume"]) if mo.get("total_volume") else None,
+                        "total_volume": float(mo["total_volume"]) if mo.get("total_volume") else None,
+                        "_source": "read_model_market_overview",
+                    }
+                    try:
+                        _v106_log("read_model_hit", "market_overview", deals=shaped["deals"])
+                    except Exception: pass
+                    return shaped, prop, period, deal_type
+                return None, prop, period, deal_type
+
+            if name and isinstance(name, str):
+                if scope_l in ("area", "areas", "district"):
+                    row = _read_model.try_area_stats(name, months, prop=prop, rooms=None, deal_type=deal_type)
+                    kind = "area"
+                elif scope_l in ("building", "buildings", "project", "tower"):
                     row = _read_model.try_building_stats(name, months, rooms=None, deal_type=deal_type)
                     kind = "building"
+                else:
+                    # auto: сначала area, потом building
+                    row = _read_model.try_area_stats(name, months, prop=prop, rooms=None, deal_type=deal_type)
+                    kind = "area"
+                    if not row:
+                        row = _read_model.try_building_stats(name, months, rooms=None, deal_type=deal_type)
+                        kind = "building"
 
-            shaped = _v107_row_for_smart(row, kind)
-            if shaped and shaped.get("deals", 0) > 0:
-                try:
-                    _v106_log("read_model_hit", "served_from_aggregates",
-                              scope=scope, name=str(name)[:120],
-                              prop=prop, period=period, deal_type=deal_type,
-                              kind=kind, deals=shaped["deals"])
-                except Exception:
-                    pass
-                return shaped, prop, period, deal_type
+                shaped = _v107_row_for_smart(row, kind)
+                if shaped and shaped.get("deals", 0) > 0:
+                    try:
+                        _v106_log("read_model_hit", "served_from_aggregates",
+                                  scope=scope, name=str(name)[:120],
+                                  prop=prop, period=period, deal_type=deal_type,
+                                  kind=kind, deals=shaped["deals"])
+                    except Exception:
+                        pass
+                    return shaped, prop, period, deal_type
         except Exception as e:
             try:
                 _v106_log("read_model_fastpath_err", e,
@@ -11597,10 +11653,14 @@ def get_stats_smart(scope="dubai", name=None, prop=None, period=None, deal_type=
             except Exception:
                 pass
 
-    # Fallback: v106 → raw
-    if _v107_orig_get_stats_smart is None:
-        return None, prop, period, deal_type
-    return _v107_orig_get_stats_smart(scope, name, prop, period, deal_type)
+    # v110: НЕ откатываемся в raw DLD (это причина зависаний). Возвращаем None.
+    try:
+        _v106_log("read_model_miss_no_raw_fallback", "no_data",
+                  scope=scope, name=str(name)[:120] if name else None,
+                  prop=prop, period=period, deal_type=deal_type)
+    except Exception:
+        pass
+    return None, prop, period, deal_type
 
 
 # ---- v107 marketing helpers (для UI/каротки) ---------------------
