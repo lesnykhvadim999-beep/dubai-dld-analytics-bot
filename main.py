@@ -11441,5 +11441,179 @@ except Exception as e:
 print("Loaded v106 user-reported bug fixes (analytics period + wizard recovery + address opera search)")
 
 
+# ==================================================================
+# v107: READ-MODEL FAST PATH
+# ==================================================================
+# Цель: ответы аналитики < 500 мс из готовых агрегатов area_stats /
+# building_stats / market_overview, которые ежедневно перестраивает
+# сервис dxb-stats-builder. При отсутствии данных в read-model — тихий
+# fallback на v106 (raw DLD-таблицы), поведение пользователя не меняется.
+# ==================================================================
+
+try:
+    import read_model as _read_model
+    _READ_MODEL_OK = _read_model.is_available()
+    print(f"Loaded v107 read-model fast path (available={_READ_MODEL_OK})")
+except Exception as _e:  # noqa: BLE001
+    _read_model = None
+    _READ_MODEL_OK = False
+    print(f"Loaded v107 read-model fast path (DISABLED: {_e})")
+
+
+def _v107_period_to_months(period):
+    """Конвертирует period-токен бота ('6m'/'1y'/'3y'/'all' и пр.) в число месяцев."""
+    if period is None:
+        return 36  # ≈ 3 года истории = весь bootstrap
+    s = str(period).lower().strip()
+    table = {
+        "3m": 3, "3 m": 3, "3 months": 3, "3 месяца": 3,
+        "6m": 6, "6 m": 6, "6 months": 6, "6 месяцев": 6,
+        "1y": 12, "12m": 12, "1 year": 12, "1 год": 12,
+        "2y": 24, "24m": 24, "2 years": 24, "2 года": 24,
+        "3y": 36, "36m": 36, "3 years": 36, "3 года": 36,
+        "all": 36, "all_time": 36, "all-time": 36, "📅 всё время": 36,
+    }
+    if s in table:
+        return table[s]
+    # Попробуем выдрать число + суффикс
+    import re as _re
+    m = _re.match(r"(\d+)\s*([myг])", s)
+    if m:
+        n = int(m.group(1))
+        suf = m.group(2)
+        if suf in ("m",):
+            return min(36, max(1, n))
+        if suf in ("y", "г"):
+            return min(36, max(1, n * 12))
+    return 12
+
+
+def _v107_row_for_smart(row, area_or_building):
+    """Конвертирует dict из read_model.try_area_stats / try_building_stats
+    в формат, который ожидает caller get_stats_smart: dict с ключами
+    deals, sum, avg, min, max, median, top_quartile, и т.п."""
+    if not row:
+        return None
+    deals = int(row.get("deals") or 0)
+    if deals <= 0:
+        return None
+    out = {
+        "deals": deals,
+        "avg": float(row["avg_price"]) if row.get("avg_price") is not None else None,
+        "median": float(row["median_price"]) if row.get("median_price") is not None else None,
+        "top_quartile": float(row["top_quartile_price"]) if row.get("top_quartile_price") is not None else None,
+        "avg_psf": float(row["avg_price_psf"]) if row.get("avg_price_psf") is not None else None,
+        "top_quartile_psf": float(row["top_quartile_psf"]) if row.get("top_quartile_psf") is not None else None,
+        # обратно совместимые алиасы
+        "avg_price": float(row["avg_price"]) if row.get("avg_price") is not None else None,
+        "median_price": float(row["median_price"]) if row.get("median_price") is not None else None,
+        "top_quartile_price": float(row["top_quartile_price"]) if row.get("top_quartile_price") is not None else None,
+        # маркетинговая подача — "до X"
+        "yoy_growth_pct": float(row["yoy_growth_pct"]) if row.get("yoy_growth_pct") is not None else None,
+        "yoy_growth_top_pct": float(row["yoy_growth_top_pct"]) if row.get("yoy_growth_top_pct") is not None else None,
+        "avg_rental_yield_pct": float(row["avg_rental_yield_pct"]) if row.get("avg_rental_yield_pct") is not None else None,
+        "top_rental_yield_pct": float(row["top_rental_yield_pct"]) if row.get("top_rental_yield_pct") is not None else None,
+        "_source": "read_model",
+        "_area_or_building": area_or_building,
+        "_name_display": row.get("area_name") or row.get("building_name"),
+    }
+    # sum / total_volume — для отображения объёма
+    if row.get("avg_price") and deals:
+        try:
+            out["sum"] = float(row["avg_price"]) * deals
+            out["total_volume"] = out["sum"]
+        except Exception:
+            pass
+    return out
+
+
+try:
+    _v107_orig_get_stats_smart = get_stats_smart  # v106 wrapper
+except NameError:
+    _v107_orig_get_stats_smart = None
+
+
+def get_stats_smart(scope="dubai", name=None, prop=None, period=None, deal_type=None):  # noqa: F811
+    """v107 fast-path: сначала пытаемся ответить из read-model.
+    Если данных нет — спокойно отдаём управление v106."""
+    # Read-model работает только для area / building с явным именем
+    if _READ_MODEL_OK and _read_model and name and isinstance(name, str):
+        try:
+            months = _v107_period_to_months(period)
+            row = None
+            scope_l = (scope or "").lower()
+            if scope_l in ("area", "areas", "district"):
+                row = _read_model.try_area_stats(name, months, prop=prop, rooms=None, deal_type=deal_type)
+                kind = "area"
+            elif scope_l in ("building", "buildings", "project", "tower"):
+                row = _read_model.try_building_stats(name, months, rooms=None, deal_type=deal_type)
+                kind = "building"
+            else:
+                # auto: пробуем сначала area, потом building
+                row = _read_model.try_area_stats(name, months, prop=prop, rooms=None, deal_type=deal_type)
+                kind = "area"
+                if not row:
+                    row = _read_model.try_building_stats(name, months, rooms=None, deal_type=deal_type)
+                    kind = "building"
+
+            shaped = _v107_row_for_smart(row, kind)
+            if shaped and shaped.get("deals", 0) > 0:
+                try:
+                    _v106_log("read_model_hit", "served_from_aggregates",
+                              scope=scope, name=str(name)[:120],
+                              prop=prop, period=period, deal_type=deal_type,
+                              kind=kind, deals=shaped["deals"])
+                except Exception:
+                    pass
+                return shaped, prop, period, deal_type
+        except Exception as e:
+            try:
+                _v106_log("read_model_fastpath_err", e,
+                          scope=scope, name=str(name)[:120] if name else None,
+                          prop=prop, period=period, deal_type=deal_type)
+            except Exception:
+                pass
+
+    # Fallback: v106 → raw
+    if _v107_orig_get_stats_smart is None:
+        return None, prop, period, deal_type
+    return _v107_orig_get_stats_smart(scope, name, prop, period, deal_type)
+
+
+# ---- v107 marketing helpers (для UI/каротки) ---------------------
+def v107_marketing_overview(scope="dubai", name=None, months=12, deal_type="sale"):
+    """Готовая статистика для маркетингового overview-блока:
+    {'top_yield','top_growth','top_price','source'}. None если read-model недоступен.
+    """
+    if not (_READ_MODEL_OK and _read_model):
+        return None
+    try:
+        if name:
+            row = _read_model.try_area_stats(name, months, deal_type=deal_type)
+            if not row:
+                row = _read_model.try_building_stats(name, months, deal_type=deal_type)
+        else:
+            row = _read_model.try_market_overview(months)
+        if not row:
+            return None
+        return {
+            "top_quartile_price": float(row["top_quartile_price"]) if row.get("top_quartile_price") else None,
+            "top_quartile_psf": float(row["top_quartile_psf"]) if row.get("top_quartile_psf") else None,
+            "top_growth_pct": float(row["yoy_growth_top_pct"]) if row.get("yoy_growth_top_pct") else None,
+            "top_yield_pct": float(row["top_rental_yield_pct"]) if row.get("top_rental_yield_pct") else None,
+            "deals": int(row.get("deals") or 0),
+            "source": "read_model",
+        }
+    except Exception as e:
+        try:
+            _v106_log("v107_marketing_overview_err", e, scope=scope, name=str(name)[:120] if name else None)
+        except Exception:
+            pass
+        return None
+
+
+print("Loaded v107 read-model fast path wrappers")
+
+
 if __name__ == "__main__":
     asyncio.run(main())
