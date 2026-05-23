@@ -11615,5 +11615,300 @@ def v107_marketing_overview(scope="dubai", name=None, months=12, deal_type="sale
 print("Loaded v107 read-model fast path wrappers")
 
 
+# ============================================================
+# v108 MARKETING REWRITE — sales-oriented copy, top-quartile cifry
+# ----------------------------------------------------------------
+# Идея: render-функции (show_stats, show_comparison, send_full_report,
+# top buildings) переписываются в продающем стиле «до X / достигает X»
+# с верхней планкой (top_quartile, yoy_growth_top, top_yield).
+#
+# Технические правила:
+#  - старые функции (_v108_orig_*) сохраняются как fallback;
+#  - если top_quartile_price/psf отсутствуют в dict — fallback на
+#    max_price / avg_meter с пометкой источника данных;
+#  - подписочный CTA «/subscribe» добавляется в подвал каждого блока.
+# ============================================================
+
+# ----- helpers ----------------------------------------------------
+
+def _v108_num(value):
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _v108_top_price(row):
+    """Верхняя планка цены: top_quartile_price → max_price → avg_price."""
+    if not row:
+        return None, "нет данных"
+    tq = _v108_num(row.get("top_quartile_price")) or _v108_num(row.get("top_quartile"))
+    if tq:
+        return tq, "топ-25% сделок DLD"
+    mx = _v108_num(row.get("max_price"))
+    if mx:
+        return mx, "макс. цена по DLD"
+    av = _v108_num(row.get("avg_price")) or _v108_num(row.get("avg"))
+    if av:
+        return av, "средняя по DLD"
+    return None, "нет данных"
+
+
+def _v108_top_psf(row):
+    """Верхняя планка цены за sqft."""
+    if not row:
+        return None, "нет данных"
+    tq = _v108_num(row.get("top_quartile_psf"))
+    if tq:
+        return tq, "топ-25% по sqft"
+    av = _v108_num(row.get("avg_psf")) or _v108_num(row.get("avg_meter"))
+    if av:
+        return av, "средняя по sqft"
+    return None, "нет данных"
+
+
+def _v108_top_growth(row):
+    """Top decile YoY роста."""
+    if not row:
+        return None, None
+    tg = _v108_num(row.get("yoy_growth_top_pct")) or _v108_num(row.get("top_growth_pct"))
+    if tg is not None:
+        return tg, "топ-10% роста"
+    g = _v108_num(row.get("yoy_growth_pct"))
+    if g is not None:
+        return g, "средний рост"
+    return None, None
+
+
+def _v108_top_yield(row):
+    """Top decile доходности аренды."""
+    if not row:
+        return None, None
+    ty = _v108_num(row.get("top_rental_yield_pct")) or _v108_num(row.get("top_yield_pct"))
+    if ty is not None:
+        return ty, "топ-10% доходности"
+    y = _v108_num(row.get("avg_rental_yield_pct"))
+    if y is not None:
+        return y, "средняя доходность"
+    return None, None
+
+
+def _v108_subscribe_cta(lang="ru"):
+    if lang == "en":
+        return "\n💡 <i>Get daily market insights → /subscribe</i>"
+    if lang == "ar":
+        return "\n💡 <i>احصل على رؤى يومية للسوق → /subscribe</i>"
+    return "\n💡 <i>Хотите получать такие данные ежедневно? → /subscribe</i>"
+
+
+def _v108_smart_pick_cta(lang="ru"):
+    if lang == "en":
+        return "🎯 <b>Pick under your budget</b> → /smart_pick"
+    if lang == "ar":
+        return "🎯 <b>اختر حسب ميزانيتك</b> → /smart_pick"
+    return "🎯 <b>Подобрать объект под бюджет</b> → /smart_pick"
+
+
+# ----- show_stats v108 --------------------------------------------
+
+try:
+    _v108_orig_show_stats = show_stats  # сохраняем оригинал v106/v107
+except NameError:
+    _v108_orig_show_stats = None
+
+
+def show_stats(title, row, prop=None, period=None, deal_type=None):  # noqa: F811
+    """v108 marketing rewrite — sales-oriented copy с топ-цифрами.
+
+    Fallback: если ключевых полей нет (top_quartile_*) — отдаём
+    управление оригинальной show_stats, чтобы не потерять никакой
+    сценарий.
+    """
+    if not row or not row.get("deals"):
+        return "❌ Нет данных по выбранным фильтрам."
+
+    # Если top_quartile_* полностью отсутствует и нет даже max_price —
+    # отдаём управление старой версии (полный fallback на её формат).
+    tq, _ = _v108_top_price(row)
+    if tq is None and _v108_orig_show_stats is not None:
+        try:
+            return _v108_orig_show_stats(title, row, prop, period, deal_type)
+        except Exception:
+            pass
+
+    try:
+        rent = is_rent_deal(deal_type)
+    except Exception:
+        rent = False
+
+    deals = int(row.get("deals") or 0)
+    top_price, top_price_src = _v108_top_price(row)
+    top_psf, top_psf_src = _v108_top_psf(row)
+    growth, growth_src = _v108_top_growth(row)
+    yld, yld_src = _v108_top_yield(row)
+
+    # Hook — сильная цифра первой фразой
+    if rent:
+        hook = (
+            f"🔥 <b>Премиальная аренда — до {format_money(top_price)} в год</b>\n"
+            f"<i>({top_price_src})</i>\n\n"
+        )
+    else:
+        hook = (
+            f"🔥 <b>Топ-цены достигают {format_money(top_price)}</b>\n"
+            f"<i>({top_price_src})</i>\n\n"
+        )
+
+    # Контекст — район/период/источник
+    period_txt = period_label(period)
+    prop_txt = prop or "все типы"
+    context = (
+        f"📍 <b>{title}</b>\n"
+        f"📅 Период: {period_txt} · 🏠 {prop_txt}\n"
+        f"📊 Источник: DLD ({format_int(deals)} сделок)\n\n"
+    )
+
+    # Доказательство — 2–3 числа максимум
+    proof_lines = []
+    if top_psf:
+        psf_label = "Аренда" if rent else "Цена"
+        proof_lines.append(f"💰 {psf_label} до <b>{format_money(top_psf)}/sqft</b> ({top_psf_src})")
+    if growth is not None and not rent:
+        sign = "+" if growth > 0 else ""
+        proof_lines.append(f"📈 Рост до <b>{sign}{growth:.1f}% YoY</b> ({growth_src})")
+    if yld is not None and rent:
+        proof_lines.append(f"💎 Доходность до <b>{yld:.1f}% годовых</b> ({yld_src})")
+
+    # Если аренда — добавим объём ликвидности
+    proof_lines.append(f"⚡ <b>{format_int(deals)}</b> сделок за период — высокая ликвидность")
+    proof = "\n".join(proof_lines) + "\n\n"
+
+    # CTA
+    cta_block = _v108_smart_pick_cta("ru") + "\n"
+    cta_block += _v108_subscribe_cta("ru")
+
+    text = hook + context + proof + cta_block
+    return text
+
+
+# ----- show_comparison v108 --------------------------------------
+
+try:
+    _v108_orig_show_comparison = show_comparison
+except NameError:
+    _v108_orig_show_comparison = None
+
+
+def show_comparison(title, current, previous, period=None, deal_type=None):  # noqa: F811
+    """v108 marketing comparison — акцент на топ-рост."""
+    if not current or not previous or not current.get("deals") or not previous.get("deals"):
+        return "❌ Недостаточно данных для сравнения."
+
+    cur_top, cur_src = _v108_top_price(current)
+    prev_top, _prev_src = _v108_top_price(previous)
+    if cur_top is None and _v108_orig_show_comparison is not None:
+        try:
+            return _v108_orig_show_comparison(title, current, previous, period, deal_type)
+        except Exception:
+            pass
+
+    try:
+        rent = is_rent_deal(deal_type)
+    except Exception:
+        rent = False
+
+    # Top-quartile dynamic — топовый сегмент рынка вырос на сколько
+    top_change = None
+    if cur_top and prev_top:
+        try:
+            top_change = (cur_top - prev_top) / prev_top * 100.0
+        except Exception:
+            top_change = None
+
+    deals_change = pct_change(current.get("deals"), previous.get("deals"))
+    growth, growth_src = _v108_top_growth(current)
+
+    # Hook
+    if top_change is not None and top_change > 5:
+        hook = (
+            f"🚀 <b>Топ-сегмент рынка вырос на {format_pct(top_change)}</b>\n"
+            f"<i>({cur_src})</i>\n\n"
+        )
+    elif top_change is not None and top_change < -5:
+        hook = (
+            f"📉 <b>Топ-сегмент скорректировался на {format_pct(top_change)}</b>\n"
+            f"<i>момент для входа ниже рынка</i>\n\n"
+        )
+    elif growth is not None:
+        sign = "+" if growth > 0 else ""
+        hook = (
+            f"📈 <b>Рост до {sign}{growth:.1f}% YoY ({growth_src})</b>\n\n"
+        )
+    else:
+        hook = "📊 <b>Сравнение периодов</b>\n\n"
+
+    context = (
+        f"📍 <b>{title}</b>\n"
+        f"📅 Текущий период: {period_label(period)} vs аналогичный предыдущий\n"
+        f"📊 Источник: DLD\n\n"
+    )
+
+    proof_lines = [
+        f"💎 Топ-цена сейчас: <b>{format_money(cur_top)}</b>",
+        f"💎 Топ-цена ранее: <b>{format_money(prev_top)}</b>",
+        f"⚡ Активность: <b>{format_pct(deals_change)}</b> сделок",
+    ]
+    proof = "\n".join(proof_lines) + "\n\n"
+
+    if rent:
+        verdict = "Сильный рынок аренды — момент для апсейла действующих контрактов."
+    elif top_change is not None and top_change > 5:
+        verdict = "Окно входа сужается — премиальные объекты дорожают быстрее среднего."
+    elif top_change is not None and top_change < -5:
+        verdict = "Появилось окно для входа ниже исторических максимумов."
+    else:
+        verdict = "Рынок стабилен — решение по конкретному юниту важнее тайминга."
+
+    cta = (
+        f"🧠 <b>Вывод:</b> {verdict}\n\n"
+        f"{_v108_smart_pick_cta('ru')}\n"
+        f"{_v108_subscribe_cta('ru')}"
+    )
+
+    return hook + context + proof + cta
+
+
+# ----- v108 helper: top buildings card --------------------------
+
+def v108_format_top_building(name, area, row):
+    """Карточка одного здания в продающем стиле.
+
+    Пример вывода:
+      🏢 HQ by ROVE — Business Bay
+      Премиальные сделки от AED 2.8M (топ-quartile)
+      Активность: 12 сделок за период
+      Тренд: цены растут до +12.1% YoY
+    """
+    if not row:
+        return f"🏢 <b>{name}</b> — {area or ''}\n<i>нет данных DLD</i>\n"
+    deals = int(row.get("deals") or 0)
+    top_price, src = _v108_top_price(row)
+    growth, _ = _v108_top_growth(row)
+    lines = [f"🏢 <b>{name}</b> — {area or ''}"]
+    if top_price:
+        lines.append(f"   💎 Топ-сделки от <b>{format_money(top_price)}</b> ({src})")
+    if deals:
+        lines.append(f"   ⚡ Активность: <b>{format_int(deals)}</b> сделок за период")
+    if growth is not None and growth != 0:
+        sign = "+" if growth > 0 else ""
+        lines.append(f"   📈 Тренд: до <b>{sign}{growth:.1f}% YoY</b>")
+    return "\n".join(lines) + "\n"
+
+
+print("Loaded v108 marketing rewrite (top-quartile cifry + sales copy)")
+
+
 if __name__ == "__main__":
     asyncio.run(main())
