@@ -11135,8 +11135,11 @@ def _v106_token_fallback_find(query, limit=10):
     """AND-tokenized fallback search. v106.1: запускается ВСЕГДА и мёрджится с v66,
     чтобы пользовательский ввод вида "Address Opera" (а в архиве канонические имена
     содержат лишние слова "Residences Dubai") всё равно матчил T1/T2.
-    Ищем по building OR area по ВСЕМ токенам >=3 букв; матч если ВСЕ токены найдены.
+    v111: сначала бьём по mv_building_12m_summary (trigram) — мгновенно.
+    Только если read-model молчит — откатываемся в raw dld_sale_archive ILIKE.
     """
+    import time as _t
+    _t0 = _t.perf_counter()
     q = str(query or "").strip()
     if not q:
         return []
@@ -11145,6 +11148,33 @@ def _v106_token_fallback_find(query, limit=10):
     tokens = [t for t in _re_v106.split(r"\s+", q.lower()) if len(t) >= 3]
     if not tokens:
         return []
+    # ── v111 fast path: read-model trigram lookup ─────────────────────────
+    if _READ_MODEL_OK and _read_model:
+        try:
+            sql = """
+                SELECT building_name_display AS building_name_en,
+                       area_name AS area_name_en,
+                       deals::bigint AS deals
+                FROM mv_building_12m_summary
+                WHERE deal_type='sale' AND rooms='all' AND deals > 0
+                  AND lower(building_name_display) ILIKE ALL(%s)
+                ORDER BY deals DESC
+                LIMIT %s
+            """
+            patterns = [f"%{t}%" for t in tokens]
+            with _read_model._conn().cursor() as cur:
+                cur.execute(sql, (patterns, limit))
+                fast_rows = [
+                    {"building_name_en": r[0], "area_name_en": r[1], "deals": int(r[2] or 0)}
+                    for r in cur.fetchall()
+                ]
+            dt_ms = (_t.perf_counter() - _t0) * 1000
+            print(f"[LAT] v111_token_fallback_mv: {dt_ms:.0f}ms tokens={len(tokens)} hits={len(fast_rows)}")
+            if fast_rows:
+                return fast_rows
+        except Exception as _e:
+            print(f"[v111_token_fb_mv_err] {_e}")
+    # ── raw DLD fallback (медленный) ──────────────────────────────────────
     rows = []
     try:
         for source in _active_sources():
@@ -11208,6 +11238,9 @@ def _v106_token_fallback_find(query, limit=10):
         out.append(r)
         if len(out) >= limit:
             break
+    dt_ms = (_t.perf_counter() - _t0) * 1000
+    if dt_ms > 500:
+        print(f"[LAT_SLOW] _v106_token_fallback_find: {dt_ms:.0f}ms raw_path tokens={len(tokens)}")
     return out
 
 
@@ -11588,6 +11621,8 @@ def get_stats_smart(scope="dubai", name=None, prop=None, period=None, deal_type=
     в read-model нет — отдаём (None, ...), UI покажет "нет данных"
     или вышестоящий код возьмёт смежный fallback (market overview).
     """
+    import time as __t
+    __t0 = __t.perf_counter()
     # Read-model: scope=dubai → market_overview, иначе area/building
     if _READ_MODEL_OK and _read_model:
         try:
@@ -11660,6 +11695,9 @@ def get_stats_smart(scope="dubai", name=None, prop=None, period=None, deal_type=
                   prop=prop, period=period, deal_type=deal_type)
     except Exception:
         pass
+    __dt = (__t.perf_counter() - __t0) * 1000
+    if __dt > 500:
+        print(f"[LAT_SLOW] get_stats_smart_miss: {__dt:.0f}ms scope={scope} name={str(name)[:60]!r}")
     return None, prop, period, deal_type
 
 
@@ -12103,6 +12141,124 @@ def _v109_fetch_area_aggregate(real_areas, months=24, deal_type="sale"):
         return None
 
 
+# v111 BATCH FAST PATH: один SQL по N display_area сразу.
+def _v111_batch_area_aggregates(area_universe, months=24, deal_type="sale"):
+    """Один SQL по списку (display_area, [real_areas]) → dict display_area→agg.
+    Заменяет цикл из N round-trip на 1 round-trip.
+    """
+    import time as _t
+    if not (_READ_MODEL_OK and _read_model):
+        return {}
+    if not area_universe:
+        return {}
+    t0 = _t.perf_counter()
+    # Собираем плоский список (area_key → display_area)
+    key_to_display = {}
+    all_keys = []
+    for display, reals in area_universe:
+        for r in (reals or []):
+            k = str(r).strip().lower()
+            if not k:
+                continue
+            key_to_display[k] = display
+            all_keys.append(k)
+    if not all_keys:
+        return {}
+    sql = """
+        SELECT area_key,
+               deals_count                  AS deals,
+               avg_price                    AS avg_price,
+               avg_price_psf                AS avg_meter,
+               top_quartile_price           AS top_quartile_price,
+               top_quartile_psf             AS top_quartile_psf,
+               yoy_growth_pct               AS yoy_growth_pct,
+               yoy_growth_top_pct           AS yoy_growth_top_pct,
+               avg_rental_yield_pct         AS avg_rental_yield_pct,
+               top_rental_yield_pct         AS top_rental_yield_pct
+        FROM mv_area_24m_summary
+        WHERE area_key = ANY(%s)
+          AND property_type = 'all'
+          AND rooms = 'all'
+          AND deal_type = %s
+    """
+    # rename columns: mv has 'deals', so aliasing simplifies. Build directly:
+    sql = """
+        SELECT area_key,
+               deals,
+               avg_price,
+               avg_price_psf AS avg_meter,
+               top_quartile_price,
+               top_quartile_psf,
+               yoy_growth_pct,
+               yoy_growth_top_pct,
+               avg_rental_yield_pct,
+               top_rental_yield_pct
+        FROM mv_area_24m_summary
+        WHERE area_key = ANY(%s)
+          AND property_type='all' AND rooms='all' AND deal_type=%s
+    """
+    try:
+        import psycopg2.extras as _pe
+        with _read_model._conn().cursor(cursor_factory=_pe.RealDictCursor) as cur:
+            cur.execute(sql, (all_keys, deal_type))
+            rows = cur.fetchall()
+    except Exception as _e:
+        print("V111_BATCH_AGG_ERROR:", repr(_e))
+        return {}
+    # Aggregate per display_area (sum over real_areas)
+    out = {}
+    for r in rows:
+        dk = r.get("area_key")
+        disp = key_to_display.get(dk)
+        if not disp:
+            continue
+        cur = out.setdefault(disp, {
+            "deals": 0, "_sum_price_x_deals": 0.0, "_psf_sum": 0.0, "_psf_n": 0,
+            "top_quartile_price": 0.0, "top_quartile_psf": 0.0,
+            "_yoy_sum": 0.0, "_yoy_n": 0, "yoy_growth_top_pct": 0.0,
+            "_yld_sum": 0.0, "_yld_n": 0, "top_rental_yield_pct": 0.0,
+        })
+        d = int(r.get("deals") or 0)
+        cur["deals"] += d
+        if r.get("avg_price"):
+            cur["_sum_price_x_deals"] += float(r["avg_price"]) * d
+        if r.get("avg_meter"):
+            cur["_psf_sum"] += float(r["avg_meter"]); cur["_psf_n"] += 1
+        if r.get("top_quartile_price") and float(r["top_quartile_price"]) > cur["top_quartile_price"]:
+            cur["top_quartile_price"] = float(r["top_quartile_price"])
+        if r.get("top_quartile_psf") and float(r["top_quartile_psf"]) > cur["top_quartile_psf"]:
+            cur["top_quartile_psf"] = float(r["top_quartile_psf"])
+        if r.get("yoy_growth_pct") is not None:
+            cur["_yoy_sum"] += float(r["yoy_growth_pct"]); cur["_yoy_n"] += 1
+        if r.get("yoy_growth_top_pct") and float(r["yoy_growth_top_pct"]) > cur["yoy_growth_top_pct"]:
+            cur["yoy_growth_top_pct"] = float(r["yoy_growth_top_pct"])
+        if r.get("avg_rental_yield_pct") is not None:
+            cur["_yld_sum"] += float(r["avg_rental_yield_pct"]); cur["_yld_n"] += 1
+        if r.get("top_rental_yield_pct") and float(r["top_rental_yield_pct"]) > cur["top_rental_yield_pct"]:
+            cur["top_rental_yield_pct"] = float(r["top_rental_yield_pct"])
+    # finalize
+    final = {}
+    for disp, c in out.items():
+        if c["deals"] <= 0:
+            continue
+        final[disp] = {
+            "deals": c["deals"],
+            "avg_price": (c["_sum_price_x_deals"] / c["deals"]) if c["deals"] else 0,
+            "avg_meter": (c["_psf_sum"] / c["_psf_n"]) if c["_psf_n"] else 0,
+            "top_quartile_price": c["top_quartile_price"] or None,
+            "top_quartile_psf": c["top_quartile_psf"] or None,
+            "yoy_growth_pct": (c["_yoy_sum"] / c["_yoy_n"]) if c["_yoy_n"] else 0,
+            "yoy_growth_top_pct": c["yoy_growth_top_pct"] or 0,
+            "avg_rental_yield_pct": (c["_yld_sum"] / c["_yld_n"]) if c["_yld_n"] else 0,
+            "top_rental_yield_pct": c["top_rental_yield_pct"] or 0,
+        }
+    dt_ms = (_t.perf_counter() - t0) * 1000
+    print(f"[LAT] V111_BATCH_AGG: {dt_ms:.0f}ms areas={len(area_universe)} hit={len(final)} rows={len(rows)}")
+    if dt_ms > 500:
+        print(f"[LAT_SLOW] V111_BATCH_AGG: {dt_ms:.0f}ms exceeds 500ms budget")
+    return final
+
+
 def smart_pick_candidates(goal, budget_text, risk, timing):  # noqa: F811
     """v109: быстрый read-model путь по display_area → real_areas.
     Гарантия < 5 сек на запрос (~8 SQL × ~300мс = 2.5с).
@@ -12120,9 +12276,15 @@ def smart_pick_candidates(goal, budget_text, risk, timing):  # noqa: F811
     risk_text = str(risk or "").lower()
     goal_text = str(goal or "").lower()
 
+    # v111: batch fetch — 1 SQL вместо N round-trip
+    batch_agg = _v111_batch_area_aggregates(areas, months=24, deal_type=deal_type)
+
     results = []
     for display_area, real_areas in areas:
-        row = _v109_fetch_area_aggregate(real_areas, months=24, deal_type=deal_type)
+        row = batch_agg.get(display_area)
+        if not row:
+            # graceful fallback на старый путь, если batch промахнулся
+            row = _v109_fetch_area_aggregate(real_areas, months=24, deal_type=deal_type)
         if not row or not row.get("deals"):
             continue
 

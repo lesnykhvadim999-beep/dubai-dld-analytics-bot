@@ -60,11 +60,18 @@ _neg_lock = threading.Lock()
 
 
 def _conn():
+    # v111: убрали "SELECT 1" перед каждым обращением (это лишний RTT 200-300мс
+    # на public proxy). Ping раз в 60с.
     c = getattr(_LOCAL, "conn", None)
+    last_ping = getattr(_LOCAL, "conn_ping", 0)
+    now_t = time.time()
     if c is not None:
+        if (now_t - last_ping) < 60:
+            return c
         try:
             with c.cursor() as cur:
                 cur.execute("SELECT 1")
+            _LOCAL.conn_ping = now_t
             return c
         except Exception:
             try: c.close()
@@ -81,6 +88,7 @@ def _conn():
     with c.cursor() as cur:
         cur.execute("SET statement_timeout = 5000")  # 5 сек — read-model должно отдавать мгновенно
     _LOCAL.conn = c
+    _LOCAL.conn_ping = now_t
     return c
 
 
