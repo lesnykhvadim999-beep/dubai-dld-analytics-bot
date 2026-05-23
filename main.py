@@ -3016,6 +3016,12 @@ async def start_handler(message: Message):
     payload = ""
     if " " in text:
         payload = text.split(" ", 1)[1].strip()
+    # v55: cross-bot UTM tracking
+    try:
+        from cross_bot_utm import log_jump_async
+        log_jump_async("analytics", user_id, payload)
+    except Exception as _e:
+        print(f"[analytics] cbj log err: {_e}", flush=True)
     if payload.startswith("bld-") or payload.startswith("bld_"):
         bld = payload[4:].replace("_", " ").strip()
         if bld:
