@@ -11247,7 +11247,12 @@ def _v106_token_fallback_find(query, limit=10):
 def find_buildings(query, limit=10):  # noqa: F811
     """v106.1: всегда мёрджим v66 + token-fallback. Раньше fallback бежал только
     при пустом v66 — но для "Address Opera" v66 находил "THE ADDRESS DUBAI OPERA"
-    с малым кол-вом сделок, а T1/T2 (где основной массив) терялись."""
+    с малым кол-вом сделок, а T1/T2 (где основной массив) терялись.
+
+    v_unified: если оба способа пустые — fallback в канонический trigram-поиск
+    из building_search (опечатки + алиасы + master-zone link). Так бот
+    НИКОГДА не возвращает пустоту: показывает похожие здания.
+    """
     rows = []
     if _v106_original_find_buildings is not None:
         try:
@@ -11260,11 +11265,27 @@ def find_buildings(query, limit=10):  # noqa: F811
     except Exception as e:
         _v106_log("find_buildings_fallback_outer", e, q=query)
         fb = []
+    # ── v_unified: trigram suggest ──
+    suggest = []
     if not rows and not fb:
+        try:
+            from building_search import search_building_canonical as _bs
+            cands = _bs(query, limit=limit, include_popular_fallback=False) or []
+            for c in cands:
+                suggest.append({
+                    "building_name_en": c["name"],
+                    "area_name_en":     c.get("master_zone") or c.get("area_name"),
+                    "deals":            c.get("deals_12m") or 0,
+                    "_kind":            c.get("kind"),
+                    "_master_zone":     c.get("master_zone"),
+                })
+        except Exception as e:
+            _v106_log("find_buildings_trgm_suggest", e, q=query)
+    if not rows and not fb and not suggest:
         return []
     # Мёрдж: dedup по (building.lower, area.lower), сортировка по deals desc.
     seen, merged = set(), []
-    for r in list(rows) + list(fb):
+    for r in list(rows) + list(fb) + list(suggest):
         try:
             key = (
                 str((r.get("building_name_en") if hasattr(r, "get") else r["building_name_en"]) or "").lower().strip(),
