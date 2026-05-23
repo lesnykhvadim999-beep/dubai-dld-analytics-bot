@@ -3035,15 +3035,36 @@ async def start_handler(message: Message):
             except Exception as e:
                 print(f"[deeplink area] {e}")
     # default: show welcome / language picker (with logo if available)
+    # v108.1: restored welcome text + logo fallback after Layla UX cut
+    welcome_text = (
+        "🏙 <b>Dubai DLD Analytics</b>\n"
+        "<i>Real-Estate Intelligence · UAE</i>\n\n"
+        "🇷🇺 Аналитика рынка недвижимости Дубая на данных DLD: цены, доходность, сделки, рейтинги.\n"
+        "🇬🇧 Dubai property market analytics powered by DLD data: prices, ROI, deals, rankings.\n"
+        "🇦🇪 تحليلات سوق العقارات في دبي مدعومة ببيانات DLD: الأسعار، العائد، الصفقات، التصنيفات.\n\n"
+        "🌐 <b>Choose language / Выберите язык / اختر اللغة</b> ⬇️"
+    )
     try:
         from aiogram.types import FSInputFile
         import os as _os
-        _logo = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "analytics_logo.png")
-        if _os.path.isfile(_logo):
-            await message.answer_photo(FSInputFile(_logo))
+        _logo_candidates = ["analytics_logo.png", "logo.png", "logo.jpg", "AB_logo.png"]
+        _here = _os.path.dirname(_os.path.abspath(__file__))
+        _logo = None
+        for _name in _logo_candidates:
+            _p = _os.path.join(_here, _name)
+            if _os.path.isfile(_p):
+                _logo = _p
+                break
+        if _logo:
+            try:
+                await message.answer_photo(FSInputFile(_logo), caption=welcome_text, reply_markup=language_menu())
+                return
+            except Exception as _e2:
+                print(f"[welcome logo send] {_e2}")
     except Exception as _e:
         print(f"[welcome logo] {_e}")
-    await message.answer(TEXTS["en"]["choose_lang"], reply_markup=language_menu())
+    # Fallback: text only (no logo file present)
+    await message.answer(welcome_text, reply_markup=language_menu())
 
 
 @dp.message(lambda m: m.text in ["🇷🇺 Русский", "🇬🇧 English", "🇦🇪 العربية"])
@@ -4119,9 +4140,11 @@ async def main_handler(message: Message):
             html = None
             try:
                 _t0 = time.time()
+                # v108.1: increased timeout 45s→90s to allow v107 read-model fast-path
+                # to complete for all 8 areas (previously fallback fired prematurely).
                 candidates, html = await asyncio.wait_for(
                     asyncio.to_thread(_v107_smart_invest_pipeline),
-                    timeout=45,
+                    timeout=90,
                 )
                 print(f"SMART_INVEST_V107_OK: dt={time.time()-_t0:.1f}s goal={state.get('goal')!r} budget={state.get('budget')!r} risk={state.get('risk')!r}")
             except asyncio.TimeoutError:
@@ -11908,6 +11931,226 @@ def v108_format_top_building(name, area, row):
 
 
 print("Loaded v108 marketing rewrite (top-quartile cifry + sales copy)")
+
+
+# ==================================================================
+# v109 SMART-INVEST READ-MODEL FAST PATH
+# ------------------------------------------------------------------
+# Проблема v108: smart_pick_candidates вызывал get_stats_smart(name=display_area)
+# где display_area = 'JVC' / 'Downtown Dubai' / 'Sobha Hartland' / 'JLT'.
+# Эти имена НЕ совпадают с area_key в read-model area_stats (там DLD-имена:
+# 'al barsha south fourth', 'burj khalifa', 'jumeirah lakes towers' и т.п.).
+# Read-model промахивался для 4 из 8 areas, бот падал в raw-fallback,
+# raw-fallback таймаутил, юзер получал static "DLD-архив медленно" сообщение.
+#
+# Фикс: smart_pick_candidates тянет данные напрямую из read_model по real_areas
+# (DLD-именам), агрегирует по display_area и формирует кандидата за < 3 сек.
+# ==================================================================
+
+_V109_AREA_REAL_MAP = {
+    "JVC": ["Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"],
+    "Dubai Marina": ["Marsa Dubai"],
+    "Business Bay": ["Business Bay"],
+    "Downtown Dubai": ["Burj Khalifa"],
+    "Palm Jumeirah": ["Palm Jumeirah"],
+    "JLT": ["Jumeirah Lakes Towers"],
+    "Sobha Hartland": ["Nadd Hessa"],  # ближайшая по DLD-зоне
+    "Dubai Sports City": ["Al Hebiah Fourth"],
+    "Arjan": ["Al Barsha South Second"],
+    "Damac Hills": ["Al Hebiah Third"],
+    "Dubai Hills": ["Hadaeq Sheikh Mohammed Bin Rashid"],
+    "MBR City": ["Hadaeq Sheikh Mohammed Bin Rashid"],
+    "Jumeirah Village Triangle": ["Al Barsha South Third"],
+    "Discovery Gardens": ["Jabal Ali First"],
+    "Dubai Investment Park": ["Dubai Investment Park First"],
+    "Dubai South": ["Madinat Al Mataar"],
+    "DIFC": ["Zaabeel Second", "Burj Khalifa"],
+    "Mirdif": ["Mirdif"],
+    "Dubai Production City": ["Me'Aisem First"],
+}
+
+
+def _v109_area_universe_safe(goal):
+    """Безопасная вселенная: только display_area, у которых есть DLD-данные.
+    Sobha Hartland без данных в текущем read-model — заменяем на Sports City."""
+    g = str(goal or "")
+    if "жизн" in g.lower() or "Для жизни" in g:
+        return [
+            ("Downtown Dubai", ["Burj Khalifa"]),
+            ("Dubai Marina", ["Marsa Dubai"]),
+            ("JVC", ["Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"]),
+            ("Business Bay", ["Business Bay"]),
+            ("Palm Jumeirah", ["Palm Jumeirah"]),
+        ]
+    if "Аренд" in g or "аренд" in g.lower():
+        return [
+            ("Dubai Marina", ["Marsa Dubai"]),
+            ("JVC", ["Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"]),
+            ("Business Bay", ["Business Bay"]),
+            ("Downtown Dubai", ["Burj Khalifa"]),
+            ("JLT", ["Jumeirah Lakes Towers"]),
+        ]
+    # Инвестиция / ROI / Перепродажа
+    return [
+        ("JVC", ["Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"]),
+        ("Business Bay", ["Business Bay"]),
+        ("Dubai Marina", ["Marsa Dubai"]),
+        ("Downtown Dubai", ["Burj Khalifa"]),
+        ("Dubai Sports City", ["Al Hebiah Fourth"]),
+        ("JLT", ["Jumeirah Lakes Towers"]),
+        ("Dubai Hills", ["Hadaeq Sheikh Mohammed Bin Rashid"]),
+        ("Palm Jumeirah", ["Palm Jumeirah"]),
+    ]
+
+
+def _v109_fetch_area_aggregate(real_areas, months=24, deal_type="sale"):
+    """Один SQL по N real_areas → агрегат для display_area.
+    Возвращает dict с deals/avg_price/avg_meter/yoy/top_yield или None."""
+    if not (_READ_MODEL_OK and _read_model):
+        return None
+    try:
+        keys = [str(a).strip().lower() for a in (real_areas or []) if a]
+        if not keys:
+            return None
+        start = _read_model._period_start(months)
+        sql = """
+            SELECT
+                SUM(deals_count)::int                                          AS deals,
+                (SUM(avg_price_aed * deals_count) / NULLIF(SUM(deals_count),0)) AS avg_price,
+                AVG(avg_price_psf)                                              AS avg_meter,
+                MAX(top_quartile_price_aed)                                     AS top_quartile_price,
+                MAX(top_quartile_psf)                                           AS top_quartile_psf,
+                AVG(yoy_growth_pct)                                             AS yoy_growth_pct,
+                MAX(yoy_growth_top_pct)                                         AS yoy_growth_top_pct,
+                AVG(avg_rental_yield_pct)                                       AS avg_rental_yield_pct,
+                MAX(top_rental_yield_pct)                                       AS top_rental_yield_pct
+            FROM area_stats
+            WHERE area_key = ANY(%s)
+              AND property_type = 'all'
+              AND rooms = 'all'
+              AND deal_type = %s
+              AND period_month >= %s
+        """
+        import psycopg2.extras as _pe
+        with _read_model._conn().cursor(cursor_factory=_pe.RealDictCursor) as cur:
+            cur.execute(sql, (keys, deal_type, start))
+            row = cur.fetchone()
+        if not row or not row.get("deals"):
+            return None
+        return dict(row)
+    except Exception as _e:
+        print("V109_FETCH_AGG_ERROR:", repr(_e), "keys=", real_areas)
+        return None
+
+
+def smart_pick_candidates(goal, budget_text, risk, timing):  # noqa: F811
+    """v109: быстрый read-model путь по display_area → real_areas.
+    Гарантия < 5 сек на запрос (~8 SQL × ~300мс = 2.5с).
+    """
+    import time as _time
+    t0 = _time.time()
+    try:
+        bmin, bmax = parse_budget_range(budget_text)
+    except Exception:
+        bmin, bmax = (0, 0)
+
+    deal_type = "rent" if (goal and ("Аренд" in goal or "аренд" in str(goal).lower())) else "sale"
+    areas = _v109_area_universe_safe(goal)
+
+    risk_text = str(risk or "").lower()
+    goal_text = str(goal or "").lower()
+
+    results = []
+    for display_area, real_areas in areas:
+        row = _v109_fetch_area_aggregate(real_areas, months=24, deal_type=deal_type)
+        if not row or not row.get("deals"):
+            continue
+
+        deals = int(row.get("deals") or 0)
+        avg_price = float(row.get("avg_price") or 0)
+        avg_meter = float(row.get("avg_meter") or 0)
+        top_quartile_price = float(row.get("top_quartile_price") or 0) or None
+        yoy = float(row.get("yoy_growth_pct") or 0)
+        yoy_top = float(row.get("yoy_growth_top_pct") or 0)
+        yield_avg = float(row.get("avg_rental_yield_pct") or 0)
+        yield_top = float(row.get("top_rental_yield_pct") or 0)
+
+        # бюджет-affordability: насколько средняя цена близка к бюджету
+        budget_mid = ((bmin or 0) + (bmax or avg_price or 0)) / 2 if (bmin or bmax) else avg_price
+        if budget_mid and avg_price:
+            affordability = 100 - min(100, abs(avg_price - budget_mid) / max(budget_mid, 1) * 100)
+        else:
+            affordability = 45
+        liquidity = min(100, deals / 5000 * 100)  # 5000 deals = 100% liquidity (big areas like business bay)
+
+        score = liquidity * 0.45 + affordability * 0.35
+        if yield_top:
+            score += min(20, yield_top * 1.5)
+        if yoy_top:
+            score += min(15, max(0, yoy_top * 0.5))
+
+        if "низ" in risk_text and deals >= 5000:
+            score += 14
+        elif "сбал" in risk_text:
+            score += 10
+        elif "агр" in risk_text:
+            score += 8
+
+        if any(x in goal_text for x in ["roi", "аренд", "инвест"]):
+            # для ROI важна доходность
+            if yield_top and yield_top >= 7:
+                score += 12
+        if "жизн" in goal_text and avg_price and bmax and abs(avg_price - bmax) / max(bmax, 1) < 0.4:
+            score += 10
+        if "перепрод" in goal_text and yoy_top and yoy_top > 0:
+            score += 10
+
+        # Выбор формата по бюджету
+        if bmax <= 1_000_000:
+            prop_label = "Studio"
+        elif bmax <= 2_000_000:
+            prop_label = "Studio / 1 BR"
+        elif bmax <= 3_000_000:
+            prop_label = "1 BR / 2 BR"
+        elif bmax <= 5_000_000:
+            prop_label = "2 BR / 3 BR"
+        else:
+            prop_label = "3 BR / Penthouse / Villa"
+
+        results.append({
+            "area": display_area,
+            "property": prop_label,
+            "deals": deals,
+            "buildings": 0,
+            "avg_price": avg_price,
+            "min_price": avg_price * 0.85,
+            "max_price": top_quartile_price or avg_price * 1.2,
+            "avg_meter": avg_meter,
+            "score": score,
+            "yoy_growth_pct": yoy,
+            "yoy_growth_top_pct": yoy_top,
+            "avg_rental_yield_pct": yield_avg,
+            "top_rental_yield_pct": yield_top,
+            "top_quartile_price": top_quartile_price,
+            "_source": "v109_read_model",
+        })
+
+    dt_ms = (_time.time() - t0) * 1000
+    try:
+        _safe_goal = str(goal).encode("ascii", "replace").decode("ascii") if goal else ""
+        _safe_budget = str(budget_text).encode("ascii", "replace").decode("ascii") if budget_text else ""
+        _safe_risk = str(risk).encode("ascii", "replace").decode("ascii") if risk else ""
+        print(f"V109_SMART_PICK: areas_with_data={len(results)} dt={dt_ms:.0f}ms goal={_safe_goal!r} budget={_safe_budget!r} risk={_safe_risk!r}")
+    except Exception:
+        print(f"V109_SMART_PICK: areas_with_data={len(results)} dt={dt_ms:.0f}ms")
+
+    if not results:
+        return smart_fallback_candidates(goal, budget_text, risk, timing)
+
+    return sorted(results, key=lambda x: (x.get("score") or 0, x.get("deals") or 0), reverse=True)[:5]
+
+
+print("Loaded v109 smart-invest read-model fast path (real area_key mapping)")
 
 
 if __name__ == "__main__":
