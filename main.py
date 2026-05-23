@@ -3611,6 +3611,10 @@ async def main_handler(message: Message):
             return
         # v50/v51: admin trigger for daily_reports (manual regen if cron failed)
         # FIX: was ADMIN_ID undefined → use ADMIN_IDS set
+        # v112: admin /stats — cross-bot conversions за последние 7 дней
+        if text in ["/stats", "📈 /stats"] and user_id in ADMIN_IDS:
+            await _send_cross_bot_stats(message)
+            return
         if text in ["/trigger_daily_reports", "/run_reports"] and user_id in ADMIN_IDS:
             await message.answer("⏳ Запускаю daily_reports.run_daily() …")
             try:
@@ -4179,7 +4183,7 @@ async def main_handler(message: Message):
                 try:
                     if _err_logger:
                         _err_logger.log_error(
-                            "analytics", "smart_invest_pipeline", "timeout 45s",
+                            "analytics", "smart_invest_pipeline", "timeout 90s",
                             error_class="TimeoutError", user_id=user_id,
                             context={
                                 "goal": state.get("goal"), "budget": state.get("budget"),
@@ -6484,6 +6488,91 @@ async def handle_admin_dashboard(message):
     except Exception as e:
         await message.answer(f"⚠️ Админ-панель временно недоступна.\n\n<code>{str(e)[:500]}</code>", reply_markup=main_menu(user_id))
 
+
+# v112: admin /stats — cross-bot conversions table (last 7 days)
+async def _send_cross_bot_stats(message):
+    """Показывает таблицу cross_bot_jumps (from_bot × to_bot) за 7 дней.
+    Источник: RESALE_DATABASE_URL (общая аналитическая БД)."""
+    user_id = message.from_user.id
+    url = os.environ.get("RESALE_DATABASE_URL") or os.environ.get("DATABASE_URL")
+    if not url:
+        await message.answer("⚠️ RESALE_DATABASE_URL не настроен — нет источника cross_bot_jumps.",
+                             reply_markup=main_menu(user_id))
+        return
+    try:
+        import psycopg2 as _pg
+        conn = _pg.connect(url, connect_timeout=8, application_name="analytics-bot[/stats]")
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SET statement_timeout = 8000")
+                cur.execute("""
+                    SELECT COUNT(*) FROM information_schema.tables
+                    WHERE table_name='cross_bot_jumps'
+                """)
+                if not cur.fetchone()[0]:
+                    await message.answer("ℹ️ Таблица cross_bot_jumps ещё пустая — переходов между ботами не было.",
+                                         reply_markup=main_menu(user_id))
+                    return
+                cur.execute("""
+                    SELECT COALESCE(from_bot, 'unknown') AS f,
+                           COALESCE(to_bot,   'unknown') AS t,
+                           COUNT(*)                       AS cnt,
+                           COUNT(DISTINCT user_id)        AS uniq
+                    FROM cross_bot_jumps
+                    WHERE jumped_at >= NOW() - INTERVAL '7 days'
+                    GROUP BY 1, 2
+                    ORDER BY cnt DESC
+                    LIMIT 40
+                """)
+                rows = cur.fetchall()
+                cur.execute("""
+                    SELECT COUNT(*), COUNT(DISTINCT user_id)
+                    FROM cross_bot_jumps
+                    WHERE jumped_at >= NOW() - INTERVAL '7 days'
+                """)
+                total, uniq_total = cur.fetchone()
+                cur.execute("""
+                    SELECT COALESCE(utm_source, '∅'),
+                           COUNT(*) AS c
+                    FROM cross_bot_jumps
+                    WHERE jumped_at >= NOW() - INTERVAL '7 days'
+                    GROUP BY 1
+                    ORDER BY c DESC
+                    LIMIT 8
+                """)
+                utm_rows = cur.fetchall()
+        finally:
+            try: conn.close()
+            except Exception: pass
+    except Exception as e:
+        await message.answer(f"⚠️ Ошибка чтения cross_bot_jumps:\n<code>{str(e)[:500]}</code>",
+                             reply_markup=main_menu(user_id))
+        return
+
+    if not rows:
+        await message.answer(
+            "📈 <b>Cross-bot conversions · 7d</b>\n\n"
+            "За последние 7 дней переходов между ботами не зафиксировано.",
+            reply_markup=main_menu(user_id),
+        )
+        return
+
+    lines = ["📈 <b>Cross-bot conversions · 7d</b>"]
+    lines.append(f"Всего переходов: <b>{int(total or 0)}</b> · уникальных user: <b>{int(uniq_total or 0)}</b>\n")
+    lines.append("<b>from → to · count · uniq</b>")
+    lines.append("<pre>")
+    for f, t, cnt, uniq in rows:
+        f_s = (f or "?")[:10].ljust(10)
+        t_s = (t or "?")[:10].ljust(10)
+        lines.append(f"{f_s} {t_s} {int(cnt):>5} {int(uniq):>5}")
+    lines.append("</pre>")
+    if utm_rows:
+        lines.append("\n<b>Top utm_source · 7d</b>")
+        lines.append("<pre>")
+        for src, c in utm_rows:
+            lines.append(f"{(src or '∅')[:18].ljust(18)} {int(c):>5}")
+        lines.append("</pre>")
+    await message.answer("\n".join(lines), reply_markup=main_menu(user_id))
 
 
 # =========================
