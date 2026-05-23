@@ -6426,6 +6426,45 @@ async def handle_pdf_request(message):
         content = show_stats(f"<b>{title}</b>", row, used_prop, used_period, used_deal_type)
         content += _build_360_conclusion(row, scope, name, "pdf")
 
+    # v_pdf2: используем общий vadim_pdf модуль (10 страниц, бренд Vadim Realty).
+    pdf_path = None
+    try:
+        from vadim_pdf import generate_pdf_report
+        scope = state.get("scope", "dubai")
+        row = state.get("last_row") or {}
+        # Map scope → report_type
+        report_type = {"area": "area", "building": "building",
+                       "project": "project", "dubai": "area"}.get(scope, "area")
+        payload = {
+            "name": state.get("name") or title,
+            "title": title,
+            "avg_price": row.get("avg_price"),
+            "median_price": row.get("median_price"),
+            "price_per_m2": row.get("price_per_m2") or row.get("avg_price_m2"),
+            "deals": row.get("deals"),
+            "yield": row.get("yield"),
+            "growth_yoy": row.get("growth_yoy") or row.get("growth"),
+            "liquidity": row.get("liquidity"),
+            "summary": _html_to_plain(content)[:2500] if content else None,
+        }
+        # try add dynamics if available in state
+        if state.get("dynamics_series"):
+            payload["dynamics_series"] = state["dynamics_series"]
+        pdf_path = generate_pdf_report(report_type, payload, lang="ru")
+    except Exception as _e:
+        import logging as _lg
+        _lg.warning(f"vadim_pdf failed → fallback to legacy PDF: {_e}")
+
+    if pdf_path:
+        from aiogram.types import FSInputFile
+        await message.answer_document(
+            FSInputFile(pdf_path, filename="vadim_realty_report.pdf"),
+            caption="📄 <b>Vadim Realty</b> · RERA BRN 65011\nИнвестиционный отчёт готов.",
+            reply_markup=result_menu(user_id, state.get("scope")),
+        )
+        return
+
+    # ── legacy fallback ──
     pdf = build_pdf_bytes(title, content)
     if not pdf:
         await message.answer(
