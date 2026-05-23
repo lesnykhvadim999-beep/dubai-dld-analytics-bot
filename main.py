@@ -12375,5 +12375,42 @@ def smart_pick_candidates(goal, budget_text, risk, timing):  # noqa: F811
 print("Loaded v109 smart-invest read-model fast path (real area_key mapping)")
 
 
+# =========================================================================
+# v110 MASTER-ZONE CANONICAL SEARCH (override v66 raw-DLD find_areas)
+# =========================================================================
+# Fixes: поиск «JVC» возвращал 5 DLD sub-areas (Al Barsha South Fourth,
+# Al Hebiah First, …) вместо ОДНОЙ сгруппированной master-zone.
+# Правило: боты ОБЯЗАНЫ ходить в master_project_zones / area_stats,
+# а не в raw dld_transactions_full для поиска района.
+try:
+    from area_search import search_area_canonical as _v110_search_canonical
+
+    def _v110_find_areas(query, limit=10):
+        rows = _v110_search_canonical(query, limit=limit) or []
+        out = []
+        for r in rows:
+            out.append({
+                "area_name_en": r.get("display_en") or r.get("name"),
+                "name":         r.get("display_en") or r.get("name"),
+                "master_zone":  r.get("master_zone"),
+                "area_key":     r.get("area_key"),
+                "display_ru":   r.get("display_ru"),
+                "display_en":   r.get("display_en"),
+                "kind":         r.get("kind"),
+                "deals":        r.get("deals_12m") or 0,
+                "deals_12m":    r.get("deals_12m") or 0,
+                "yield_pct":    r.get("yield_avg"),
+                "buildings":    0,  # для совместимости со старым форматом
+                "hint":         r.get("hint"),
+                "_source":      "v110_master_zone",
+            })
+        return out
+
+    find_areas = _v110_find_areas  # type: ignore
+    print("Loaded v110 master-zone canonical search (overrides v66 find_areas)")
+except Exception as _v110_err:
+    print(f"V110 master-zone search NOT loaded: {_v110_err!r}")
+
+
 if __name__ == "__main__":
     asyncio.run(main())
