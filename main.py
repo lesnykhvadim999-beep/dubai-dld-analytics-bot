@@ -97,7 +97,14 @@ user_states = {}
 
 
 def db():
-    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+    # v107: жёсткие таймауты, чтобы хэндлеры не зависали на медленных DLD-запросах.
+    conn = psycopg2.connect(
+        DATABASE_URL,
+        cursor_factory=RealDictCursor,
+        connect_timeout=8,
+        options="-c statement_timeout=15000 -c idle_in_transaction_session_timeout=20000",
+    )
+    return conn
 
 
 def num_sql(column):
@@ -4071,38 +4078,102 @@ async def main_handler(message: Message):
         if state.get("step") == "smart_risk":
             state["risk"] = text
             await send_processing(message, "⌛️ <b>Подбираю инвестиционный сценарий</b>\n\n◇ Сопоставляю бюджет, цель и риск.\n◇ Проверяю DLD-активность и ликвидность.\n◇ Формирую заключение 360°.")
-            candidates = safe_call(smart_pick_candidates, state.get("goal"), state.get("budget"), state.get("risk"), state.get("timing"), default=[]) or []
-            if not candidates:
-                candidates = smart_fallback_candidates(state.get("goal"), state.get("budget"), state.get("risk"), state.get("timing"))
-
+            # v107 antifreeze: весь sync-pipeline (SQL + economic_engine) выносим в thread
+            # и ограничиваем суммарным таймаутом, чтобы handler никогда не зависал.
             title = "🧠 Инвестиционный подбор"
 
-            # v93 targeted fix: the smart-pick flow previously built a hardcoded short
-            # conclusion here, so the external economic_engine.py was never used for
-            # this scenario. Do not touch menus/DB/UI; only route the final smart
-            # recommendation through show_smart_recommendation(), which is overridden
-            # later by v92 to call the external economic engine.
+            def _v107_smart_invest_pipeline():
+                _candidates = safe_call(
+                    smart_pick_candidates,
+                    state.get("goal"), state.get("budget"), state.get("risk"), state.get("timing"),
+                    default=[],
+                ) or []
+                if not _candidates:
+                    _candidates = smart_fallback_candidates(
+                        state.get("goal"), state.get("budget"), state.get("risk"), state.get("timing"),
+                    )
+                try:
+                    _html = show_smart_recommendation(
+                        state.get("goal"),
+                        state.get("budget"),
+                        state.get("timing"),
+                        state.get("risk"),
+                        _candidates,
+                    )
+                except Exception as _e:
+                    print("SMART_RECOMMENDATION_ENGINE_ERROR:", repr(_e))
+                    _best = _candidates[0] if _candidates else {}
+                    _html = (
+                        "🧠 <b>Инвестиционный подбор</b>\n\n"
+                        "🏆 <b>Лучший сценарий</b>\n"
+                        f"📍 Район: <b>{_best.get('area') or 'JVC'}</b>\n"
+                        f"🏠 Формат: <b>{_best.get('property') or _best.get('unit_segment') or '1 BR'}</b>\n"
+                        f"📊 Сделки: <b>{format_int(_best.get('deals'))}</b>\n"
+                        f"💰 Средняя цена: <b>{format_money(_best.get('avg_price'))}</b>\n"
+                        f"📐 Средняя цена за метр: <b>{format_money(_best.get('avg_meter'))}</b>\n\n"
+                        "🧠 <b>Экономическое заключение 360°</b>\n\n"
+                        "Недостаточно данных для полного экономического отчёта. Расширьте период или фильтр."
+                    )
+                return _candidates, _html
+
+            html = None
             try:
-                html = show_smart_recommendation(
-                    state.get("goal"),
-                    state.get("budget"),
-                    state.get("timing"),
-                    state.get("risk"),
-                    candidates,
+                _t0 = time.time()
+                candidates, html = await asyncio.wait_for(
+                    asyncio.to_thread(_v107_smart_invest_pipeline),
+                    timeout=45,
                 )
-            except Exception as e:
-                print("SMART_RECOMMENDATION_ENGINE_ERROR:", repr(e))
+                print(f"SMART_INVEST_V107_OK: dt={time.time()-_t0:.1f}s goal={state.get('goal')!r} budget={state.get('budget')!r} risk={state.get('risk')!r}")
+            except asyncio.TimeoutError:
+                print("SMART_INVEST_V107_TIMEOUT: goal=%r budget=%r risk=%r timing=%r" % (
+                    state.get('goal'), state.get('budget'), state.get('risk'), state.get('timing')))
+                # Graceful static fallback на основе бюджета — без SQL и без LLM.
+                try:
+                    candidates = smart_fallback_candidates(
+                        state.get("goal"), state.get("budget"), state.get("risk"), state.get("timing"),
+                    ) or []
+                except Exception:
+                    candidates = []
                 best = candidates[0] if candidates else {}
                 html = (
                     "🧠 <b>Инвестиционный подбор</b>\n\n"
+                    "⚠️ DLD-архив сейчас отвечает медленно, поэтому показываю быстрый профильный сценарий без полной выборки.\n\n"
                     "🏆 <b>Лучший сценарий</b>\n"
-                    f"📍 Район: <b>{best.get('area') or 'JVC'}</b>\n"
-                    f"🏠 Формат: <b>{best.get('property') or best.get('unit_segment') or '1 BR'}</b>\n"
-                    f"📊 Сделки: <b>{format_int(best.get('deals'))}</b>\n"
-                    f"💰 Средняя цена: <b>{format_money(best.get('avg_price'))}</b>\n"
-                    f"📐 Средняя цена за метр: <b>{format_money(best.get('avg_meter'))}</b>\n\n"
+                    f"📍 <b>Район:</b> {best.get('area') or 'JVC'}\n"
+                    f"🏠 <b>Формат:</b> {best.get('property') or '1 BR'}\n"
+                    f"💰 <b>Ориентир цены:</b> {format_money(best.get('avg_price'))}\n"
+                    f"📐 <b>Цена за метр:</b> {format_money(best.get('avg_meter'))}\n\n"
                     "🧠 <b>Экономическое заключение 360°</b>\n\n"
-                    "Недостаточно данных для полного экономического отчёта. Расширьте период или фильтр."
+                    "Расчёт выполнен по профильной модели бюджет × риск × горизонт. "
+                    "Полный DLD-отчёт по этому сценарию можно перезапустить через минуту, когда архив разгрузится."
+                )
+                try:
+                    if _err_logger:
+                        _err_logger.log_error(
+                            "analytics", "smart_invest_pipeline", "timeout 45s",
+                            error_class="TimeoutError", user_id=user_id,
+                            context={
+                                "goal": state.get("goal"), "budget": state.get("budget"),
+                                "risk": state.get("risk"), "timing": state.get("timing"),
+                            },
+                        )
+                except Exception:
+                    pass
+            except Exception as _e:
+                print("SMART_INVEST_V107_ERROR:", repr(_e))
+                try:
+                    candidates = smart_fallback_candidates(
+                        state.get("goal"), state.get("budget"), state.get("risk"), state.get("timing"),
+                    ) or []
+                except Exception:
+                    candidates = []
+                best = candidates[0] if candidates else {}
+                html = (
+                    "🧠 <b>Инвестиционный подбор</b>\n\n"
+                    "⚠️ Подбор временно работает в упрощённом режиме — попробуйте полный отчёт через минуту.\n\n"
+                    f"📍 <b>Район:</b> {best.get('area') or 'JVC'}\n"
+                    f"🏠 <b>Формат:</b> {best.get('property') or '1 BR'}\n"
+                    f"💰 <b>Ориентир цены:</b> {format_money(best.get('avg_price'))}\n"
                 )
 
             user_states[user_id] = {"step": "result", "scope": "dubai", "last_report_title": title, "last_report_html": html, "history": []}
@@ -5889,8 +5960,14 @@ def _set_data_source(source):
 def db():
     """Совместимая db() функция: старый код продолжает вызывать db(),
     но фактически подключается к активной базе archive/live.
+    v107: жёсткие таймауты, чтобы запросы к dld_transactions_full не висели.
     """
-    return psycopg2.connect(_ACTIVE_DATABASE_URL, cursor_factory=RealDictCursor)
+    return psycopg2.connect(
+        _ACTIVE_DATABASE_URL,
+        cursor_factory=RealDictCursor,
+        connect_timeout=8,
+        options="-c statement_timeout=15000 -c idle_in_transaction_session_timeout=20000",
+    )
 
 
 def _call_on_source(source, fn, *args, default=None, **kwargs):
