@@ -708,45 +708,89 @@ def _page_details(story: list, st: dict, payload: dict, lang: str):
 
 
 def _page_dld_charts(story: list, st: dict, payload: dict, lang: str):
-    # Page 4: dynamics 12m
-    story.append(Paragraph(_t(lang, "dld_chart"), st["h1"]))
+    """Pages 4-5: DLD analytics.
+
+    v132: если для конкретного объекта нет исторических данных DLD
+    (типично для off-plan проектов), вместо двух страниц с
+    «Недостаточно данных» — показываем компактный текстовый
+    summary с available KPI на одной странице. Если данных вообще
+    нет — пропускаем секцию целиком (8 страниц вместо 10).
+    """
     series = payload.get("dynamics_series") or payload.get("price_series") or []
-    if series:
+    dist = payload.get("price_distribution") or []
+    extras = payload.get("extra_chart")
+    notes = payload.get("dld_notes")
+
+    has_dynamics = bool(series)
+    has_dist = bool(dist) or (extras and isinstance(extras, list))
+
+    # Fallback KPI summary (используется когда нет графиков)
+    fb_kpis = []
+    if payload.get("avg_price_psf") or payload.get("price_per_m2"):
+        fb_kpis.append(("Avg price / m²",
+                        _money(payload.get("price_per_m2") or payload.get("avg_price_psf"),
+                               " AED/m²")))
+    if payload.get("median_price"):
+        fb_kpis.append(("Median deal", _money(payload.get("median_price"))))
+    if payload.get("deals"):
+        fb_kpis.append(("Deals (12m)", _num(payload.get("deals"))))
+    if payload.get("area_growth_5y") is not None:
+        fb_kpis.append(("Area growth 5y", _pct(payload.get("area_growth_5y"))))
+    if payload.get("area_growth_10y") is not None:
+        fb_kpis.append(("Area growth 10y", _pct(payload.get("area_growth_10y"))))
+    if payload.get("yield"):
+        fb_kpis.append(("Rental yield", _pct(payload.get("yield"))))
+
+    # Если совсем ничего нет → скипаем секцию целиком (8-страничный PDF)
+    if not has_dynamics and not has_dist and not fb_kpis and not notes:
+        return
+
+    # Page 4: dynamics (если есть series) либо compact summary
+    story.append(Paragraph(_t(lang, "dld_chart"), st["h1"]))
+    if has_dynamics:
         png = _chart_dynamics(series, _t(lang, "dld_chart"), "AED / m²")
         img = _png_image(png) if png else None
         if img:
             story.append(img)
-    else:
-        story.append(Paragraph(_t(lang, "no_data"), st["muted"]))
-    story.append(Spacer(1, 0.4 * cm))
-    notes = payload.get("dld_notes")
+            story.append(Spacer(1, 0.4 * cm))
+    elif fb_kpis:
+        # textual fallback — KPI table + neutral disclaimer
+        t = _kpi_table(fb_kpis[:6], st, cols=3)
+        if t:
+            story.append(t)
+            story.append(Spacer(1, 0.4 * cm))
+        story.append(Paragraph(
+            "Историческая 12-мес динамика недоступна для off-plan проектов "
+            "до старта вторичного рынка. KPI выше — агрегаты по району и "
+            "сравнимым активам из открытых данных DLD."
+            if lang == "ru" else
+            "12-month price dynamics is not yet available for off-plan units "
+            "prior to the secondary-market launch. KPI above are area-level "
+            "aggregates and comparable-asset metrics from public DLD data.",
+            st["muted"]))
+        story.append(Spacer(1, 0.4 * cm))
     if notes:
         story.append(Paragraph(str(notes)[:1200], st["body"]))
     story.append(PageBreak())
 
-    # Page 5: distribution + top-quartile
-    story.append(Paragraph(_t(lang, "dld_dist"), st["h1"]))
-    dist = payload.get("price_distribution") or []
-    if dist:
-        png = _chart_distribution([float(x) for x in dist], _t(lang, "dld_dist"))
-        img = _png_image(png) if png else None
-        if img:
-            story.append(img)
-    else:
-        story.append(Paragraph(_t(lang, "no_data"), st["muted"]))
-    story.append(Spacer(1, 0.4 * cm))
-
-    extras = payload.get("extra_chart")
-    if extras and isinstance(extras, list):
-        png = _chart_bars(extras, "Top quartile distribution", "#15803D")
-        img = _png_image(png) if png else None
-        if img:
-            story.append(img)
-    story.append(PageBreak())
+    # Page 5: distribution + top-quartile — только если есть данные
+    if has_dist:
+        story.append(Paragraph(_t(lang, "dld_dist"), st["h1"]))
+        if dist:
+            png = _chart_distribution([float(x) for x in dist], _t(lang, "dld_dist"))
+            img = _png_image(png) if png else None
+            if img:
+                story.append(img)
+                story.append(Spacer(1, 0.4 * cm))
+        if extras and isinstance(extras, list):
+            png = _chart_bars(extras, "Top quartile distribution", "#15803D")
+            img = _png_image(png) if png else None
+            if img:
+                story.append(img)
+        story.append(PageBreak())
 
 
 def _page_roi(story: list, st: dict, payload: dict, lang: str):
-    story.append(Paragraph(_t(lang, "roi_chart"), st["h1"]))
     roi5 = payload.get("roi_5y")
     roi10 = payload.get("roi_10y")
     rows = []
@@ -759,12 +803,6 @@ def _page_roi(story: list, st: dict, payload: dict, lang: str):
     if bd:
         rows = [(str(b.get("year") or b.get("label")), float(b.get("value") or 0))
                 for b in bd if b.get("value") is not None][:10]
-    if rows:
-        png = _chart_bars(rows, _t(lang, "roi_chart"), "#B45309")
-        img = _png_image(png) if png else None
-        if img:
-            story.append(img)
-            story.append(Spacer(1, 0.4 * cm))
     # KPI line
     kpis = []
     if payload.get("yield"):
@@ -775,12 +813,40 @@ def _page_roi(story: list, st: dict, payload: dict, lang: str):
         kpis.append(("Budget", _money(payload.get("budget"))))
     if payload.get("monthly_rent"):
         kpis.append(("Monthly rent", _money(payload.get("monthly_rent"))))
+    # v132: proxy KPIs (area growth) если нет прямого ROI
+    if payload.get("area_growth_5y") is not None:
+        kpis.append(("Area growth 5y", _pct(payload.get("area_growth_5y"))))
+    if payload.get("area_growth_10y") is not None:
+        kpis.append(("Area growth 10y", _pct(payload.get("area_growth_10y"))))
+
+    # v132: скип целой страницы если совсем нет данных (короче PDF, чем
+    # «Недостаточно данных»)
+    if not rows and not kpis:
+        return
+
+    story.append(Paragraph(_t(lang, "roi_chart"), st["h1"]))
+    if rows:
+        png = _chart_bars(rows, _t(lang, "roi_chart"), "#B45309")
+        img = _png_image(png) if png else None
+        if img:
+            story.append(img)
+            story.append(Spacer(1, 0.4 * cm))
     if kpis:
         t = _kpi_table(kpis[:6], st, cols=3)
         if t:
             story.append(t)
-    if not rows and not kpis:
-        story.append(Paragraph(_t(lang, "no_data"), st["muted"]))
+    if not rows:
+        # Если только KPIs, без графика — добавим neutral disclaimer
+        story.append(Spacer(1, 0.3 * cm))
+        story.append(Paragraph(
+            "Прогноз ROI 5/10 лет рассчитывается после ввода объекта в "
+            "эксплуатацию и формирования трека вторичных сделок. KPI выше "
+            "— ориентир по району и yield по сопоставимым активам."
+            if lang == "ru" else
+            "5y/10y ROI projection is computed after handover and the "
+            "secondary-market track record. KPI above show area-level "
+            "benchmarks and comparable-asset yields.",
+            st["muted"]))
     story.append(PageBreak())
 
 
