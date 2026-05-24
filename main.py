@@ -1,7 +1,7 @@
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from aiogram.filters import CommandStart
 
 from dotenv import load_dotenv
@@ -3689,6 +3689,15 @@ async def main_handler(message: Message):
         # Навигация.
         if text == tr(user_id, "main") or text == "🏠 Главное меню":
             reset_to_main(user_id)
+            # B019 fix: wizard reply-keyboard не всегда заменяется новой reply-keyboard
+            # (Telegram-баг, особенно iOS). Сначала transient "✓" с remove_keyboard,
+            # удаляем — это сбрасывает wizard-клавиатуру на клиенте — потом main menu.
+            # Pattern из channel-bot v132.7 (commit fc6b0ee).
+            try:
+                trans = await message.answer("✓", reply_markup=ReplyKeyboardRemove())
+                await trans.delete()
+            except Exception as _e:
+                print(f"[analytics] B019 main-menu reply-kb clear failed: {_e}", flush=True)
             await message.answer(tr(user_id, "main_menu"), reply_markup=main_menu(user_id))
             return
         if text == tr(user_id, "back") or text == "⬅️ Назад":
@@ -3708,6 +3717,12 @@ async def main_handler(message: Message):
                 return
             if text == "🔁 Изменить":
                 reset_to_main(user_id)
+                # B019 fix: see main-menu handler above.
+                try:
+                    trans = await message.answer("✓", reply_markup=ReplyKeyboardRemove())
+                    await trans.delete()
+                except Exception as _e:
+                    print(f"[analytics] B019 main-menu reply-kb clear failed: {_e}", flush=True)
                 await message.answer("🔁 Выберите новый сценарий.", reply_markup=main_menu(user_id))
                 return
             # Если человек нажал старую кнопку отчёта из результата — обработаем мягко.
