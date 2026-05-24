@@ -2888,7 +2888,7 @@ def _format_stats(scope="dubai", area=None, period=None, budget=None):
 
 
 def _score_format_row(row, goal):
-    # B022 fix: _num() returns None for null inputs; max(None, 0) raises
+    # B027 fix: _num() returns None for null inputs; max(None, 0) raises
     # TypeError("'>' not supported between 'int' and 'NoneType'"). Coerce None → 0.
     deals = max(_num(row.get("deals")) or 0, 0)
     avg_price = max(_num(row.get("avg_price")) or 0, 0)
