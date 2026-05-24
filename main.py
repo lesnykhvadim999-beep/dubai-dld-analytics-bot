@@ -55,6 +55,38 @@ bot = Bot(
 
 dp = Dispatcher()
 
+# v112: централизованный user tracking → bot_users (resale-DB)
+try:
+    from aiogram import BaseMiddleware
+    from aiogram.types import Message as _Msg, CallbackQuery as _Cb
+    import bot_user_tracker as _bot_user_tracker
+
+    class _UserTrackingMiddleware(BaseMiddleware):
+        async def __call__(self, handler, event, data):
+            try:
+                u = None
+                action = "message"
+                if isinstance(event, _Msg):
+                    u = event.from_user; action = "message"
+                elif isinstance(event, _Cb):
+                    u = event.from_user; action = "callback"
+                if u and u.id:
+                    _bot_user_tracker.track_user_async(
+                        telegram_id=u.id,
+                        username=u.username,
+                        first_name=u.first_name,
+                        language=u.language_code,
+                        action=action,
+                    )
+            except Exception:
+                pass
+            return await handler(event, data)
+
+    dp.message.outer_middleware(_UserTrackingMiddleware())
+    dp.callback_query.outer_middleware(_UserTrackingMiddleware())
+except Exception as _e:
+    print(f"[bot_users] tracker middleware skipped: {_e}", flush=True)
+
 # v53: aiogram global error handler
 try:
     import error_logger as _err_logger
