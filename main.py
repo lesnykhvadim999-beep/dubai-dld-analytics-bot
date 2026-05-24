@@ -2538,6 +2538,8 @@ def economic_conclusion(row=None, deal_type=None, rows=None):
     return "🧠 <b>Экономический вывод:</b> выборка маленькая, используйте результат как предварительный ориентир."
 
 async def show_current_state_prompt(message, state):
+    """B045: при возврате назад показываем prompt текущего step c сохранёнными filters.
+    Покрывает все wizard'ы (building/area/best_object/format_compare/smart/full_report/ranking/deals)."""
     user_id = message.from_user.id
     step = state.get("step")
 
@@ -2545,20 +2547,127 @@ async def show_current_state_prompt(message, state):
         await message.answer(tr(user_id, "main_menu"), reply_markup=main_menu(user_id))
         return
 
+    # Single-object search wizards
     if step == "building_query":
         await message.answer(tr(user_id, "enter_building"), reply_markup=back_menu(user_id))
-    elif step == "area_query":
+        return
+    if step == "area_query":
         await message.answer(tr(user_id, "enter_area"), reply_markup=back_menu(user_id))
-    elif step == "choose_deal_type":
+        return
+    if step == "choose_building":
+        suggestions = state.get("suggestions") or [o.get("label") or o.get("name") for o in (state.get("building_options") or [])]
+        buttons = [[name] for name in suggestions[:8] if name]
+        buttons.append([tr(user_id, "back"), tr(user_id, "main")])
+        await message.answer(tr(user_id, "choose_building"), reply_markup=kb(buttons))
+        return
+    if step == "choose_area":
+        suggestions = state.get("suggestions", [])
+        buttons = [[name] for name in suggestions[:8]]
+        buttons.append([tr(user_id, "back"), tr(user_id, "main")])
+        await message.answer(tr(user_id, "choose_area"), reply_markup=kb(buttons))
+        return
+
+    # Generic 3-step filter funnel
+    if step == "choose_deal_type":
         await message.answer(tr(user_id, "choose_deal_type"), reply_markup=deal_type_menu(user_id))
-    elif step == "choose_property":
+        return
+    if step == "choose_property":
         await message.answer(tr(user_id, "choose_property"), reply_markup=property_menu(user_id))
-    elif step == "choose_period":
+        return
+    if step == "choose_period":
         await message.answer(tr(user_id, "choose_period"), reply_markup=period_menu(user_id))
-    elif step == "choose_report":
+        return
+    if step == "choose_report":
         await message.answer(tr(user_id, "choose_report"), reply_markup=report_menu(user_id))
-    else:
-        await message.answer(tr(user_id, "main_menu"), reply_markup=main_menu(user_id))
+        return
+
+    # Action menus (after building/area selected)
+    if step == "building_action":
+        await message.answer(_action_title_v72(state), reply_markup=building_action_menu(user_id))
+        return
+    if step == "area_action":
+        await message.answer(_action_title_v72(state), reply_markup=area_action_menu(user_id))
+        return
+    if step == "dubai_action":
+        await message.answer(_action_title_v72(state), reply_markup=dubai_action_menu(user_id))
+        return
+
+    # Deals / Rankings / Full report scopes
+    if step == "deals_scope":
+        await message.answer("🧾 <b>Сделки DLD</b>\n\nГде показать сделки?", reply_markup=deals_scope_menu(user_id))
+        return
+    if step == "ranking_menu":
+        await message.answer("📊 <b>Рейтинги рынка</b>\n\nВыберите рейтинг.", reply_markup=ranking_menu(user_id))
+        return
+    if step == "full_report_menu":
+        await message.answer("📑 <b>Полный аналитический отчёт</b>\n\nВыберите масштаб:", reply_markup=full_report_menu(user_id))
+        return
+    if step == "full_report_area_query":
+        await message.answer("Введите название района (например: Dubai Marina):", reply_markup=back_menu(user_id))
+        return
+    if step == "full_report_multi_areas":
+        await message.answer("Введите названия районов через запятую:", reply_markup=back_menu(user_id))
+        return
+    if step == "full_report_building_query":
+        await message.answer("Введите название здания:", reply_markup=back_menu(user_id))
+        return
+
+    # Best object wizard
+    if step == "best_object_deal_type":
+        await message.answer("🏆 <b>Лучший объект</b>\n\nШаг 1 из 5 — выберите тип сделки:", reply_markup=best_object_deal_type_menu(user_id))
+        return
+    if step == "best_object_format":
+        await message.answer("🏠 <b>Шаг 2 из 5</b>\n\nВыберите формат недвижимости.", reply_markup=best_object_format_menu(user_id))
+        return
+    if step == "best_object_budget":
+        await message.answer("💰 <b>Шаг 3 из 5</b>\n\nВыберите бюджет.", reply_markup=best_object_budget_menu(user_id))
+        return
+    if step == "best_object_rooms":
+        await message.answer("🛏 <b>Шаг 4 из 5</b>\n\nВыберите комнатность / наименование юнита.", reply_markup=best_object_rooms_menu(user_id))
+        return
+    if step == "best_object_goal":
+        await message.answer("🎯 <b>Шаг 5 из 5</b>\n\nВыберите цель.", reply_markup=best_object_goal_menu(user_id))
+        return
+
+    # Format comparison wizard
+    if step == "format_compare_scope":
+        await message.answer("⚖️ <b>Сравнение форматов</b>\n\nВыберите рынок анализа:", reply_markup=format_compare_scope_menu(user_id))
+        return
+    if step == "format_compare_area_query":
+        await message.answer(tr(user_id, "enter_area"), reply_markup=back_menu(user_id))
+        return
+    if step == "format_compare_choose_area":
+        suggestions = state.get("area_suggestions", [])
+        buttons = [[x] for x in suggestions[:8]]
+        buttons.append([tr(user_id, "back"), tr(user_id, "main")])
+        await message.answer(tr(user_id, "choose_area"), reply_markup=kb(buttons))
+        return
+    if step == "format_compare_budget":
+        await message.answer("💰 Выберите ориентир бюджета.", reply_markup=format_compare_budget_menu(user_id))
+        return
+    if step == "format_compare_goal":
+        await message.answer("🎯 Выберите инвестиционную цель.", reply_markup=format_compare_goal_menu(user_id))
+        return
+    if step == "format_compare_period":
+        await message.answer("📅 Выберите период анализа.", reply_markup=format_compare_period_menu(user_id))
+        return
+
+    # Smart investment wizard
+    if step == "smart_goal":
+        await message.answer("🧠 <b>Инвестиционный подбор</b>\n\nВыберите цель покупки.", reply_markup=smart_goal_menu(user_id))
+        return
+    if step == "smart_budget":
+        await message.answer("💰 <b>Бюджет</b>\n\nВыберите ориентир бюджета.", reply_markup=smart_budget_menu(user_id))
+        return
+    if step == "smart_timing":
+        await message.answer("📅 <b>Горизонт покупки</b>\n\nКогда планируется сделка?", reply_markup=smart_timing_menu(user_id))
+        return
+    if step == "smart_risk":
+        await message.answer("🛡 <b>Профиль риска</b>\n\nВыберите подходящий стиль.", reply_markup=smart_risk_menu(user_id))
+        return
+
+    # Result / unknown → fall back to main
+    await message.answer(tr(user_id, "main_menu"), reply_markup=main_menu(user_id))
 
 
 
@@ -2573,11 +2682,11 @@ async def start_building_search_from_text(message, text):
         rows = []
 
     if not rows:
-        user_states[user_id] = {
-            "step": "building_query",
-            "scope": "building",
-            "history": user_states.get(user_id, {}).get("history", [])
-        }
+        # B045: остаёмся на step=building_query (history не трогаем, чтобы Back вёл к scope-выбору)
+        cur = user_states.get(user_id, {}) or {}
+        cur["step"] = "building_query"
+        cur["scope"] = "building"
+        user_states[user_id] = cur
         await message.answer(
             "❌ Ничего не найдено. Попробуйте ввести иначе.\n\n"
             "Примеры:\n"
@@ -2595,12 +2704,15 @@ async def start_building_search_from_text(message, text):
         if name and name not in suggestions:
             suggestions.append(name)
 
-    user_states[user_id] = {
+    # B045: push текущий building_query на history, чтобы Back из choose_building → ввод
+    cur = user_states.get(user_id, {}) or {}
+    force_kind = cur.get("force_kind")
+    push_state(user_id, {
         "step": "choose_building",
         "scope": "building",
         "suggestions": suggestions,
-        "history": user_states.get(user_id, {}).get("history", [])
-    }
+        **({"force_kind": force_kind} if force_kind else {}),
+    })
 
     buttons = [[name] for name in suggestions[:8]]
     buttons.append([tr(user_id, "back"), tr(user_id, "main")])
@@ -3663,7 +3775,10 @@ async def start_area_search_from_text(message, text):
     await message.answer("🔎 Ищу район в archive + live базе...", reply_markup=process_menu(user_id))
     rows = safe_call(find_areas, text, 10, default=[]) or []
     if not rows:
-        user_states[user_id] = {"step": "area_query", "scope": "area", "history": user_states.get(user_id, {}).get("history", [])}
+        cur = user_states.get(user_id, {}) or {}
+        cur["step"] = "area_query"
+        cur["scope"] = "area"
+        user_states[user_id] = cur
         await message.answer(
             "❌ <b>Район не найден.</b>\n\n"
             "Попробуйте полное или другое написание:\n"
@@ -3676,7 +3791,13 @@ async def start_area_search_from_text(message, text):
         n = r.get("area_name_en")
         if n and n not in suggestions:
             suggestions.append(n)
-    user_states[user_id] = {"step": "choose_area", "scope": "area", "suggestions": suggestions, "history": user_states.get(user_id, {}).get("history", [])}
+    # B045: push area_query на history, чтобы Back из choose_area → ввод имени
+    cur = user_states.get(user_id, {}) or {}
+    force_kind = cur.get("force_kind")
+    push_state(user_id, {
+        "step": "choose_area", "scope": "area", "suggestions": suggestions,
+        **({"force_kind": force_kind} if force_kind else {}),
+    })
     buttons = [[name] for name in suggestions[:8]] + [[tr(user_id, "back"), tr(user_id, "main")]]
     html = tr(user_id, "choose_area") + "\n\n"
     for i, r in enumerate(rows[:8], 1):
@@ -3845,18 +3966,18 @@ async def main_handler(message: Message):
                 await send_full_market_report(message, "dubai", None)
                 return
             if text == "🏙 Отчёт район":
-                user_states[user_id] = {"step": "full_report_area_query", "history": state.get("history", [])}
+                push_state(user_id, {"step": "full_report_area_query"})
                 await message.answer("Введите название района (например: Dubai Marina):", reply_markup=back_menu(user_id))
                 return
             if text == "🏘 Несколько районов":
-                user_states[user_id] = {"step": "full_report_multi_areas", "areas": [], "history": state.get("history", [])}
+                push_state(user_id, {"step": "full_report_multi_areas", "areas": []})
                 await message.answer(
                     "Введите названия районов через запятую (например: Dubai Marina, Business Bay, JVC):",
                     reply_markup=back_menu(user_id),
                 )
                 return
             if text == "🏢 Отчёт здание":
-                user_states[user_id] = {"step": "full_report_building_query", "history": state.get("history", [])}
+                push_state(user_id, {"step": "full_report_building_query"})
                 await message.answer("Введите название здания:", reply_markup=back_menu(user_id))
                 return
             await message.answer("Выберите масштаб отчёта.", reply_markup=full_report_menu(user_id))
@@ -3901,15 +4022,16 @@ async def main_handler(message: Message):
         # Сделки: выбор области.
         if state.get("step") == "deals_scope":
             if text == "🏢 По зданию":
-                user_states[user_id] = {"step": "building_query", "scope": "building", "force_kind": "deals", "history": state.get("history", [])}
+                push_state(user_id, {"step": "building_query", "scope": "building", "force_kind": "deals"})
                 await message.answer(tr(user_id, "enter_building"), reply_markup=back_menu(user_id))
                 return
             if text == "🏙 По району":
-                user_states[user_id] = {"step": "area_query", "scope": "area", "force_kind": "deals", "history": state.get("history", [])}
+                push_state(user_id, {"step": "area_query", "scope": "area", "force_kind": "deals"})
                 await message.answer(tr(user_id, "enter_area"), reply_markup=back_menu(user_id))
                 return
             if text == "🌆 По Дубаю":
-                await _start_filters_for_report_v72(message, {"scope": "dubai", "name": None, "history": state.get("history", [])}, "deals")
+                push_state(user_id, {"scope": "dubai", "name": None})
+                await _start_filters_for_report_v72(message, user_states[user_id], "deals")
                 return
             await message.answer("Выберите область сделок кнопкой.", reply_markup=deals_scope_menu(user_id))
             return
@@ -3992,16 +4114,18 @@ async def main_handler(message: Message):
 
         # Универсальная воронка фильтров — после неё сразу отчёт, без лишнего вопроса.
         if state.get("step") == "choose_deal_type":
-            state["deal_type"] = _skip_to_none_v86(_normalize_deal_type_from_text(user_id, text))
-            state["step"] = "choose_property"
-            user_states[user_id] = state
+            new_state = dict(state)
+            new_state["deal_type"] = _skip_to_none_v86(_normalize_deal_type_from_text(user_id, text))
+            new_state["step"] = "choose_property"
+            push_state(user_id, new_state)
             await message.answer("🏠 <b>Шаг 2 из 3</b>\n\nВыберите тип недвижимости или комнатность.", reply_markup=property_menu(user_id))
             return
 
         if state.get("step") == "choose_property":
-            state["property"] = _skip_to_none_v86(_normalize_property_from_text(user_id, text))
-            state["step"] = "choose_period"
-            user_states[user_id] = state
+            new_state = dict(state)
+            new_state["property"] = _skip_to_none_v86(_normalize_property_from_text(user_id, text))
+            new_state["step"] = "choose_period"
+            push_state(user_id, new_state)
             await message.answer("📅 <b>Шаг 3 из 3</b>\n\nВыберите период анализа.", reply_markup=period_menu(user_id))
             return
 
@@ -4016,9 +4140,10 @@ async def main_handler(message: Message):
             if text not in allowed:
                 await message.answer("Выберите тип сделки кнопкой.", reply_markup=best_object_deal_type_menu(user_id))
                 return
-            state["deal_type"] = None if text in ["📊 Неважно", tr(user_id, "skip")] else text
-            state["step"] = "best_object_format"
-            user_states[user_id] = state
+            new_state = dict(state)
+            new_state["deal_type"] = None if text in ["📊 Неважно", tr(user_id, "skip")] else text
+            new_state["step"] = "best_object_format"
+            push_state(user_id, new_state)
             await message.answer("🏠 <b>Шаг 2 из 5</b>\n\nВыберите формат недвижимости.", reply_markup=best_object_format_menu(user_id))
             return
 
@@ -4027,9 +4152,10 @@ async def main_handler(message: Message):
             if text not in allowed:
                 await message.answer("Выберите формат кнопкой.", reply_markup=best_object_format_menu(user_id))
                 return
-            state["object_format"] = None if text in ["📊 Неважно", tr(user_id, "skip")] else text
-            state["step"] = "best_object_budget"
-            user_states[user_id] = state
+            new_state = dict(state)
+            new_state["object_format"] = None if text in ["📊 Неважно", tr(user_id, "skip")] else text
+            new_state["step"] = "best_object_budget"
+            push_state(user_id, new_state)
             await message.answer("💰 <b>Шаг 3 из 5</b>\n\nВыберите бюджет.", reply_markup=best_object_budget_menu(user_id))
             return
 
@@ -4038,9 +4164,10 @@ async def main_handler(message: Message):
             if text not in allowed:
                 await message.answer("Выберите бюджет кнопкой.", reply_markup=best_object_budget_menu(user_id))
                 return
-            state["budget"] = None if text == tr(user_id, "skip") else text
-            state["step"] = "best_object_rooms"
-            user_states[user_id] = state
+            new_state = dict(state)
+            new_state["budget"] = None if text == tr(user_id, "skip") else text
+            new_state["step"] = "best_object_rooms"
+            push_state(user_id, new_state)
             await message.answer("🛏 <b>Шаг 4 из 5</b>\n\nВыберите комнатность / наименование юнита.", reply_markup=best_object_rooms_menu(user_id))
             return
 
@@ -4049,9 +4176,10 @@ async def main_handler(message: Message):
             if text not in allowed:
                 await message.answer("Выберите комнатность кнопкой.", reply_markup=best_object_rooms_menu(user_id))
                 return
-            state["rooms"] = None if text in ["📊 Неважно", tr(user_id, "skip")] else text
-            state["step"] = "best_object_goal"
-            user_states[user_id] = state
+            new_state = dict(state)
+            new_state["rooms"] = None if text in ["📊 Неважно", tr(user_id, "skip")] else text
+            new_state["step"] = "best_object_goal"
+            push_state(user_id, new_state)
             await message.answer("🎯 <b>Шаг 5 из 5</b>\n\nВыберите цель.", reply_markup=best_object_goal_menu(user_id))
             return
 
@@ -4075,13 +4203,15 @@ async def main_handler(message: Message):
         # Format comparison funnel
         if state.get("step") == "format_compare_scope":
             if text == "🌆 По Дубаю":
-                state.update({"scope": "dubai", "name": None, "step": "format_compare_budget"})
-                user_states[user_id] = state
+                new_state = dict(state)
+                new_state.update({"scope": "dubai", "name": None, "step": "format_compare_budget"})
+                push_state(user_id, new_state)
                 await message.answer("💰 Выберите ориентир бюджета.", reply_markup=format_compare_budget_menu(user_id))
                 return
             if text == "🏙 По району":
-                state.update({"step": "format_compare_area_query"})
-                user_states[user_id] = state
+                new_state = dict(state)
+                new_state.update({"step": "format_compare_area_query"})
+                push_state(user_id, new_state)
                 await message.answer(tr(user_id, "enter_area"), reply_markup=back_menu(user_id))
                 return
             await message.answer("Выберите вариант кнопкой.", reply_markup=format_compare_scope_menu(user_id))
@@ -4091,8 +4221,9 @@ async def main_handler(message: Message):
             rows = safe_call(find_areas, text, 8, default=[])
             if not rows:
                 # принимаем введённый район как есть, чтобы не ломать сценарий на псевдонимах
-                state.update({"scope": "area", "name": virtual_area_name(text), "step": "format_compare_budget"})
-                user_states[user_id] = state
+                new_state = dict(state)
+                new_state.update({"scope": "area", "name": virtual_area_name(text), "step": "format_compare_budget"})
+                push_state(user_id, new_state)
                 await message.answer("💰 Выберите ориентир бюджета.", reply_markup=format_compare_budget_menu(user_id))
                 return
             suggestions = []
@@ -4100,8 +4231,9 @@ async def main_handler(message: Message):
                 area = r.get("area_name_en")
                 if area and area not in suggestions:
                     suggestions.append(area)
-            state.update({"area_suggestions": suggestions, "step": "format_compare_choose_area"})
-            user_states[user_id] = state
+            new_state = dict(state)
+            new_state.update({"area_suggestions": suggestions, "step": "format_compare_choose_area"})
+            push_state(user_id, new_state)
             buttons = [[x] for x in suggestions[:8]]
             buttons.append([tr(user_id, "back"), tr(user_id, "main")])
             msg = tr(user_id, "choose_area") + "\n\n"
@@ -4125,8 +4257,9 @@ async def main_handler(message: Message):
             if not chosen:
                 await message.answer("Выберите район из списка.", reply_markup=back_menu(user_id))
                 return
-            state.update({"scope": "area", "name": chosen, "step": "format_compare_budget"})
-            user_states[user_id] = state
+            new_state = dict(state)
+            new_state.update({"scope": "area", "name": chosen, "step": "format_compare_budget"})
+            push_state(user_id, new_state)
             await message.answer("💰 Выберите ориентир бюджета.", reply_markup=format_compare_budget_menu(user_id))
             return
 
@@ -4135,9 +4268,10 @@ async def main_handler(message: Message):
             if text not in allowed:
                 await message.answer("Выберите бюджет кнопкой.", reply_markup=format_compare_budget_menu(user_id))
                 return
-            state["budget"] = None if text == tr(user_id, "skip") else text
-            state["step"] = "format_compare_goal"
-            user_states[user_id] = state
+            new_state = dict(state)
+            new_state["budget"] = None if text == tr(user_id, "skip") else text
+            new_state["step"] = "format_compare_goal"
+            push_state(user_id, new_state)
             await message.answer("🎯 Выберите инвестиционную цель.", reply_markup=format_compare_goal_menu(user_id))
             return
 
@@ -4145,9 +4279,10 @@ async def main_handler(message: Message):
             if text not in ["📈 Перепродажа", "🔑 Аренда", "💰 ROI", "⚖️ Сбалансировано"]:
                 await message.answer("Выберите цель кнопкой.", reply_markup=format_compare_goal_menu(user_id))
                 return
-            state["goal"] = text
-            state["step"] = "format_compare_period"
-            user_states[user_id] = state
+            new_state = dict(state)
+            new_state["goal"] = text
+            new_state["step"] = "format_compare_period"
+            push_state(user_id, new_state)
             await message.answer("📅 Выберите период анализа.", reply_markup=format_compare_period_menu(user_id))
             return
 
@@ -4208,18 +4343,21 @@ async def main_handler(message: Message):
 
         # Smart investment flow — оставлен, но после результата только PDF/Заявка/Изменить.
         if state.get("step") == "smart_goal":
-            state.update({"goal": text, "step": "smart_budget"})
-            user_states[user_id] = state
+            new_state = dict(state)
+            new_state.update({"goal": text, "step": "smart_budget"})
+            push_state(user_id, new_state)
             await message.answer("💰 <b>Бюджет</b>\n\nВыберите ориентир бюджета.", reply_markup=smart_budget_menu(user_id))
             return
         if state.get("step") == "smart_budget":
-            state.update({"budget": text, "step": "smart_timing"})
-            user_states[user_id] = state
+            new_state = dict(state)
+            new_state.update({"budget": text, "step": "smart_timing"})
+            push_state(user_id, new_state)
             await message.answer("📅 <b>Горизонт покупки</b>\n\nКогда планируется сделка?", reply_markup=smart_timing_menu(user_id))
             return
         if state.get("step") == "smart_timing":
-            state.update({"timing": text, "step": "smart_risk"})
-            user_states[user_id] = state
+            new_state = dict(state)
+            new_state.update({"timing": text, "step": "smart_risk"})
+            push_state(user_id, new_state)
             await message.answer("🛡 <b>Профиль риска</b>\n\nВыберите подходящий стиль.", reply_markup=smart_risk_menu(user_id))
             return
         if state.get("step") == "smart_risk":
