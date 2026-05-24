@@ -1,18 +1,15 @@
-"""vadim_pdf.py — общий PDF-модуль Vadim Realty (10 страниц).
+"""vadim_pdf.py — общий PDF-модуль Vadim Realty (компакт-3-страницы).
 
 Унифицированный профессиональный PDF-отчёт для всех ботов:
   analytics-bot / channel-bot / roi-bot / resale-bot / lead-bot
 
-Структура (10 страниц):
-  1.  Обложка — лого, тип отчёта, BRN, дата
-  2.  Executive summary (LLM Cerebras → Groq → … free-tier)
-  3.  Детали объекта/района/проекта (KPI grid)
-  4-5. DLD-аналитика — графики matplotlib (цена/m², dynamics, top-quartile)
-  6.  ROI 5/10 лет (bar chart)
-  7.  Сравнение с топ-10 похожих
-  8.  Risk factors + Positive signals
-  9.  Vadim profile (RERA BRN 65011, контакты)
-  10. Disclaimer
+v133 (compact): 3 страницы вместо 10, вся информация сохранена.
+
+Структура (3 страницы A4):
+  1.  Cover + Executive summary + Vadim profile (logo, заголовок,
+      LLM-резюме, фото/контакты, BRN)
+  2.  KPI grid + DLD charts + ROI chart + Risks/Signals (2 колонки)
+  3.  Сравнение top-3 + детальный ROI + юр-оговорка + footer
 
 Зависимости:
   reportlab>=4.0
@@ -25,7 +22,7 @@ API:
 Кэш `pdf_reports(report_key, payload_hash, file_path, generated_at)`
 ленивo создаётся в БД ($DATABASE_URL) при первом вызове.
 
-Performance цель: < 5 сек на отчёт.
+Performance цель: < 5 сек на отчёт, < 500KB файл.
 
 Бренд:
   «Vadim Realty · RERA Licensed Broker · BRN 65011 · Dubai»
@@ -62,7 +59,8 @@ try:
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.pdfmetrics import registerFontFamily
     from reportlab.pdfbase.ttfonts import TTFont
-    from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph,
+    from reportlab.platypus import (Image, KeepInFrame, KeepTogether,
+                                     PageBreak, Paragraph,
                                      SimpleDocTemplate, Spacer, Table,
                                      TableStyle)
     REPORTLAB_OK = True
@@ -148,55 +146,70 @@ def _register_fonts():
     log.warning("DejaVu Sans not found — falling back to Helvetica (no cyrillic)")
 
 
-# ── Styles ──
+# ── Styles (compact, 3-page layout) ──
 def _styles():
     _register_fonts()
     s = getSampleStyleSheet()
     F = _FONT_REG if _FONT_REG in pdfmetrics.getRegisteredFontNames() else "Helvetica"
     FB = _FONT_BOLD if _FONT_BOLD in pdfmetrics.getRegisteredFontNames() else "Helvetica-Bold"
     return {
+        "F": F, "FB": FB,
+        # cover / brand (page 1 header)
         "cover_brand": ParagraphStyle(
-            "cover_brand", parent=s["Title"], fontSize=32, fontName=FB,
-            textColor=AMBER, leading=38, alignment=TA_CENTER, spaceAfter=8),
+            "cover_brand", parent=s["Title"], fontSize=20, fontName=FB,
+            textColor=AMBER, leading=24, alignment=TA_CENTER, spaceAfter=2),
         "cover_sub": ParagraphStyle(
-            "cover_sub", parent=s["BodyText"], fontSize=12, fontName=F,
-            textColor=STONE_500, leading=16, alignment=TA_CENTER, spaceAfter=4),
-        "cover_title": ParagraphStyle(
-            "cover_title", parent=s["Title"], fontSize=24, fontName=FB,
-            textColor=STONE_900, leading=30, alignment=TA_CENTER, spaceAfter=16),
-        "cover_meta": ParagraphStyle(
-            "cover_meta", parent=s["BodyText"], fontSize=10, fontName=F,
-            textColor=STONE_700, leading=14, alignment=TA_CENTER),
+            "cover_sub", parent=s["BodyText"], fontSize=8.5, fontName=F,
+            textColor=STONE_500, leading=11, alignment=TA_CENTER, spaceAfter=2),
+        # H1 для секций (компакт)
         "h1": ParagraphStyle(
-            "h1", parent=s["Heading1"], fontSize=20, fontName=FB,
-            textColor=AMBER, leading=24, alignment=TA_LEFT, spaceAfter=10, spaceBefore=2),
+            "h1", parent=s["Heading1"], fontSize=14, fontName=FB,
+            textColor=AMBER, leading=17, alignment=TA_LEFT, spaceAfter=4, spaceBefore=2),
         "h2": ParagraphStyle(
-            "h2", parent=s["Heading2"], fontSize=14, fontName=FB,
-            textColor=STONE_900, leading=18, spaceBefore=10, spaceAfter=6),
+            "h2", parent=s["Heading2"], fontSize=10, fontName=FB,
+            textColor=STONE_900, leading=12, spaceBefore=4, spaceAfter=2),
         "h3": ParagraphStyle(
-            "h3", parent=s["Heading3"], fontSize=11, fontName=FB,
-            textColor=AMBER, leading=14, spaceAfter=2),
+            "h3", parent=s["Heading3"], fontSize=9, fontName=FB,
+            textColor=AMBER, leading=11, spaceAfter=1),
+        # cover_title — название отчёта/проекта на page 1
+        "cover_title": ParagraphStyle(
+            "cover_title", parent=s["Title"], fontSize=15, fontName=FB,
+            textColor=STONE_900, leading=18, alignment=TA_CENTER, spaceAfter=4),
+        "cover_meta": ParagraphStyle(
+            "cover_meta", parent=s["BodyText"], fontSize=8.5, fontName=F,
+            textColor=STONE_700, leading=11, alignment=TA_CENTER),
+        # body (компакт)
         "body": ParagraphStyle(
-            "body", parent=s["BodyText"], fontSize=10, fontName=F,
-            textColor=STONE_700, leading=15, spaceAfter=6, alignment=TA_JUSTIFY),
+            "body", parent=s["BodyText"], fontSize=8.5, fontName=F,
+            textColor=STONE_700, leading=11, spaceAfter=3, alignment=TA_JUSTIFY),
+        "body_l": ParagraphStyle(
+            "body_l", parent=s["BodyText"], fontSize=8.5, fontName=F,
+            textColor=STONE_700, leading=11, spaceAfter=3, alignment=TA_LEFT),
         "muted": ParagraphStyle(
-            "muted", parent=s["BodyText"], fontSize=8, fontName=F,
-            textColor=STONE_500, leading=11),
+            "muted", parent=s["BodyText"], fontSize=7.5, fontName=F,
+            textColor=STONE_500, leading=10),
+        # KPI cells (компакт)
         "kpi_v": ParagraphStyle(
-            "kpi_v", parent=s["BodyText"], fontSize=18, fontName=FB,
-            textColor=STONE_900, leading=22, alignment=TA_CENTER, spaceAfter=2),
+            "kpi_v", parent=s["BodyText"], fontSize=10, fontName=FB,
+            textColor=STONE_900, leading=12, alignment=TA_CENTER, spaceAfter=0),
         "kpi_l": ParagraphStyle(
-            "kpi_l", parent=s["BodyText"], fontSize=8, fontName=F,
-            textColor=STONE_500, leading=10, alignment=TA_CENTER),
+            "kpi_l", parent=s["BodyText"], fontSize=6.5, fontName=F,
+            textColor=STONE_500, leading=8, alignment=TA_CENTER),
+        # risk/positive bullets
         "ok": ParagraphStyle(
-            "ok", parent=s["BodyText"], fontSize=10, fontName=F,
-            textColor=GREEN_OK, leading=14, spaceAfter=4, leftIndent=8),
+            "ok", parent=s["BodyText"], fontSize=8, fontName=F,
+            textColor=GREEN_OK, leading=10, spaceAfter=2, leftIndent=6),
         "bad": ParagraphStyle(
-            "bad", parent=s["BodyText"], fontSize=10, fontName=F,
-            textColor=RED_BAD, leading=14, spaceAfter=4, leftIndent=8),
+            "bad", parent=s["BodyText"], fontSize=8, fontName=F,
+            textColor=RED_BAD, leading=10, spaceAfter=2, leftIndent=6),
+        # contact line (page 1 bottom)
+        "contact": ParagraphStyle(
+            "contact", parent=s["BodyText"], fontSize=8.5, fontName=F,
+            textColor=STONE_700, leading=12, alignment=TA_LEFT),
+        # disclaimer (тонкий шрифт)
         "disclaimer": ParagraphStyle(
-            "disclaimer", parent=s["BodyText"], fontSize=8, fontName=F,
-            textColor=STONE_500, leading=11, alignment=TA_JUSTIFY, spaceAfter=4),
+            "disclaimer", parent=s["BodyText"], fontSize=7, fontName=F,
+            textColor=STONE_500, leading=9.5, alignment=TA_JUSTIFY, spaceAfter=2),
     }
 
 
@@ -213,18 +226,18 @@ I18N = {
         },
         "exec_summary":    "Исполнительное резюме",
         "details":         "Ключевые показатели",
-        "dld_chart":       "DLD-аналитика · динамика 12 мес",
-        "dld_dist":        "Распределение сделок (top-quartile)",
+        "dld_chart":       "DLD · динамика 12 мес",
+        "dld_dist":        "Распределение сделок",
         "roi_chart":       "Прогноз ROI 5 / 10 лет",
-        "comparison":      "Сравнение с топ-10 похожих",
-        "risks":           "Риски и факторы внимания",
+        "comparison":      "Сравнение с похожими",
+        "risks":           "Риски",
         "signals":         "Позитивные сигналы",
         "vadim_profile":   "О брокере",
         "disclaimer":      "Юридическая оговорка",
         "page":            "Страница",
         "of":              "из",
         "date":            "Дата",
-        "no_data":         "Недостаточно данных для построения графика",
+        "no_data":         "Недостаточно данных",
         "default_risks":   ["Курсовые колебания AED/RUB",
                             "Изменения регуляций DLD",
                             "Сроки сдачи off-plan могут смещаться"],
@@ -252,10 +265,10 @@ I18N = {
         },
         "exec_summary":    "Executive Summary",
         "details":         "Key Indicators",
-        "dld_chart":       "DLD Analytics · 12-month dynamics",
-        "dld_dist":        "Deal distribution (top-quartile)",
+        "dld_chart":       "DLD · 12-month dynamics",
+        "dld_dist":        "Deal distribution",
         "roi_chart":       "ROI Forecast 5 / 10 years",
-        "comparison":      "Comparison with Top-10 similar",
+        "comparison":      "Comparison with similar",
         "risks":           "Risk Factors",
         "signals":         "Positive Signals",
         "vadim_profile":   "About the Broker",
@@ -263,7 +276,7 @@ I18N = {
         "page":            "Page",
         "of":              "of",
         "date":            "Date",
-        "no_data":         "Not enough data to plot",
+        "no_data":         "Not enough data",
         "default_risks":   ["AED / FX fluctuations",
                             "Possible DLD regulation changes",
                             "Off-plan delivery dates may shift"],
@@ -291,10 +304,10 @@ I18N = {
         },
         "exec_summary":  "الملخص التنفيذي",
         "details":       "المؤشرات الرئيسية",
-        "dld_chart":     "تحليلات DLD · ديناميات 12 شهر",
+        "dld_chart":     "تحليلات DLD · 12 شهر",
         "dld_dist":      "توزيع الصفقات",
         "roi_chart":     "توقعات ROI 5 / 10 سنوات",
-        "comparison":    "المقارنة مع أفضل 10",
+        "comparison":    "المقارنة",
         "risks":         "عوامل الخطر",
         "signals":       "إشارات إيجابية",
         "vadim_profile": "عن الوسيط",
@@ -395,13 +408,12 @@ def _cache_put(report_key: str, payload_hash: str, file_path: str, data: bytes):
 
 # ── LLM summary ──
 def _llm_summary(payload: dict, lang: str = "ru") -> str:
-    """Call free-tier LLM chain for 2-3 paragraph executive summary."""
+    """Call free-tier LLM chain for compact 1-paragraph executive summary."""
     try:
         from llm_chain import llm_call  # type: ignore
     except Exception:
         return _t(lang, "summary_fallback")
 
-    # Compact payload for prompt
     sample = {k: v for k, v in payload.items()
               if k not in ("photos", "raw_rows", "_internal") and v is not None}
     if len(json.dumps(sample, default=str)) > 3000:
@@ -409,30 +421,29 @@ def _llm_summary(payload: dict, lang: str = "ru") -> str:
 
     sys_by_lang = {
         "ru": ("Ты — RERA-лицензированный аналитик Vadim Realty в Дубае. "
-               "Дай 2-3 коротких параграфа исполнительного резюме по данным ниже. "
+               "Дай 1 короткий параграф (до 80 слов) исполнительного резюме по данным ниже. "
                "Тон: профессиональный, без воды. Только факты, без рекламы. "
                "Не упоминай юр. лицо брокерской компании. БРЕНД: Vadim Realty."),
         "en": ("You are a RERA-licensed analyst at Vadim Realty, Dubai. "
-               "Give 2-3 short paragraphs of executive summary based on the data below. "
+               "Give 1 short paragraph (≤80 words) of executive summary based on the data below. "
                "Tone: professional, factual. Do not mention any brokerage legal entity. "
                "BRAND: Vadim Realty."),
         "ar": ("أنت محلل مرخص من RERA في Vadim Realty بدبي. "
-               "اكتب 2-3 فقرات قصيرة كملخص تنفيذي بناءً على البيانات. "
+               "اكتب فقرة قصيرة (≤80 كلمة) كملخص تنفيذي. "
                "العلامة التجارية: Vadim Realty."),
     }
     prompt = (
         sys_by_lang.get(lang, sys_by_lang["en"]) +
         "\n\nDATA:\n" + json.dumps(sample, ensure_ascii=False, default=str)[:2500] +
-        "\n\nWrite 2-3 paragraphs:"
+        "\n\nWrite 1 paragraph (max 80 words):"
     )
 
     try:
-        out = llm_call(prompt, max_tokens=400, timeout=12)
+        out = llm_call(prompt, max_tokens=220, timeout=12)
         if out:
-            # Sanitize forbidden brokerage name
-            out = out.replace("First Place Realtor L.L.C.", "Vadim Realty")
-            out = out.replace("First Place Realty", "Vadim Realty")
-            out = out.replace("First Place", "Vadim Realty")
+            out = (out.replace("First Place Realtor L.L.C.", "Vadim Realty")
+                      .replace("First Place Realty", "Vadim Realty")
+                      .replace("First Place", "Vadim Realty"))
             return out.strip()
     except Exception as e:
         log.warning(f"LLM summary failed: {e}")
@@ -477,7 +488,6 @@ def _find_logo() -> Optional[str]:
         p = os.path.join(here, name)
         if os.path.exists(p):
             return p
-    # Try cwd
     for name in ("logo.png", "logo.jpg", "vadim_logo.png"):
         p = os.path.join(os.getcwd(), name)
         if os.path.exists(p):
@@ -485,88 +495,108 @@ def _find_logo() -> Optional[str]:
     return None
 
 
-# ── Chart builders (matplotlib → PNG bytes) ──
-def _chart_dynamics(series: List[Tuple[str, float]], title: str, ylabel: str) -> Optional[bytes]:
+def _find_vadim_photo() -> Optional[str]:
+    """Find Vadim's portrait photo next to bot main file."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for name in ("vadim.jpg", "vadim.png", "vadim_photo.jpg",
+                 "vadim_photo.png", "broker.jpg", "broker.png"):
+        p = os.path.join(here, name)
+        if os.path.exists(p):
+            return p
+    return None
+
+
+# ── Chart builders (matplotlib → PNG bytes, compact) ──
+def _chart_dynamics_compact(series: List[Tuple[str, float]], title: str,
+                             ylabel: str) -> Optional[bytes]:
+    """Compact 3×2 inch chart for 2-column layout on page 2."""
     if not MPL_OK or not series:
         return None
     try:
         labels = [s[0] for s in series]
-        values = [s[1] for s in series]
-        fig, ax = plt.subplots(figsize=(7.2, 3.2), dpi=130)
-        ax.plot(labels, values, color="#B45309", marker="o", linewidth=2.2)
+        values = [float(s[1]) for s in series]
+        fig, ax = plt.subplots(figsize=(3.2, 1.9), dpi=110)
+        ax.plot(range(len(labels)), values, color="#B45309", marker="o",
+                linewidth=1.6, markersize=3)
         ax.fill_between(range(len(labels)), values, color="#FCD34D", alpha=0.25)
-        ax.set_title(title, fontsize=11, color="#1C1917", pad=10)
-        ax.set_ylabel(ylabel, fontsize=9, color="#44403C")
-        ax.tick_params(axis="x", rotation=30, labelsize=8)
-        ax.tick_params(axis="y", labelsize=8)
-        ax.grid(True, axis="y", linestyle="--", alpha=0.35)
+        ax.set_ylabel(ylabel, fontsize=6.5, color="#44403C")
+        # show every Nth label only
+        step = max(1, len(labels) // 6)
+        ax.set_xticks(range(0, len(labels), step))
+        ax.set_xticklabels([labels[i] for i in range(0, len(labels), step)],
+                           fontsize=6, rotation=25)
+        ax.tick_params(axis="y", labelsize=6)
+        ax.grid(True, axis="y", linestyle="--", alpha=0.3)
         for spine in ("top", "right"):
             ax.spines[spine].set_visible(False)
-        plt.tight_layout()
+        plt.tight_layout(pad=0.3)
         buf = io.BytesIO()
-        fig.savefig(buf, format="png", bbox_inches="tight")
+        fig.savefig(buf, format="png", bbox_inches="tight", pad_inches=0.05)
         plt.close(fig)
         return buf.getvalue()
     except Exception as e:
-        log.warning(f"chart dynamics failed: {e}")
+        log.warning(f"chart dynamics compact failed: {e}")
         return None
 
 
-def _chart_bars(items: List[Tuple[str, float]], title: str, color: str = "#B45309") -> Optional[bytes]:
+def _chart_bars_compact(items: List[Tuple[str, float]], title: str,
+                         color: str = "#B45309") -> Optional[bytes]:
+    """Compact bar chart for 2-column layout."""
     if not MPL_OK or not items:
         return None
     try:
-        labels = [str(i[0]) for i in items]
+        labels = [str(i[0])[:8] for i in items]
         values = [float(i[1]) for i in items]
-        fig, ax = plt.subplots(figsize=(7.2, 3.2), dpi=130)
-        bars = ax.bar(labels, values, color=color, edgecolor="#1C1917", linewidth=0.4)
+        fig, ax = plt.subplots(figsize=(3.2, 1.9), dpi=110)
+        bars = ax.bar(labels, values, color=color, edgecolor="#1C1917", linewidth=0.3)
         for b, v in zip(bars, values):
             ax.text(b.get_x() + b.get_width() / 2, b.get_height(),
                     f"{v:,.0f}", ha="center", va="bottom",
-                    fontsize=8, color="#1C1917")
-        ax.set_title(title, fontsize=11, color="#1C1917", pad=10)
-        ax.tick_params(axis="x", rotation=20, labelsize=8)
-        ax.tick_params(axis="y", labelsize=8)
-        ax.grid(True, axis="y", linestyle="--", alpha=0.35)
+                    fontsize=5.5, color="#1C1917")
+        ax.tick_params(axis="x", rotation=15, labelsize=6)
+        ax.tick_params(axis="y", labelsize=6)
+        ax.grid(True, axis="y", linestyle="--", alpha=0.3)
         for spine in ("top", "right"):
             ax.spines[spine].set_visible(False)
-        plt.tight_layout()
+        plt.tight_layout(pad=0.3)
         buf = io.BytesIO()
-        fig.savefig(buf, format="png", bbox_inches="tight")
+        fig.savefig(buf, format="png", bbox_inches="tight", pad_inches=0.05)
         plt.close(fig)
         return buf.getvalue()
     except Exception as e:
-        log.warning(f"chart bars failed: {e}")
+        log.warning(f"chart bars compact failed: {e}")
         return None
 
 
-def _chart_distribution(values: List[float], title: str) -> Optional[bytes]:
+def _chart_distribution_compact(values: List[float], title: str) -> Optional[bytes]:
     if not MPL_OK or not values:
         return None
     try:
-        fig, ax = plt.subplots(figsize=(7.2, 3.0), dpi=130)
-        ax.hist(values, bins=12, color="#FCD34D", edgecolor="#B45309")
-        ax.set_title(title, fontsize=11, color="#1C1917", pad=10)
-        ax.tick_params(labelsize=8)
-        ax.grid(True, axis="y", linestyle="--", alpha=0.35)
+        fig, ax = plt.subplots(figsize=(3.2, 1.9), dpi=110)
+        ax.hist(values, bins=12, color="#FCD34D", edgecolor="#B45309", linewidth=0.4)
+        ax.tick_params(labelsize=6)
+        ax.grid(True, axis="y", linestyle="--", alpha=0.3)
         for spine in ("top", "right"):
             ax.spines[spine].set_visible(False)
-        plt.tight_layout()
+        plt.tight_layout(pad=0.3)
         buf = io.BytesIO()
-        fig.savefig(buf, format="png", bbox_inches="tight")
+        fig.savefig(buf, format="png", bbox_inches="tight", pad_inches=0.05)
         plt.close(fig)
         return buf.getvalue()
     except Exception as e:
-        log.warning(f"chart distribution failed: {e}")
+        log.warning(f"chart distribution compact failed: {e}")
         return None
 
 
-def _png_image(data: bytes, width_cm: float = 16) -> Optional[Image]:
+def _png_image(data: bytes, width_cm: float = 7.5,
+                height_cm: Optional[float] = None) -> Optional[Image]:
+    """Embed PNG bytes as a reportlab Image with explicit size."""
     if not data:
         return None
     try:
         buf = io.BytesIO(data)
-        img = Image(buf, width=width_cm * cm, height=width_cm * cm * 0.45)
+        h = height_cm * cm if height_cm is not None else width_cm * cm * 0.62
+        img = Image(buf, width=width_cm * cm, height=h)
         img.hAlign = "CENTER"
         return img
     except Exception as e:
@@ -574,67 +604,32 @@ def _png_image(data: bytes, width_cm: float = 16) -> Optional[Image]:
         return None
 
 
-# ── Footer / Header callback for SimpleDocTemplate ──
-def _make_footer(lang: str):
+# ── Page/footer decorations ──
+def _make_footer(lang: str, total_pages: int = 3):
     def _draw(canvas, doc):
         canvas.saveState()
-        canvas.setFont(_FONT_REG if _FONT_REG in pdfmetrics.getRegisteredFontNames() else "Helvetica", 8)
+        canvas.setFont(_FONT_REG if _FONT_REG in pdfmetrics.getRegisteredFontNames() else "Helvetica", 7)
         canvas.setFillColor(STONE_500)
-        # Footer left
-        canvas.drawString(2 * cm, 1.2 * cm,
-                          f"{BRAND_NAME} · BRN {BRAND_BRN}")
-        # Footer right (page n of m)
+        canvas.drawString(1.4 * cm, 0.9 * cm,
+                          f"{BRAND_NAME} · RERA BRN {BRAND_BRN} · Dubai")
         page = canvas.getPageNumber()
-        canvas.drawRightString(A4[0] - 2 * cm, 1.2 * cm,
-                               f"{_t(lang, 'page')} {page}")
-        # Brand strip top
+        canvas.drawRightString(A4[0] - 1.4 * cm, 0.9 * cm,
+                               f"{_t(lang, 'page')} {page} {_t(lang, 'of')} {total_pages}")
+        # amber strip top
         canvas.setStrokeColor(AMBER)
-        canvas.setLineWidth(1.5)
-        canvas.line(2 * cm, A4[1] - 1.2 * cm, A4[0] - 2 * cm, A4[1] - 1.2 * cm)
+        canvas.setLineWidth(1.2)
+        canvas.line(1.4 * cm, A4[1] - 1.0 * cm, A4[0] - 1.4 * cm, A4[1] - 1.0 * cm)
+        # amber strip bottom (above footer text)
+        canvas.setStrokeColor(AMBER_LIGHT)
+        canvas.setLineWidth(0.6)
+        canvas.line(1.4 * cm, 1.15 * cm, A4[0] - 1.4 * cm, 1.15 * cm)
         canvas.restoreState()
     return _draw
 
 
-# ── Page builders ──
-def _page_cover(story: list, st: dict, report_type: str, payload: dict, lang: str):
-    story.append(Spacer(1, 2.0 * cm))
-    logo = _find_logo()
-    if logo and PIL_OK:
-        try:
-            im = PILImage.open(logo)
-            w, h = im.size
-            target_w = 6 * cm
-            ratio = h / w
-            img = Image(logo, width=target_w, height=target_w * ratio)
-            img.hAlign = "CENTER"
-            story.append(img)
-        except Exception as e:
-            log.debug(f"cover logo embed failed: {e}")
-    story.append(Spacer(1, 0.6 * cm))
-    story.append(Paragraph(BRAND_NAME, st["cover_brand"]))
-    story.append(Paragraph(BRAND_SUBTITLE, st["cover_sub"]))
-    story.append(Spacer(1, 1.4 * cm))
-
-    title = I18N.get(lang, I18N["en"])["report_types"].get(
-        report_type, report_type.capitalize())
-    subject = (payload.get("name") or payload.get("title")
-               or payload.get("area") or payload.get("project_name")
-               or payload.get("building_name") or "").strip()
-    story.append(Paragraph(title, st["cover_title"]))
-    if subject:
-        story.append(Paragraph(f"<b>{subject}</b>", st["cover_meta"]))
-    story.append(Spacer(1, 0.6 * cm))
-    today = datetime.utcnow().strftime("%d %B %Y")
-    story.append(Paragraph(f"{_t(lang, 'date')}: {today}", st["cover_meta"]))
-    story.append(Spacer(1, 3.0 * cm))
-    story.append(Paragraph(
-        f"<font color='#B45309'><b>RERA BRN {BRAND_BRN}</b></font>",
-        st["cover_meta"]))
-    story.append(PageBreak())
-
-
+# ── Static executive template (LLM fallback) ──
 def _static_executive_template(payload: dict, lang: str) -> str:
-    """Содержательное резюме из payload без LLM (v_pdf_fill)."""
+    """Содержательное резюме из payload без LLM, компакт-форма (≤4 предложения)."""
     name = (payload.get("name") or payload.get("project_name")
             or payload.get("title") or payload.get("area") or "").strip()
     area = (payload.get("area") or payload.get("location") or "").strip()
@@ -645,7 +640,6 @@ def _static_executive_template(payload: dict, lang: str) -> str:
     bedrooms = payload.get("bedrooms_range") or payload.get("bedrooms") or ""
     price_from = (payload.get("price_from") or payload.get("min_price")
                   or payload.get("avg_price"))
-    desc = payload.get("description") or ""
 
     yld = payload.get("yield") or payload.get("rental_yield")
     growth = payload.get("growth_yoy") or payload.get("growth")
@@ -659,124 +653,100 @@ def _static_executive_template(payload: dict, lang: str) -> str:
         intro = []
         if name:
             if area and area.lower() != name.lower():
-                intro.append(f"Проект «{name}» расположен в районе {area} ({emirate})")
+                intro.append(f"«{name}» — {area} ({emirate})")
             else:
-                intro.append(f"Проект «{name}» ({emirate})")
+                intro.append(f"«{name}» ({emirate})")
         elif area:
             intro.append(f"Район {area} ({emirate})")
         if dev:
-            intro.append(f"застройщик — {dev}")
+            intro.append(f"застройщик: {dev}")
         if handover:
-            intro.append(f"сдача: {handover}")
+            intro.append(f"сдача {handover}")
         if stage:
-            intro.append(f"стадия: {stage}")
+            intro.append(stage)
         if bedrooms:
-            intro.append(f"планировки: {bedrooms}")
+            intro.append(str(bedrooms))
         if price_from:
-            intro.append(f"цены от {_money(price_from)}")
+            intro.append(f"от {_money(price_from)}")
         if intro:
-            parts.append(". ".join(intro).capitalize() + ".")
+            parts.append("; ".join(intro) + ".")
 
         mkt = []
         if deals:
-            mkt.append(f"за последние 12 месяцев в районе зарегистрировано {_num(deals)} сделок DLD")
+            mkt.append(f"за 12 мес зарегистрировано {_num(deals)} сделок DLD")
         if yld:
             mkt.append(f"средняя rental yield ~{_pct(yld)}")
         if growth is not None:
             try:
                 g = float(growth)
                 sign = "рост" if g >= 0 else "коррекция"
-                mkt.append(f"{sign} цен YoY {_pct(abs(g))}")
+                mkt.append(f"{sign} YoY {_pct(abs(g))}")
             except Exception:
                 pass
         if mkt:
-            parts.append("Рыночная динамика: " + ", ".join(mkt) + ".")
+            parts.append("Рынок: " + ", ".join(mkt) + ".")
 
         inv = []
         if total_return_5y is not None:
             inv.append(f"совокупная доходность 5 лет ~{_pct(total_return_5y)}")
         if payback:
-            inv.append(f"окупаемость аренды ~{payback} лет")
+            inv.append(f"окупаемость ~{payback} лет")
         if inv:
-            parts.append("Инвестиционный профиль: " + ", ".join(inv) + ".")
-
-        if desc:
-            d = str(desc).strip().replace("\n", " ")
-            parts.append(d[:600])
+            parts.append("Инвестиции: " + ", ".join(inv) + ".")
     else:
         intro = []
         if name:
             if area and area.lower() != name.lower():
-                intro.append(f"{name} is located in {area} ({emirate})")
+                intro.append(f"{name} — {area} ({emirate})")
             else:
                 intro.append(f"{name} ({emirate})")
         elif area:
-            intro.append(f"Area: {area} ({emirate})")
+            intro.append(f"{area} ({emirate})")
         if dev:
             intro.append(f"developer: {dev}")
         if handover:
-            intro.append(f"handover: {handover}")
+            intro.append(f"handover {handover}")
         if bedrooms:
-            intro.append(f"layouts: {bedrooms}")
+            intro.append(str(bedrooms))
         if price_from:
-            intro.append(f"prices from {_money(price_from)}")
+            intro.append(f"from {_money(price_from)}")
         if intro:
-            parts.append(". ".join(intro).capitalize() + ".")
+            parts.append("; ".join(intro) + ".")
 
         mkt = []
         if deals:
-            mkt.append(f"DLD recorded {_num(deals)} deals in the area over 12 months")
+            mkt.append(f"{_num(deals)} DLD deals (12m)")
         if yld:
-            mkt.append(f"average rental yield ~{_pct(yld)}")
+            mkt.append(f"yield ~{_pct(yld)}")
         if growth is not None:
             try:
                 g = float(growth)
                 sign = "growth" if g >= 0 else "correction"
-                mkt.append(f"YoY price {sign} {_pct(abs(g))}")
+                mkt.append(f"YoY {sign} {_pct(abs(g))}")
             except Exception:
                 pass
         if mkt:
-            parts.append("Market dynamics: " + ", ".join(mkt) + ".")
+            parts.append("Market: " + ", ".join(mkt) + ".")
 
-        if desc:
-            d = str(desc).strip().replace("\n", " ")
-            parts.append(d[:600])
+        inv = []
+        if total_return_5y is not None:
+            inv.append(f"5y total return ~{_pct(total_return_5y)}")
+        if payback:
+            inv.append(f"payback ~{payback}y")
+        if inv:
+            parts.append("Investment: " + ", ".join(inv) + ".")
 
     if not parts:
         return _t(lang, "summary_fallback")
-    return "\n\n".join(parts)
+    return " ".join(parts)
 
 
-def _page_executive(story: list, st: dict, payload: dict, lang: str):
-    story.append(Paragraph(_t(lang, "exec_summary"), st["h1"]))
-    story.append(Spacer(1, 0.2 * cm))
-    summary = payload.get("summary") or payload.get("llm_summary")
-    if not summary:
-        # v_pdf_fill: try LLM, but always fall back to a content-rich static
-        # template if LLM is unavailable / returns the generic stub.
-        try:
-            llm_out = _llm_summary(payload, lang)
-        except Exception:
-            llm_out = None
-        generic = _t(lang, "summary_fallback")
-        if (not llm_out) or llm_out.strip() == generic.strip() or len(llm_out.strip()) < 80:
-            summary = _static_executive_template(payload, lang)
-        else:
-            summary = llm_out
-    # Hard sanitize
-    summary = (summary
-               .replace("First Place Realtor L.L.C.", "Vadim Realty")
-               .replace("First Place Realty", "Vadim Realty")
-               .replace("First Place", "Vadim Realty"))
-    for para in [p for p in summary.split("\n\n") if p.strip()]:
-        story.append(Paragraph(para.strip().replace("\n", " "), st["body"]))
-    story.append(PageBreak())
-
-
-def _kpi_table(items: List[Tuple[str, str]], st: dict, cols: int = 3) -> Optional[Table]:
+# ── KPI table builder (compact) ──
+def _kpi_table_compact(items: List[Tuple[str, str]], st: dict,
+                        cols: int = 2, col_width_cm: float = 4.4) -> Optional[Table]:
+    """Build a compact KPI grid for left column (page 2)."""
     if not items:
         return None
-    # Pad to multiple of cols
     while len(items) % cols:
         items.append(("", ""))
     rows = []
@@ -786,21 +756,154 @@ def _kpi_table(items: List[Tuple[str, str]], st: dict, cols: int = 3) -> Optiona
             [Paragraph(v or "—", st["kpi_v"]), Paragraph(l, st["kpi_l"])]
             for (l, v) in chunk
         ])
-    t = Table(rows, colWidths=[5.4 * cm] * cols, hAlign="CENTER")
+    t = Table(rows, colWidths=[col_width_cm * cm] * cols, hAlign="LEFT")
     t.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), AMBER_FAINT),
-        ("BOX", (0, 0), (-1, -1), 0.4, AMBER),
-        ("INNERGRID", (0, 0), (-1, -1), 0.3, STONE_300),
+        ("BOX", (0, 0), (-1, -1), 0.3, AMBER),
+        ("INNERGRID", (0, 0), (-1, -1), 0.2, STONE_300),
         ("ALIGN", (0, 0), (-1, -1), "CENTER"),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("TOPPADDING", (0, 0), (-1, -1), 10),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING", (0, 0), (-1, -1), 3),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 3),
     ]))
     return t
 
 
-def _page_details(story: list, st: dict, payload: dict, lang: str):
+# ── Page 1: Cover + Executive + Profile ──
+def _build_page1(story: list, st: dict, report_type: str,
+                 payload: dict, lang: str):
+    """Page 1: brand header + report title + executive paragraph + profile strip."""
+    # ── Brand header (logo + name) — compact ──
+    logo = _find_logo()
+    if logo and PIL_OK:
+        try:
+            im = PILImage.open(logo)
+            w, h = im.size
+            target_w = 3.5 * cm
+            ratio = h / w
+            img = Image(logo, width=target_w, height=target_w * ratio)
+            img.hAlign = "CENTER"
+            story.append(img)
+            story.append(Spacer(1, 0.15 * cm))
+        except Exception as e:
+            log.debug(f"cover logo embed failed: {e}")
+    story.append(Paragraph(BRAND_NAME, st["cover_brand"]))
+    story.append(Paragraph(BRAND_SUBTITLE, st["cover_sub"]))
+    story.append(Spacer(1, 0.35 * cm))
+
+    # ── Report title block ──
+    title = I18N.get(lang, I18N["en"])["report_types"].get(
+        report_type, report_type.capitalize())
+    subject = (payload.get("name") or payload.get("title")
+               or payload.get("area") or payload.get("project_name")
+               or payload.get("building_name") or "").strip()
+    area_ext = (payload.get("area") or payload.get("location") or "").strip()
+    emirate = (payload.get("emirate") or "").strip()
+
+    story.append(Paragraph(title, st["h3"]))
+    if subject:
+        story.append(Paragraph(f"<b>{subject}</b>", st["cover_title"]))
+    sub_line_parts = []
+    if area_ext and area_ext.lower() != subject.lower():
+        sub_line_parts.append(area_ext)
+    if emirate:
+        sub_line_parts.append(emirate)
+    today = datetime.utcnow().strftime("%d %b %Y")
+    sub_line_parts.append(today)
+    story.append(Paragraph(" · ".join(sub_line_parts), st["cover_meta"]))
+    story.append(Spacer(1, 0.4 * cm))
+
+    # ── Executive Summary section ──
+    story.append(Paragraph(_t(lang, "exec_summary"), st["h1"]))
+    summary = payload.get("summary") or payload.get("llm_summary")
+    if not summary:
+        try:
+            llm_out = _llm_summary(payload, lang)
+        except Exception:
+            llm_out = None
+        generic = _t(lang, "summary_fallback")
+        if (not llm_out) or llm_out.strip() == generic.strip() or len(llm_out.strip()) < 80:
+            summary = _static_executive_template(payload, lang)
+        else:
+            summary = llm_out
+    summary = (summary
+               .replace("First Place Realtor L.L.C.", "Vadim Realty")
+               .replace("First Place Realty", "Vadim Realty")
+               .replace("First Place", "Vadim Realty"))
+    # Trim summary to ~700 chars to keep page 1 contained (preserves all info
+    # since detailed KPI go to page 2 and disclaimer/comparison to page 3).
+    summary_clean = summary.strip().replace("\n\n", " ").replace("\n", " ")
+    if len(summary_clean) > 900:
+        summary_clean = summary_clean[:880].rsplit(" ", 1)[0] + "…"
+    story.append(Paragraph(summary_clean, st["body"]))
+
+    # Optional: a project description if present and not already in summary
+    desc = payload.get("description") or payload.get("details_text") or ""
+    if desc and str(desc).strip() and str(desc).strip()[:60] not in summary_clean:
+        d = str(desc).strip().replace("\n\n", " ").replace("\n", " ")
+        if len(d) > 500:
+            d = d[:480].rsplit(" ", 1)[0] + "…"
+        story.append(Spacer(1, 0.2 * cm))
+        story.append(Paragraph(d, st["body"]))
+
+    # ── Vadim profile strip (bottom of page 1) ──
+    story.append(Spacer(1, 0.5 * cm))
+    # Use a 2-col table: photo (or logo) + contact block
+    profile_left = None
+    photo = _find_vadim_photo()
+    if photo and PIL_OK:
+        try:
+            im = PILImage.open(photo)
+            w, h = im.size
+            target_w = 2.8 * cm
+            ratio = h / w
+            profile_left = Image(photo, width=target_w, height=target_w * ratio)
+        except Exception:
+            profile_left = None
+    if profile_left is None and logo and PIL_OK:
+        try:
+            im = PILImage.open(logo)
+            w, h = im.size
+            target_w = 2.8 * cm
+            ratio = h / w
+            profile_left = Image(logo, width=target_w, height=target_w * ratio)
+        except Exception:
+            profile_left = Paragraph(f"<b>{BRAND_NAME}</b>", st["body_l"])
+    if profile_left is None:
+        profile_left = Paragraph(f"<b>{BRAND_NAME}</b>", st["body_l"])
+
+    contact_html = (
+        f"<b>Vadim · {BRAND_SUBTITLE}</b><br/>"
+        f"{_t(lang, 'vadim_bio')}<br/>"
+        f"<b>Telegram:</b> {BRAND_CONTACT_TG}   "
+        f"<b>Phone:</b> {BRAND_CONTACT_PHONE}   "
+        f"<b>RERA BRN:</b> {BRAND_BRN}"
+    )
+    profile_right = Paragraph(contact_html, st["contact"])
+
+    profile_tbl = Table([[profile_left, profile_right]],
+                        colWidths=[3.2 * cm, 14.6 * cm])
+    profile_tbl.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("BOX", (0, 0), (-1, -1), 0.5, AMBER),
+        ("BACKGROUND", (0, 0), (-1, -1), AMBER_FAINT),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    story.append(profile_tbl)
+    story.append(PageBreak())
+
+
+# ── Page 2: KPI grid + charts + risks/signals (2 columns) ──
+def _build_page2(story: list, st: dict, payload: dict, lang: str):
+    """Page 2: 2-column layout — left KPI+risks+signals, right charts."""
     story.append(Paragraph(_t(lang, "details"), st["h1"]))
+
+    # ── Build LEFT column content (KPI + risks + signals) ──
     LABELS = {
         "ru": {
             "avg_price":  "Средняя цена",
@@ -817,15 +920,19 @@ def _page_details(story: list, st: dict, payload: dict, lang: str):
             "bedrooms":   "Спальни",
             "emirate":    "Эмират",
             "stage":      "Стадия",
-            "score":      "Investment Score",
+            "score":      "Инв. score",
             "payback":    "Окупаемость",
             "return_5y":  "Доход 5y",
             "top_psf":    "Top-quartile PSF",
+            "area_growth_5y":  "Рост 5y",
+            "area_growth_10y": "Рост 10y",
+            "monthly_rent":    "Аренда/мес",
+            "budget":          "Бюджет",
         },
         "en": {
-            "avg_price":  "Average price",
-            "median_price": "Median price",
-            "price_per_m2": "Price per m²",
+            "avg_price":  "Avg price",
+            "median_price": "Median",
+            "price_per_m2": "Price / m²",
             "deals":      "Deals (12m)",
             "yield":      "Rental yield",
             "growth":     "YoY growth",
@@ -837,10 +944,14 @@ def _page_details(story: list, st: dict, payload: dict, lang: str):
             "bedrooms":   "Bedrooms",
             "emirate":    "Emirate",
             "stage":      "Stage",
-            "score":      "Investment score",
+            "score":      "Inv. score",
             "payback":    "Payback",
-            "return_5y":  "5y total return",
-            "top_psf":    "Top-quartile PSF",
+            "return_5y":  "5y return",
+            "top_psf":    "Top-q PSF",
+            "area_growth_5y":  "Growth 5y",
+            "area_growth_10y": "Growth 10y",
+            "monthly_rent":    "Rent/mo",
+            "budget":          "Budget",
         },
     }
     L = LABELS.get(lang, LABELS["en"])
@@ -860,226 +971,169 @@ def _page_details(story: list, st: dict, payload: dict, lang: str):
         add(L["growth"],        _pct(payload.get("growth_yoy") or payload.get("growth")))
         add(L["return_5y"],     _pct(payload.get("total_return_5y_pct")))
         add(L["payback"],       (f"{payload.get('payback_years')} лет" if lang == "ru" and payload.get("payback_years")
-                                 else (f"{payload.get('payback_years')} years" if payload.get("payback_years") else None)))
+                                 else (f"{payload.get('payback_years')}y" if payload.get("payback_years") else None)))
+        add(L["monthly_rent"],  _money(payload.get("monthly_rent")) if payload.get("monthly_rent") else None)
+        add(L["budget"],        _money(payload.get("budget")) if payload.get("budget") else None)
         add(L["units"],         _num(payload.get("total_units") or payload.get("units")))
         add(L["area"],          (_num(payload.get("area_m2"), " m²") if payload.get("area_m2") else None))
-        add(L["developer"],     str(payload.get("developer") or "") or None)
-        add(L["handover"],      str(payload.get("handover_date") or payload.get("completion_year") or "") or None)
-        add(L["bedrooms"],      str(payload.get("bedrooms_range") or payload.get("bedrooms") or "") or None)
-        add(L["emirate"],       str(payload.get("emirate") or "") or None)
-        add(L["stage"],         str(payload.get("stage") or payload.get("status") or "") or None)
+        add(L["developer"],     str(payload.get("developer") or "")[:18] or None)
+        add(L["handover"],      str(payload.get("handover_date") or payload.get("completion_year") or "")[:14] or None)
+        add(L["bedrooms"],      str(payload.get("bedrooms_range") or payload.get("bedrooms") or "")[:14] or None)
+        add(L["emirate"],       str(payload.get("emirate") or "")[:14] or None)
+        add(L["stage"],         str(payload.get("stage") or payload.get("status") or "")[:14] or None)
         add(L["score"],         (str(payload.get("investment_score")) if payload.get("investment_score") is not None else None))
+        add(L["area_growth_5y"],  _pct(payload.get("area_growth_5y")) if payload.get("area_growth_5y") is not None else None)
+        add(L["area_growth_10y"], _pct(payload.get("area_growth_10y")) if payload.get("area_growth_10y") is not None else None)
         kpis = auto
 
-    if kpis:
-        # show up to 9 (3x3) — pick the most informative first
-        kpis = kpis[:9]
-        t = _kpi_table([(l, v) for l, v in kpis], st, cols=3)
-        if t:
-            story.append(t)
-            story.append(Spacer(1, 0.4 * cm))
-    desc = payload.get("description") or payload.get("details_text")
-    if desc:
-        story.append(Paragraph(str(desc)[:1500], st["body"]))
-    story.append(PageBreak())
+    # Cap to 12 KPIs (2 cols × 6 rows) so left column fits next to charts
+    kpis = kpis[:12]
 
+    left_col: list = []
+    kpi_tbl = _kpi_table_compact(kpis, st, cols=2, col_width_cm=4.2)
+    if kpi_tbl:
+        left_col.append(kpi_tbl)
+        left_col.append(Spacer(1, 0.2 * cm))
 
-def _page_dld_charts(story: list, st: dict, payload: dict, lang: str):
-    """Pages 4-5: DLD analytics.
+    # Risks
+    risks = payload.get("risks") or _t(lang, "default_risks")
+    if isinstance(risks, list) and risks:
+        left_col.append(Paragraph(_t(lang, "risks"), st["h2"]))
+        for r in risks[:5]:
+            left_col.append(Paragraph(f"<font color='#B91C1C'>•</font> {r}", st["bad"]))
+        left_col.append(Spacer(1, 0.1 * cm))
 
-    v132: если для конкретного объекта нет исторических данных DLD
-    (типично для off-plan проектов), вместо двух страниц с
-    «Недостаточно данных» — показываем компактный текстовый
-    summary с available KPI на одной странице. Если данных вообще
-    нет — пропускаем секцию целиком (8 страниц вместо 10).
-    """
+    # Signals
+    signals = payload.get("signals") or _t(lang, "default_signals")
+    if isinstance(signals, list) and signals:
+        left_col.append(Paragraph(_t(lang, "signals"), st["h2"]))
+        for s_ in signals[:5]:
+            left_col.append(Paragraph(f"<font color='#15803D'>✓</font> {s_}", st["ok"]))
+
+    # ── Build RIGHT column content (charts) ──
+    right_col: list = []
     series = payload.get("dynamics_series") or payload.get("price_series") or []
     dist = payload.get("price_distribution") or []
-    extras = payload.get("extra_chart")
     notes = payload.get("dld_notes")
+    extras = payload.get("extra_chart")
 
-    has_dynamics = bool(series)
-    has_dist = bool(dist) or (extras and isinstance(extras, list))
-
-    # Fallback KPI summary (используется когда нет графиков)
-    L_psm = "Цена / м²" if lang == "ru" else "Avg price / m²"
-    L_median = "Медиана сделки" if lang == "ru" else "Median deal"
-    L_deals = "Сделок (12m)" if lang == "ru" else "Deals (12m)"
-    L_g5 = "Рост района 5 лет" if lang == "ru" else "Area growth 5y"
-    L_g10 = "Рост района 10 лет" if lang == "ru" else "Area growth 10y"
-    L_yld = "Rental yield"
-    fb_kpis = []
-    if payload.get("avg_price_psf") or payload.get("price_per_m2"):
-        fb_kpis.append((L_psm,
-                        _money(payload.get("price_per_m2") or payload.get("avg_price_psf"),
-                               " AED/m²")))
-    if payload.get("median_price"):
-        fb_kpis.append((L_median, _money(payload.get("median_price"))))
-    if payload.get("deals"):
-        fb_kpis.append((L_deals, _num(payload.get("deals"))))
-    if payload.get("area_growth_5y") is not None:
-        fb_kpis.append((L_g5, _pct(payload.get("area_growth_5y"))))
-    if payload.get("area_growth_10y") is not None:
-        fb_kpis.append((L_g10, _pct(payload.get("area_growth_10y"))))
-    if payload.get("yield"):
-        fb_kpis.append((L_yld, _pct(payload.get("yield"))))
-
-    # Если совсем ничего нет → скипаем секцию целиком (8-страничный PDF)
-    if not has_dynamics and not has_dist and not fb_kpis and not notes:
-        return
-
-    # Page 4: dynamics (если есть series) либо compact summary
-    story.append(Paragraph(_t(lang, "dld_chart"), st["h1"]))
-    if has_dynamics:
-        png = _chart_dynamics(series, _t(lang, "dld_chart"), "AED / m²")
-        img = _png_image(png) if png else None
-        if img:
-            story.append(img)
-            story.append(Spacer(1, 0.4 * cm))
-    elif fb_kpis:
-        # textual fallback — KPI table + neutral disclaimer
-        t = _kpi_table(fb_kpis[:6], st, cols=3)
-        if t:
-            story.append(t)
-            story.append(Spacer(1, 0.4 * cm))
-        story.append(Paragraph(
-            "Историческая 12-мес динамика недоступна для off-plan проектов "
-            "до старта вторичного рынка. KPI выше — агрегаты по району и "
-            "сравнимым активам из открытых данных DLD."
-            if lang == "ru" else
-            "12-month price dynamics is not yet available for off-plan units "
-            "prior to the secondary-market launch. KPI above are area-level "
-            "aggregates and comparable-asset metrics from public DLD data.",
-            st["muted"]))
-        story.append(Spacer(1, 0.4 * cm))
-    if notes:
-        story.append(Paragraph(str(notes)[:1200], st["body"]))
-    story.append(PageBreak())
-
-    # Page 5: distribution + top-quartile — только если есть данные
-    if has_dist:
-        story.append(Paragraph(_t(lang, "dld_dist"), st["h1"]))
-        if dist:
-            png = _chart_distribution([float(x) for x in dist], _t(lang, "dld_dist"))
-            img = _png_image(png) if png else None
-            if img:
-                story.append(img)
-                story.append(Spacer(1, 0.4 * cm))
-        if extras and isinstance(extras, list):
-            png = _chart_bars(extras, "Top quartile distribution", "#15803D")
-            img = _png_image(png) if png else None
-            if img:
-                story.append(img)
-        story.append(PageBreak())
-
-
-def _page_roi(story: list, st: dict, payload: dict, lang: str):
+    # ROI rows
     roi5 = payload.get("roi_5y")
     roi10 = payload.get("roi_10y")
-    rows = []
+    roi_rows = []
     if roi5 is not None:
-        rows.append(("5y", float(roi5)))
+        roi_rows.append(("5y", float(roi5)))
     if roi10 is not None:
-        rows.append(("10y", float(roi10)))
-    # Допускаем breakdown по годам
+        roi_rows.append(("10y", float(roi10)))
     bd = payload.get("roi_breakdown") or []
     if bd:
-        rows = [(str(b.get("year") or b.get("label")), float(b.get("value") or 0))
-                for b in bd if b.get("value") is not None][:10]
-    # KPI line
-    L_yld    = "Rental yield"
-    L_growth = "Рост в год" if lang == "ru" else "Growth p.a."
-    L_budget = "Бюджет" if lang == "ru" else "Budget"
-    L_rent   = "Аренда / мес" if lang == "ru" else "Monthly rent"
-    L_g5     = "Рост района 5 лет" if lang == "ru" else "Area growth 5y"
-    L_g10    = "Рост района 10 лет" if lang == "ru" else "Area growth 10y"
-    L_5y     = "Доход 5 лет" if lang == "ru" else "5y total return"
-    L_pb     = "Окупаемость" if lang == "ru" else "Payback"
-    kpis = []
-    if payload.get("yield"):
-        kpis.append((L_yld, _pct(payload.get("yield"))))
-    if payload.get("growth"):
-        kpis.append((L_growth, _pct(payload.get("growth"))))
-    if payload.get("budget"):
-        kpis.append((L_budget, _money(payload.get("budget"))))
-    if payload.get("monthly_rent"):
-        kpis.append((L_rent, _money(payload.get("monthly_rent"))))
-    if payload.get("total_return_5y_pct") is not None:
-        kpis.append((L_5y, _pct(payload.get("total_return_5y_pct"))))
-    if payload.get("payback_years"):
-        kpis.append((L_pb, (f"{payload.get('payback_years')} лет" if lang == "ru"
-                            else f"{payload.get('payback_years')} years")))
-    # v132: proxy KPIs (area growth) если нет прямого ROI
-    if payload.get("area_growth_5y") is not None:
-        kpis.append((L_g5, _pct(payload.get("area_growth_5y"))))
-    if payload.get("area_growth_10y") is not None:
-        kpis.append((L_g10, _pct(payload.get("area_growth_10y"))))
+        roi_rows = [(str(b.get("year") or b.get("label")), float(b.get("value") or 0))
+                    for b in bd if b.get("value") is not None][:8]
 
-    # v132: скип целой страницы если совсем нет данных (короче PDF, чем
-    # «Недостаточно данных»)
-    if not rows and not kpis:
-        return
-
-    story.append(Paragraph(_t(lang, "roi_chart"), st["h1"]))
-    if rows:
-        png = _chart_bars(rows, _t(lang, "roi_chart"), "#B45309")
-        img = _png_image(png) if png else None
+    # Chart 1: dynamics
+    if series:
+        right_col.append(Paragraph(_t(lang, "dld_chart"), st["h2"]))
+        png = _chart_dynamics_compact(series, _t(lang, "dld_chart"), "AED/m²")
+        img = _png_image(png, width_cm=8.0, height_cm=4.6) if png else None
         if img:
-            story.append(img)
-            story.append(Spacer(1, 0.4 * cm))
-    if kpis:
-        t = _kpi_table(kpis[:6], st, cols=3)
-        if t:
-            story.append(t)
-    if not rows:
-        # Если только KPIs, без графика — добавим neutral disclaimer
-        story.append(Spacer(1, 0.3 * cm))
-        story.append(Paragraph(
-            "Прогноз ROI 5/10 лет рассчитывается после ввода объекта в "
-            "эксплуатацию и формирования трека вторичных сделок. KPI выше "
-            "— ориентир по району и yield по сопоставимым активам."
-            if lang == "ru" else
-            "5y/10y ROI projection is computed after handover and the "
-            "secondary-market track record. KPI above show area-level "
-            "benchmarks and comparable-asset yields.",
-            st["muted"]))
+            right_col.append(img)
+        right_col.append(Spacer(1, 0.1 * cm))
+
+    # Chart 2: distribution OR extras
+    if dist:
+        right_col.append(Paragraph(_t(lang, "dld_dist"), st["h2"]))
+        png = _chart_distribution_compact([float(x) for x in dist], _t(lang, "dld_dist"))
+        img = _png_image(png, width_cm=8.0, height_cm=4.6) if png else None
+        if img:
+            right_col.append(img)
+        right_col.append(Spacer(1, 0.1 * cm))
+    elif extras and isinstance(extras, list):
+        right_col.append(Paragraph(_t(lang, "dld_dist"), st["h2"]))
+        png = _chart_bars_compact(extras, "Top quartile", "#15803D")
+        img = _png_image(png, width_cm=8.0, height_cm=4.6) if png else None
+        if img:
+            right_col.append(img)
+        right_col.append(Spacer(1, 0.1 * cm))
+
+    # Chart 3: ROI
+    if roi_rows:
+        right_col.append(Paragraph(_t(lang, "roi_chart"), st["h2"]))
+        png = _chart_bars_compact(roi_rows, _t(lang, "roi_chart"), "#B45309")
+        img = _png_image(png, width_cm=8.0, height_cm=4.6) if png else None
+        if img:
+            right_col.append(img)
+
+    # If no charts at all — show notes/fallback
+    if not right_col:
+        right_col.append(Paragraph(_t(lang, "dld_chart"), st["h2"]))
+        msg = ("Историческая 12-мес динамика недоступна для off-plan проектов "
+               "до старта вторичного рынка. KPI слева — агрегаты по району "
+               "и сравнимым активам из публичных данных DLD."
+               if lang == "ru" else
+               "12-month price dynamics is not yet available for off-plan units "
+               "prior to the secondary-market launch. KPI on the left are "
+               "area-level aggregates from public DLD data.")
+        right_col.append(Paragraph(msg, st["muted"]))
+
+    if notes:
+        right_col.append(Spacer(1, 0.15 * cm))
+        right_col.append(Paragraph(str(notes)[:600], st["muted"]))
+
+    # ── Pack as 2-column table ──
+    left_kif = KeepInFrame(8.4 * cm, 21 * cm, left_col, mode="shrink")
+    right_kif = KeepInFrame(8.4 * cm, 21 * cm, right_col, mode="shrink")
+    layout_tbl = Table([[left_kif, right_kif]],
+                       colWidths=[8.7 * cm, 9.1 * cm])
+    layout_tbl.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    story.append(layout_tbl)
     story.append(PageBreak())
 
 
-def _page_comparison(story: list, st: dict, payload: dict, lang: str):
+# ── Page 3: Comparison + detailed ROI + disclaimer ──
+def _build_page3(story: list, st: dict, payload: dict, lang: str):
+    """Page 3: comparison table + detailed ROI breakdown + legal disclaimer."""
     story.append(Paragraph(_t(lang, "comparison"), st["h1"]))
     comp = payload.get("comparison") or payload.get("similar") or []
     if comp:
         if lang == "ru":
-            head = ["#", "Название", "Цена / м²", "Сделок", "Yield"]
+            head = ["#", "Название", "Район", "Цена/м²", "Сделок", "Yield", "Рост"]
         else:
-            head = ["#", "Name", "Price / m²", "Deals", "Yield"]
+            head = ["#", "Name", "Area", "Price/m²", "Deals", "Yield", "Growth"]
         rows = [head]
         for i, c in enumerate(comp[:10], 1):
             rows.append([
                 str(i),
-                str(c.get("name", "—"))[:32],
+                str(c.get("name", "—"))[:24],
+                str(c.get("area", "") or c.get("location", ""))[:14],
                 _money(c.get("price_per_m2"), " AED/m²"),
                 _num(c.get("deals")),
                 _pct(c.get("yield")),
+                _pct(c.get("growth") or c.get("growth_yoy")),
             ])
-        t = Table(rows, colWidths=[1 * cm, 6 * cm, 4 * cm, 2.5 * cm, 2.5 * cm])
+        t = Table(rows, colWidths=[0.8 * cm, 4.3 * cm, 2.9 * cm,
+                                    3.2 * cm, 2.0 * cm, 1.8 * cm, 1.8 * cm])
         t.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), AMBER),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("FONTNAME", (0, 0), (-1, 0), _FONT_BOLD),
-            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("FONTNAME", (0, 0), (-1, 0), st["FB"]),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
             ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, AMBER_FAINT]),
             ("GRID", (0, 0), (-1, -1), 0.3, STONE_300),
             ("ALIGN", (0, 0), (-1, -1), "CENTER"),
             ("ALIGN", (1, 1), (1, -1), "LEFT"),
-            ("LEFTPADDING", (0, 0), (-1, -1), 5),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+            ("LEFTPADDING", (0, 0), (-1, -1), 3),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
         ]))
         story.append(t)
     else:
-        # v_pdf_fill: текстовый fallback вместо «Недостаточно данных».
-        # Описываем район / средние KPI и зачем сравнение, чтобы не выглядело пусто.
         area = (payload.get("area") or payload.get("location") or "").strip()
         avg = payload.get("avg_price") or payload.get("area_avg_price")
         psf = payload.get("price_per_m2") or payload.get("area_median_psf")
@@ -1096,9 +1150,7 @@ def _page_comparison(story: list, st: dict, payload: dict, lang: str):
                 lines.append(f"Типичная rental yield: {_pct(yld)}.")
             lines.append("Прямое сравнение с похожими проектами доступно для активов, "
                          "имеющих вторичный трек; для большинства off-plan проектов это "
-                         "сравнение появляется после handover. Связаться с брокером для "
-                         "подбора похожих объектов: "
-                         f"{BRAND_CONTACT_TG}.")
+                         f"сравнение появляется после handover. Подбор: {BRAND_CONTACT_TG}.")
         else:
             lines = []
             if area:
@@ -1110,80 +1162,114 @@ def _page_comparison(story: list, st: dict, payload: dict, lang: str):
             if yld:
                 lines.append(f"Typical rental yield: {_pct(yld)}.")
             lines.append("Side-by-side comparison is available for assets with a secondary-market "
-                         "track. For most off-plan projects the comparison forms after handover. "
-                         f"Contact the broker for shortlist: {BRAND_CONTACT_TG}.")
+                         "track record. For most off-plan projects this comparison forms after "
+                         f"handover. Shortlist: {BRAND_CONTACT_TG}.")
         for ln in lines:
             story.append(Paragraph(ln, st["body"]))
-    story.append(PageBreak())
 
+    story.append(Spacer(1, 0.3 * cm))
 
-def _page_risks(story: list, st: dict, payload: dict, lang: str):
-    story.append(Paragraph(_t(lang, "risks"), st["h1"]))
-    risks = payload.get("risks") or _t(lang, "default_risks")
-    if isinstance(risks, list):
-        for r in risks[:8]:
-            story.append(Paragraph(f"<font color='#B91C1C'>•</font> {r}", st["bad"]))
-    story.append(Spacer(1, 0.6 * cm))
-    story.append(Paragraph(_t(lang, "signals"), st["h2"]))
-    signals = payload.get("signals") or _t(lang, "default_signals")
-    if isinstance(signals, list):
-        for s in signals[:8]:
-            story.append(Paragraph(f"<font color='#15803D'>✓</font> {s}", st["ok"]))
-    story.append(PageBreak())
+    # ── Detailed ROI projection (table form) ──
+    bd = payload.get("roi_breakdown") or []
+    roi5 = payload.get("roi_5y")
+    roi10 = payload.get("roi_10y")
+    has_roi = bool(bd) or (roi5 is not None) or (roi10 is not None) or payload.get("total_return_5y_pct")
 
+    if has_roi:
+        story.append(Paragraph(_t(lang, "roi_chart"), st["h2"]))
+        if bd:
+            if lang == "ru":
+                head = ["Год", "Доходность (%)"]
+            else:
+                head = ["Year", "Return (%)"]
+            rows = [head]
+            for b in bd[:10]:
+                lab = str(b.get("year") or b.get("label") or "—")
+                val = b.get("value")
+                try:
+                    val_s = f"{float(val):.1f}%"
+                except Exception:
+                    val_s = "—"
+                rows.append([lab, val_s])
+            t = Table(rows, colWidths=[2.5 * cm, 4 * cm], hAlign="LEFT")
+            t.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), AMBER),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTNAME", (0, 0), (-1, 0), st["FB"]),
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, AMBER_FAINT]),
+                ("GRID", (0, 0), (-1, -1), 0.3, STONE_300),
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 3),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ]))
+            story.append(t)
+        else:
+            parts = []
+            if roi5 is not None:
+                parts.append(f"5y: {float(roi5):.1f}%")
+            if roi10 is not None:
+                parts.append(f"10y: {float(roi10):.1f}%")
+            if payload.get("total_return_5y_pct") is not None:
+                parts.append(
+                    ("Совокупная 5y: " if lang == "ru" else "Total 5y: ")
+                    + _pct(payload.get("total_return_5y_pct")))
+            if payload.get("payback_years"):
+                parts.append(
+                    ("Окупаемость ~" if lang == "ru" else "Payback ~")
+                    + f"{payload.get('payback_years')}"
+                    + (" лет" if lang == "ru" else "y"))
+            if parts:
+                story.append(Paragraph(" · ".join(parts), st["body"]))
 
-def _page_vadim_profile(story: list, st: dict, payload: dict, lang: str):
-    story.append(Paragraph(_t(lang, "vadim_profile"), st["h1"]))
-    logo = _find_logo()
-    cells = []
-    if logo and PIL_OK:
-        try:
-            im = PILImage.open(logo)
-            w, h = im.size
-            target_w = 4 * cm
-            ratio = h / w
-            cells.append(Image(logo, width=target_w, height=target_w * ratio))
-        except Exception:
-            cells.append(Paragraph(BRAND_NAME, st["h2"]))
-    else:
-        cells.append(Paragraph(BRAND_NAME, st["h2"]))
+    # ── Top buildings or extra ranking (если есть в payload) ──
+    tb = payload.get("top_buildings") or []
+    if tb and isinstance(tb, list):
+        story.append(Spacer(1, 0.25 * cm))
+        story.append(Paragraph(
+            "Топ зданий района" if lang == "ru" else "Top buildings in area",
+            st["h2"]))
+        head = (["#", "Здание", "Цена/м²", "Сделок"] if lang == "ru"
+                else ["#", "Building", "Price/m²", "Deals"])
+        rows = [head]
+        for i, b in enumerate(tb[:6], 1):
+            rows.append([
+                str(i),
+                str(b.get("name") or b.get("building") or "—")[:30],
+                _money(b.get("price_per_m2"), " AED/m²"),
+                _num(b.get("deals")),
+            ])
+        t = Table(rows, colWidths=[0.8 * cm, 7 * cm, 3.5 * cm, 2.5 * cm])
+        t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), AMBER),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), st["FB"]),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, AMBER_FAINT]),
+            ("GRID", (0, 0), (-1, -1), 0.3, STONE_300),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("ALIGN", (1, 1), (1, -1), "LEFT"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 3),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+            ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ]))
+        story.append(t)
 
-    bio_html = (
-        f"<b>Vadim · {BRAND_SUBTITLE}</b><br/><br/>"
-        f"{_t(lang, 'vadim_bio')}<br/><br/>"
-        f"<b>Telegram:</b> {BRAND_CONTACT_TG}<br/>"
-        f"<b>Phone:</b> {BRAND_CONTACT_PHONE}<br/>"
-        f"<b>RERA BRN:</b> {BRAND_BRN}"
-    )
-    cells.append(Paragraph(bio_html, st["body"]))
-    t = Table([cells], colWidths=[5 * cm, 11.5 * cm])
-    t.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("BOX", (0, 0), (-1, -1), 0.5, AMBER),
-        ("BACKGROUND", (0, 0), (-1, -1), AMBER_FAINT),
-        ("LEFTPADDING", (0, 0), (-1, -1), 14),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 14),
-        ("TOPPADDING", (0, 0), (-1, -1), 14),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 14),
-    ]))
-    story.append(t)
-    story.append(Spacer(1, 0.6 * cm))
-    badge = Paragraph(
-        f"<font size=12 color='#B45309'><b>★ RERA Licensed Broker · BRN {BRAND_BRN} ★</b></font>",
-        st["cover_meta"])
-    story.append(badge)
-    story.append(PageBreak())
-
-
-def _page_disclaimer(story: list, st: dict, lang: str):
-    story.append(Paragraph(_t(lang, "disclaimer"), st["h1"]))
+    # ── Disclaimer (компакт) ──
+    story.append(Spacer(1, 0.5 * cm))
+    story.append(Paragraph(_t(lang, "disclaimer"), st["h2"]))
     txt = _t(lang, "disclaimer_text")
     for para in txt.split("\n\n"):
         story.append(Paragraph(para.strip(), st["disclaimer"]))
-    story.append(Spacer(1, 1 * cm))
+    story.append(Spacer(1, 0.2 * cm))
     story.append(Paragraph(
-        f"© {datetime.utcnow().year} {BRAND_NAME} · BRN {BRAND_BRN} · Dubai, UAE",
+        f"© {datetime.utcnow().year} {BRAND_NAME} · BRN {BRAND_BRN} · Dubai, UAE · "
+        f"{BRAND_CONTACT_TG} · {BRAND_CONTACT_PHONE}",
         st["muted"]))
+    # no PageBreak — last page
 
 
 # ── Main API ──
@@ -1193,7 +1279,7 @@ def generate_pdf_report(
     lang: str = "ru",
     output_dir: Optional[str] = None,
 ) -> str:
-    """Generate a 10-page Vadim Realty PDF report.
+    """Generate a compact 3-page Vadim Realty PDF report.
 
     Args:
         report_type: 'area' / 'building' / 'project' / 'listing' / 'roi' / 'lead'
@@ -1214,7 +1300,7 @@ def generate_pdf_report(
     # ── Cache key ──
     payload_norm = json.dumps(payload, sort_keys=True, default=str)[:32000]
     payload_hash = hashlib.sha256(
-        f"{report_type}|{lang}|{payload_norm}".encode("utf-8")).hexdigest()[:24]
+        f"{report_type}|{lang}|{payload_norm}|v133".encode("utf-8")).hexdigest()[:24]
     report_key = f"{report_type}:{lang}"
     file_name = f"vadim_{report_type}_{payload_hash}.pdf"
     file_path = os.path.join(output_dir, file_name)
@@ -1239,25 +1325,19 @@ def generate_pdf_report(
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=A4,
-        leftMargin=2 * cm, rightMargin=2 * cm,
-        topMargin=2 * cm, bottomMargin=2 * cm,
+        leftMargin=1.4 * cm, rightMargin=1.4 * cm,
+        topMargin=1.3 * cm, bottomMargin=1.4 * cm,
         title=f"{BRAND_NAME} — {report_type}",
         author=BRAND_NAME,
         subject=I18N.get(lang, I18N["en"])["report_types"].get(report_type, report_type),
     )
 
     story: list = []
-    _page_cover(story, st, report_type, payload, lang)         # 1
-    _page_executive(story, st, payload, lang)                  # 2
-    _page_details(story, st, payload, lang)                    # 3
-    _page_dld_charts(story, st, payload, lang)                 # 4-5
-    _page_roi(story, st, payload, lang)                        # 6
-    _page_comparison(story, st, payload, lang)                 # 7
-    _page_risks(story, st, payload, lang)                      # 8
-    _page_vadim_profile(story, st, payload, lang)              # 9
-    _page_disclaimer(story, st, lang)                          # 10
+    _build_page1(story, st, report_type, payload, lang)   # cover + executive + profile
+    _build_page2(story, st, payload, lang)                # KPI + charts + risks/signals
+    _build_page3(story, st, payload, lang)                # comparison + ROI + disclaimer
 
-    footer = _make_footer(lang)
+    footer = _make_footer(lang, total_pages=3)
     doc.build(story, onFirstPage=footer, onLaterPages=footer)
     data = buf.getvalue()
     buf.close()
@@ -1275,9 +1355,18 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     sample = {
         "name": "Dubai Marina",
+        "area": "Dubai Marina",
+        "emirate": "Dubai",
+        "developer": "Emaar Properties",
+        "handover_date": "Q4 2026",
+        "stage": "Off-plan",
+        "bedrooms_range": "1-3 BR",
         "avg_price": 2_450_000, "median_price": 2_100_000,
         "price_per_m2": 24_500, "deals": 1234, "yield": 6.8,
         "growth_yoy": 9.2, "liquidity": 87, "area_m2": 87,
+        "total_return_5y_pct": 38.5, "payback_years": 11,
+        "area_growth_5y": 32, "area_growth_10y": 71,
+        "monthly_rent": 14000, "budget": 2500000,
         "dynamics_series": [(f"M{i:02d}", 20000 + i * 350) for i in range(1, 13)],
         "price_distribution": [20000 + i * 80 for i in range(60)],
         "roi_5y": 38.5, "roi_10y": 95.4,
@@ -1285,12 +1374,17 @@ if __name__ == "__main__":
                           {"year": "Y3", "value": 22}, {"year": "Y4", "value": 30},
                           {"year": "Y5", "value": 38}],
         "comparison": [
-            {"name": "JBR", "price_per_m2": 22500, "deals": 980, "yield": 6.4},
-            {"name": "JLT", "price_per_m2": 19800, "deals": 1450, "yield": 7.1},
-            {"name": "Business Bay", "price_per_m2": 21000, "deals": 1320, "yield": 6.7},
+            {"name": "JBR", "area": "JBR", "price_per_m2": 22500, "deals": 980, "yield": 6.4, "growth": 7.2},
+            {"name": "JLT", "area": "JLT", "price_per_m2": 19800, "deals": 1450, "yield": 7.1, "growth": 8.5},
+            {"name": "Business Bay", "area": "Business Bay", "price_per_m2": 21000, "deals": 1320, "yield": 6.7, "growth": 9.0},
         ],
-        "risks": ["Off-plan delivery риск", "Volatility 12% YoY"],
-        "signals": ["RERA escrow", "Top-3 liquidity Dubai"],
+        "top_buildings": [
+            {"name": "Marina Gate 1", "price_per_m2": 25000, "deals": 120},
+            {"name": "Marina Promenade", "price_per_m2": 23500, "deals": 95},
+            {"name": "Princess Tower", "price_per_m2": 21000, "deals": 210},
+        ],
+        "risks": ["Off-plan delivery риск", "Volatility 12% YoY", "AED/RUB колебания"],
+        "signals": ["RERA escrow", "Top-3 liquidity Dubai", "Emaar — проверенный застройщик"],
     }
     out = generate_pdf_report("area", sample, lang="ru", output_dir="./_test")
     print(f"OK -> {out}")
