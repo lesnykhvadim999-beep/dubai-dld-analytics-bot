@@ -8179,6 +8179,23 @@ def build_best_object_report_v95(state):
 print("Loaded v95 best object menu addon only")
 
 
+async def _mv_offplan_refresher_loop():
+    """v133: Daily REFRESH MATERIALIZED VIEW CONCURRENTLY mv_offplan_summary.
+    Делается background-task'ом при старте сервиса, повторяется каждые 24h.
+    """
+    import subprocess
+    while True:
+        try:
+            r = subprocess.run(
+                ["python", "mv_refresher.py"],
+                capture_output=True, text=True, timeout=300
+            )
+            print(f"[mv_refresher] exit={r.returncode} stdout={r.stdout[:200]} stderr={r.stderr[:200]}")
+        except Exception as e:
+            print(f"[mv_refresher] err: {e}")
+        await asyncio.sleep(24 * 3600)
+
+
 async def main():
     print("Dubai DLD Analytics Bot started")
     try:
@@ -8186,6 +8203,8 @@ async def main():
         print("Telegram webhook cleared before polling")
     except Exception as e:
         print("WEBHOOK_CLEAR_ERROR", repr(e))
+    # v133: background MV refresher (mv_offplan_summary daily)
+    asyncio.create_task(_mv_offplan_refresher_loop())
     await dp.start_polling(bot)
 
 
