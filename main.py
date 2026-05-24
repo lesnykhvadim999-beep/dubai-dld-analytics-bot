@@ -3040,6 +3040,39 @@ def show_format_best_buildings(prop, area=None, period=None):
         )
     return text
 
+@dp.message(Command("menu"))
+async def cmd_menu_global(message: Message):
+    """v134 UX: /menu — глобальный возврат в главное меню из любого state
+    (включая wizard mid-step: smart_goal, best_object, format_compare, etc.).
+    Сбрасывает FSM-state через reset_to_main + transient ✓ pattern (B019)."""
+    user_id = message.from_user.id
+    reset_to_main(user_id)
+    try:
+        trans = await message.answer("✓", reply_markup=ReplyKeyboardRemove())
+        await trans.delete()
+    except Exception as _e:
+        print(f"[analytics] /menu reply-kb clear failed: {_e}", flush=True)
+    await message.answer(tr(user_id, "main_menu"), reply_markup=main_menu(user_id))
+
+
+@dp.message(Command("cancel"))
+async def cmd_cancel_global(message: Message):
+    """v134 UX: /cancel — отмена текущего wizard/сценария + главное меню."""
+    user_id = message.from_user.id
+    reset_to_main(user_id)
+    lang = user_languages.get(user_id, "en")
+    cancel_txt = {"ru": "❌ Действие отменено.",
+                  "en": "❌ Action cancelled.",
+                  "ar": "❌ تم الإلغاء."}.get(lang, "❌ Cancelled.")
+    try:
+        trans = await message.answer("✓", reply_markup=ReplyKeyboardRemove())
+        await trans.delete()
+    except Exception as _e:
+        print(f"[analytics] /cancel reply-kb clear failed: {_e}", flush=True)
+    await message.answer(cancel_txt)
+    await message.answer(tr(user_id, "main_menu"), reply_markup=main_menu(user_id))
+
+
 @dp.message(CommandStart())
 async def start_handler(message: Message):
     user_id = message.from_user.id
