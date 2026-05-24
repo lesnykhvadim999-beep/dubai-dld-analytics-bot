@@ -478,7 +478,8 @@ def kb(rows):
 
 
 def language_menu():
-    return kb([["🇷🇺 Русский"], ["🇬🇧 English"], ["🇦🇪 العربية"]])
+    # B044: EN first (default lang), then RU, then AR
+    return kb([["🇬🇧 English"], ["🇷🇺 Русский"], ["🇦🇪 العربية"]])
 
 
 def _main_menu_v64_legacy(user_id):
@@ -3128,10 +3129,11 @@ async def start_handler(message: Message):
     # v108.1: restored welcome text + logo fallback after Layla UX cut
     welcome_text = (
         "🏙 <b>Dubai DLD Analytics</b>\n"
-        "<i>Real-Estate Intelligence · UAE</i>\n\n"
-        "🇷🇺 Аналитика рынка недвижимости Дубая на данных DLD: цены, доходность, сделки, рейтинги.\n"
-        "🇬🇧 Dubai property market analytics powered by DLD data: prices, ROI, deals, rankings.\n"
-        "🇦🇪 تحليلات سوق العقارات في دبي مدعومة ببيانات DLD: الأسعار، العائد، الصفقات، التصنيفات.\n\n"
+        "<i>Real-time market intelligence · UAE</i>\n\n"
+        "🇬🇧 <b>200K+ transactions · 52 areas · Price trends · ROI rankings · Building reports · PDF export</b>\n"
+        "Dubai property market analytics powered by official DLD data — find the best ROI, compare areas, track price dynamics, get full building reports.\n\n"
+        "🇷🇺 <b>200K+ сделок · 52 района · Динамика цен · Рейтинги ROI · Отчёты по зданиям · PDF-экспорт</b>\n"
+        "Аналитика рынка недвижимости Дубая на официальных данных DLD — лучший ROI, сравнение районов, динамика цен, полные отчёты по зданиям.\n\n"
         "🌐 <b>Choose language / Выберите язык / اختر اللغة</b> ⬇️"
     )
     # v132: file_id cache for instant /start after first upload (avoids 15s sendPhoto timeout)
