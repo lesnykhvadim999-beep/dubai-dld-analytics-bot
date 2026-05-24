@@ -3376,7 +3376,7 @@ async def send_processing(message, text=None):
 
 
 def _is_main_button(user_id, text):
-    return text in ["🧠 Подбор", "🏢 Здание", "🏆 Лучший объект", "🏙 Район", "📊 Рейтинги", "⚖️ Сравнение форматов", "🧾 Сделки", "🌆 Дубай", "📑 Полный отчёт"]
+    return text in ["🧠 Подбор", "🏢 Здание", "🏆 Лучший объект", "🏙 Район", "📊 Рейтинги", "⚖️ Сравнение", "⚖️ Сравнение форматов", "🧾 Сделки", "🌆 Дубай", "📑 Полный отчёт"]
 
 
 def _normalize_period_from_text(user_id, text):
@@ -3791,7 +3791,7 @@ async def main_handler(message: Message):
             user_states[user_id] = {"step": "smart_goal", "history": []}
             await message.answer("🧠 <b>Инвестиционный подбор</b>\n\nВыберите цель покупки.", reply_markup=smart_goal_menu(user_id))
             return
-        if text == "⚖️ Сравнение форматов":
+        if text in ["⚖️ Сравнение", "⚖️ Сравнение форматов"]:
             user_states[user_id] = {"step": "format_compare_scope", "history": []}
             await message.answer(
                 "⚖️ <b>Сравнение форматов</b>\n\nСравню апартаменты, виллы и таунхаусы по цене входа, ликвидности, приросту, выгодности и инвестиционной логике.\n\nВыберите рынок анализа:",
