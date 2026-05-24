@@ -93,6 +93,15 @@ try:
 except Exception:
     _err_logger = None
 
+# B031: auto-incident response (maintenance + user notify + recovery)
+import os as _os
+_os.environ.setdefault("BOT_NAME", "analytics")
+try:
+    import error_watchdog as _ewd
+except Exception as _ewd_err:
+    print(f"[B031] error_watchdog import failed: {_ewd_err}", flush=True)
+    _ewd = None
+
 
 @dp.errors()
 async def _analytics_global_error_handler(event):
@@ -118,6 +127,12 @@ async def _analytics_global_error_handler(event):
                                     error_class=type(exc).__name__,
                                     user_id=user_id, context=ctx,
                                     tb=_tb.format_exc()[-1500:])
+        # B031: maintenance mode + user-facing reply + admin alert
+        if _ewd:
+            try:
+                await _ewd.handle_aiogram_error(event)
+            except Exception as _ewd_call_err:
+                print(f"[B031] handle_aiogram_error fail: {_ewd_call_err}", flush=True)
     except Exception:
         pass
     return True
