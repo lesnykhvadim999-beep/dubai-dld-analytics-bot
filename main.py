@@ -94,6 +94,8 @@ TABLE = "public.dld_transactions_full"
 
 user_languages = {}
 user_states = {}
+# v132: cache welcome logo file_id (avoids 1.5MB re-upload on every /start)
+_ANALYTICS_LOGO_FILE_ID = None
 
 
 def db():
@@ -3050,6 +3052,15 @@ async def start_handler(message: Message):
         "🇦🇪 تحليلات سوق العقارات في دبي مدعومة ببيانات DLD: الأسعار، العائد، الصفقات، التصنيفات.\n\n"
         "🌐 <b>Choose language / Выберите язык / اختر اللغة</b> ⬇️"
     )
+    # v132: file_id cache for instant /start after first upload (avoids 15s sendPhoto timeout)
+    global _ANALYTICS_LOGO_FILE_ID
+    if _ANALYTICS_LOGO_FILE_ID:
+        try:
+            await message.answer_photo(_ANALYTICS_LOGO_FILE_ID, caption=welcome_text, reply_markup=language_menu())
+            return
+        except Exception as _e0:
+            print(f"[welcome logo cached] {_e0}")
+            _ANALYTICS_LOGO_FILE_ID = None  # type: ignore[assignment]
     try:
         from aiogram.types import FSInputFile
         import os as _os
@@ -3063,7 +3074,13 @@ async def start_handler(message: Message):
                 break
         if _logo:
             try:
-                await message.answer_photo(FSInputFile(_logo), caption=welcome_text, reply_markup=language_menu())
+                _sent = await message.answer_photo(FSInputFile(_logo), caption=welcome_text, reply_markup=language_menu())
+                try:
+                    if _sent.photo:
+                        _ANALYTICS_LOGO_FILE_ID = _sent.photo[-1].file_id  # type: ignore[assignment]
+                        print(f"[welcome logo] file_id cached: {_ANALYTICS_LOGO_FILE_ID[:20]}...")
+                except Exception:
+                    pass
                 return
             except Exception as _e2:
                 print(f"[welcome logo send] {_e2}")
