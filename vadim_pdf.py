@@ -633,12 +633,136 @@ def _page_cover(story: list, st: dict, report_type: str, payload: dict, lang: st
     story.append(PageBreak())
 
 
+def _static_executive_template(payload: dict, lang: str) -> str:
+    """Содержательное резюме из payload без LLM (v_pdf_fill)."""
+    name = (payload.get("name") or payload.get("project_name")
+            or payload.get("title") or payload.get("area") or "").strip()
+    area = (payload.get("area") or payload.get("location") or "").strip()
+    dev  = (payload.get("developer") or "").strip()
+    emirate = (payload.get("emirate") or "Dubai").strip()
+    handover = payload.get("handover_date") or payload.get("completion_year") or ""
+    stage = payload.get("stage") or payload.get("status") or ""
+    bedrooms = payload.get("bedrooms_range") or payload.get("bedrooms") or ""
+    price_from = (payload.get("price_from") or payload.get("min_price")
+                  or payload.get("avg_price"))
+    desc = payload.get("description") or ""
+
+    yld = payload.get("yield") or payload.get("rental_yield")
+    growth = payload.get("growth_yoy") or payload.get("growth")
+    deals = (payload.get("deals") or payload.get("deals_12m")
+             or payload.get("tx_count_12m"))
+    total_return_5y = payload.get("total_return_5y_pct")
+    payback = payload.get("payback_years")
+
+    parts: List[str] = []
+    if lang == "ru":
+        intro = []
+        if name:
+            if area and area.lower() != name.lower():
+                intro.append(f"Проект «{name}» расположен в районе {area} ({emirate})")
+            else:
+                intro.append(f"Проект «{name}» ({emirate})")
+        elif area:
+            intro.append(f"Район {area} ({emirate})")
+        if dev:
+            intro.append(f"застройщик — {dev}")
+        if handover:
+            intro.append(f"сдача: {handover}")
+        if stage:
+            intro.append(f"стадия: {stage}")
+        if bedrooms:
+            intro.append(f"планировки: {bedrooms}")
+        if price_from:
+            intro.append(f"цены от {_money(price_from)}")
+        if intro:
+            parts.append(". ".join(intro).capitalize() + ".")
+
+        mkt = []
+        if deals:
+            mkt.append(f"за последние 12 месяцев в районе зарегистрировано {_num(deals)} сделок DLD")
+        if yld:
+            mkt.append(f"средняя rental yield ~{_pct(yld)}")
+        if growth is not None:
+            try:
+                g = float(growth)
+                sign = "рост" if g >= 0 else "коррекция"
+                mkt.append(f"{sign} цен YoY {_pct(abs(g))}")
+            except Exception:
+                pass
+        if mkt:
+            parts.append("Рыночная динамика: " + ", ".join(mkt) + ".")
+
+        inv = []
+        if total_return_5y is not None:
+            inv.append(f"совокупная доходность 5 лет ~{_pct(total_return_5y)}")
+        if payback:
+            inv.append(f"окупаемость аренды ~{payback} лет")
+        if inv:
+            parts.append("Инвестиционный профиль: " + ", ".join(inv) + ".")
+
+        if desc:
+            d = str(desc).strip().replace("\n", " ")
+            parts.append(d[:600])
+    else:
+        intro = []
+        if name:
+            if area and area.lower() != name.lower():
+                intro.append(f"{name} is located in {area} ({emirate})")
+            else:
+                intro.append(f"{name} ({emirate})")
+        elif area:
+            intro.append(f"Area: {area} ({emirate})")
+        if dev:
+            intro.append(f"developer: {dev}")
+        if handover:
+            intro.append(f"handover: {handover}")
+        if bedrooms:
+            intro.append(f"layouts: {bedrooms}")
+        if price_from:
+            intro.append(f"prices from {_money(price_from)}")
+        if intro:
+            parts.append(". ".join(intro).capitalize() + ".")
+
+        mkt = []
+        if deals:
+            mkt.append(f"DLD recorded {_num(deals)} deals in the area over 12 months")
+        if yld:
+            mkt.append(f"average rental yield ~{_pct(yld)}")
+        if growth is not None:
+            try:
+                g = float(growth)
+                sign = "growth" if g >= 0 else "correction"
+                mkt.append(f"YoY price {sign} {_pct(abs(g))}")
+            except Exception:
+                pass
+        if mkt:
+            parts.append("Market dynamics: " + ", ".join(mkt) + ".")
+
+        if desc:
+            d = str(desc).strip().replace("\n", " ")
+            parts.append(d[:600])
+
+    if not parts:
+        return _t(lang, "summary_fallback")
+    return "\n\n".join(parts)
+
+
 def _page_executive(story: list, st: dict, payload: dict, lang: str):
     story.append(Paragraph(_t(lang, "exec_summary"), st["h1"]))
     story.append(Spacer(1, 0.2 * cm))
     summary = payload.get("summary") or payload.get("llm_summary")
     if not summary:
-        summary = _llm_summary(payload, lang)
+        # v_pdf_fill: try LLM, but always fall back to a content-rich static
+        # template if LLM is unavailable / returns the generic stub.
+        try:
+            llm_out = _llm_summary(payload, lang)
+        except Exception:
+            llm_out = None
+        generic = _t(lang, "summary_fallback")
+        if (not llm_out) or llm_out.strip() == generic.strip() or len(llm_out.strip()) < 80:
+            summary = _static_executive_template(payload, lang)
+        else:
+            summary = llm_out
     # Hard sanitize
     summary = (summary
                .replace("First Place Realtor L.L.C.", "Vadim Realty")
@@ -677,33 +801,86 @@ def _kpi_table(items: List[Tuple[str, str]], st: dict, cols: int = 3) -> Optiona
 
 def _page_details(story: list, st: dict, payload: dict, lang: str):
     story.append(Paragraph(_t(lang, "details"), st["h1"]))
+    LABELS = {
+        "ru": {
+            "avg_price":  "Средняя цена",
+            "median_price": "Медиана",
+            "price_per_m2": "Цена за м²",
+            "deals":      "Сделок (12m)",
+            "yield":      "Rental yield",
+            "growth":     "Рост YoY",
+            "liquidity":  "Ликвидность",
+            "units":      "Юнитов",
+            "area":       "Площадь",
+            "developer":  "Застройщик",
+            "handover":   "Сдача",
+            "bedrooms":   "Спальни",
+            "emirate":    "Эмират",
+            "stage":      "Стадия",
+            "score":      "Investment Score",
+            "payback":    "Окупаемость",
+            "return_5y":  "Доход 5y",
+            "top_psf":    "Top-quartile PSF",
+        },
+        "en": {
+            "avg_price":  "Average price",
+            "median_price": "Median price",
+            "price_per_m2": "Price per m²",
+            "deals":      "Deals (12m)",
+            "yield":      "Rental yield",
+            "growth":     "YoY growth",
+            "liquidity":  "Liquidity",
+            "units":      "Units",
+            "area":       "Area",
+            "developer":  "Developer",
+            "handover":   "Handover",
+            "bedrooms":   "Bedrooms",
+            "emirate":    "Emirate",
+            "stage":      "Stage",
+            "score":      "Investment score",
+            "payback":    "Payback",
+            "return_5y":  "5y total return",
+            "top_psf":    "Top-quartile PSF",
+        },
+    }
+    L = LABELS.get(lang, LABELS["en"])
+
     kpis = payload.get("kpis") or []
     if not kpis:
-        # auto-extract from common payload keys
-        auto = []
-        for label_key, getter in [
-            ("Average price", lambda p: _money(p.get("avg_price"))),
-            ("Median price", lambda p: _money(p.get("median_price"))),
-            ("Price per m²", lambda p: _money(p.get("price_per_m2"), " AED/m²")),
-            ("Deals (12m)", lambda p: _num(p.get("deals") or p.get("deals_12m"))),
-            ("Rental yield", lambda p: _pct(p.get("yield"))),
-            ("YoY growth", lambda p: _pct(p.get("growth_yoy"))),
-            ("Liquidity", lambda p: _num(p.get("liquidity"))),
-            ("Total units", lambda p: _num(p.get("total_units"))),
-            ("Area (m²)", lambda p: _num(p.get("area_m2"), " m²")),
-        ]:
-            v = getter(payload)
-            if v and v != "—":
-                auto.append((label_key, v))
+        auto: List[Tuple[str, str]] = []
+        def add(label, value):
+            if value and value != "—":
+                auto.append((label, value))
+        add(L["avg_price"],     _money(payload.get("avg_price")))
+        add(L["median_price"],  _money(payload.get("median_price")))
+        add(L["price_per_m2"],  _money(payload.get("price_per_m2"), " AED/m²"))
+        add(L["top_psf"],       _money(payload.get("area_top_psf"), " AED/ft²") if payload.get("area_top_psf") else None)
+        add(L["deals"],         _num(payload.get("deals") or payload.get("deals_12m") or payload.get("tx_count_12m")))
+        add(L["yield"],         _pct(payload.get("yield") or payload.get("rental_yield")))
+        add(L["growth"],        _pct(payload.get("growth_yoy") or payload.get("growth")))
+        add(L["return_5y"],     _pct(payload.get("total_return_5y_pct")))
+        add(L["payback"],       (f"{payload.get('payback_years')} лет" if lang == "ru" and payload.get("payback_years")
+                                 else (f"{payload.get('payback_years')} years" if payload.get("payback_years") else None)))
+        add(L["units"],         _num(payload.get("total_units") or payload.get("units")))
+        add(L["area"],          (_num(payload.get("area_m2"), " m²") if payload.get("area_m2") else None))
+        add(L["developer"],     str(payload.get("developer") or "") or None)
+        add(L["handover"],      str(payload.get("handover_date") or payload.get("completion_year") or "") or None)
+        add(L["bedrooms"],      str(payload.get("bedrooms_range") or payload.get("bedrooms") or "") or None)
+        add(L["emirate"],       str(payload.get("emirate") or "") or None)
+        add(L["stage"],         str(payload.get("stage") or payload.get("status") or "") or None)
+        add(L["score"],         (str(payload.get("investment_score")) if payload.get("investment_score") is not None else None))
         kpis = auto
+
     if kpis:
-        t = _kpi_table([(l, v) for l, v in kpis][:9], st, cols=3)
+        # show up to 9 (3x3) — pick the most informative first
+        kpis = kpis[:9]
+        t = _kpi_table([(l, v) for l, v in kpis], st, cols=3)
         if t:
             story.append(t)
             story.append(Spacer(1, 0.4 * cm))
     desc = payload.get("description") or payload.get("details_text")
     if desc:
-        story.append(Paragraph(desc[:1500], st["body"]))
+        story.append(Paragraph(str(desc)[:1500], st["body"]))
     story.append(PageBreak())
 
 
@@ -725,21 +902,27 @@ def _page_dld_charts(story: list, st: dict, payload: dict, lang: str):
     has_dist = bool(dist) or (extras and isinstance(extras, list))
 
     # Fallback KPI summary (используется когда нет графиков)
+    L_psm = "Цена / м²" if lang == "ru" else "Avg price / m²"
+    L_median = "Медиана сделки" if lang == "ru" else "Median deal"
+    L_deals = "Сделок (12m)" if lang == "ru" else "Deals (12m)"
+    L_g5 = "Рост района 5 лет" if lang == "ru" else "Area growth 5y"
+    L_g10 = "Рост района 10 лет" if lang == "ru" else "Area growth 10y"
+    L_yld = "Rental yield"
     fb_kpis = []
     if payload.get("avg_price_psf") or payload.get("price_per_m2"):
-        fb_kpis.append(("Avg price / m²",
+        fb_kpis.append((L_psm,
                         _money(payload.get("price_per_m2") or payload.get("avg_price_psf"),
                                " AED/m²")))
     if payload.get("median_price"):
-        fb_kpis.append(("Median deal", _money(payload.get("median_price"))))
+        fb_kpis.append((L_median, _money(payload.get("median_price"))))
     if payload.get("deals"):
-        fb_kpis.append(("Deals (12m)", _num(payload.get("deals"))))
+        fb_kpis.append((L_deals, _num(payload.get("deals"))))
     if payload.get("area_growth_5y") is not None:
-        fb_kpis.append(("Area growth 5y", _pct(payload.get("area_growth_5y"))))
+        fb_kpis.append((L_g5, _pct(payload.get("area_growth_5y"))))
     if payload.get("area_growth_10y") is not None:
-        fb_kpis.append(("Area growth 10y", _pct(payload.get("area_growth_10y"))))
+        fb_kpis.append((L_g10, _pct(payload.get("area_growth_10y"))))
     if payload.get("yield"):
-        fb_kpis.append(("Rental yield", _pct(payload.get("yield"))))
+        fb_kpis.append((L_yld, _pct(payload.get("yield"))))
 
     # Если совсем ничего нет → скипаем секцию целиком (8-страничный PDF)
     if not has_dynamics and not has_dist and not fb_kpis and not notes:
@@ -804,20 +987,33 @@ def _page_roi(story: list, st: dict, payload: dict, lang: str):
         rows = [(str(b.get("year") or b.get("label")), float(b.get("value") or 0))
                 for b in bd if b.get("value") is not None][:10]
     # KPI line
+    L_yld    = "Rental yield"
+    L_growth = "Рост в год" if lang == "ru" else "Growth p.a."
+    L_budget = "Бюджет" if lang == "ru" else "Budget"
+    L_rent   = "Аренда / мес" if lang == "ru" else "Monthly rent"
+    L_g5     = "Рост района 5 лет" if lang == "ru" else "Area growth 5y"
+    L_g10    = "Рост района 10 лет" if lang == "ru" else "Area growth 10y"
+    L_5y     = "Доход 5 лет" if lang == "ru" else "5y total return"
+    L_pb     = "Окупаемость" if lang == "ru" else "Payback"
     kpis = []
     if payload.get("yield"):
-        kpis.append(("Rental yield", _pct(payload.get("yield"))))
+        kpis.append((L_yld, _pct(payload.get("yield"))))
     if payload.get("growth"):
-        kpis.append(("Growth p.a.", _pct(payload.get("growth"))))
+        kpis.append((L_growth, _pct(payload.get("growth"))))
     if payload.get("budget"):
-        kpis.append(("Budget", _money(payload.get("budget"))))
+        kpis.append((L_budget, _money(payload.get("budget"))))
     if payload.get("monthly_rent"):
-        kpis.append(("Monthly rent", _money(payload.get("monthly_rent"))))
+        kpis.append((L_rent, _money(payload.get("monthly_rent"))))
+    if payload.get("total_return_5y_pct") is not None:
+        kpis.append((L_5y, _pct(payload.get("total_return_5y_pct"))))
+    if payload.get("payback_years"):
+        kpis.append((L_pb, (f"{payload.get('payback_years')} лет" if lang == "ru"
+                            else f"{payload.get('payback_years')} years")))
     # v132: proxy KPIs (area growth) если нет прямого ROI
     if payload.get("area_growth_5y") is not None:
-        kpis.append(("Area growth 5y", _pct(payload.get("area_growth_5y"))))
+        kpis.append((L_g5, _pct(payload.get("area_growth_5y"))))
     if payload.get("area_growth_10y") is not None:
-        kpis.append(("Area growth 10y", _pct(payload.get("area_growth_10y"))))
+        kpis.append((L_g10, _pct(payload.get("area_growth_10y"))))
 
     # v132: скип целой страницы если совсем нет данных (короче PDF, чем
     # «Недостаточно данных»)
@@ -854,7 +1050,10 @@ def _page_comparison(story: list, st: dict, payload: dict, lang: str):
     story.append(Paragraph(_t(lang, "comparison"), st["h1"]))
     comp = payload.get("comparison") or payload.get("similar") or []
     if comp:
-        head = ["#", "Name", "Price / m²", "Deals", "Yield"]
+        if lang == "ru":
+            head = ["#", "Название", "Цена / м²", "Сделок", "Yield"]
+        else:
+            head = ["#", "Name", "Price / m²", "Deals", "Yield"]
         rows = [head]
         for i, c in enumerate(comp[:10], 1):
             rows.append([
@@ -879,7 +1078,42 @@ def _page_comparison(story: list, st: dict, payload: dict, lang: str):
         ]))
         story.append(t)
     else:
-        story.append(Paragraph(_t(lang, "no_data"), st["muted"]))
+        # v_pdf_fill: текстовый fallback вместо «Недостаточно данных».
+        # Описываем район / средние KPI и зачем сравнение, чтобы не выглядело пусто.
+        area = (payload.get("area") or payload.get("location") or "").strip()
+        avg = payload.get("avg_price") or payload.get("area_avg_price")
+        psf = payload.get("price_per_m2") or payload.get("area_median_psf")
+        yld = payload.get("yield") or payload.get("rental_yield")
+        if lang == "ru":
+            lines = []
+            if area:
+                lines.append(f"<b>{area}</b> — район Dubai, активный сегмент off-plan / secondary.")
+            if avg:
+                lines.append(f"Средняя цена сделок в районе: {_money(avg)}.")
+            if psf:
+                lines.append(f"Цена за м² (медиана района): {_money(psf, ' AED/m²')}.")
+            if yld:
+                lines.append(f"Типичная rental yield: {_pct(yld)}.")
+            lines.append("Прямое сравнение с похожими проектами доступно для активов, "
+                         "имеющих вторичный трек; для большинства off-plan проектов это "
+                         "сравнение появляется после handover. Связаться с брокером для "
+                         "подбора похожих объектов: "
+                         f"{BRAND_CONTACT_TG}.")
+        else:
+            lines = []
+            if area:
+                lines.append(f"<b>{area}</b> — active Dubai sub-market across off-plan and secondary segments.")
+            if avg:
+                lines.append(f"Average area deal: {_money(avg)}.")
+            if psf:
+                lines.append(f"Median price per m²: {_money(psf, ' AED/m²')}.")
+            if yld:
+                lines.append(f"Typical rental yield: {_pct(yld)}.")
+            lines.append("Side-by-side comparison is available for assets with a secondary-market "
+                         "track. For most off-plan projects the comparison forms after handover. "
+                         f"Contact the broker for shortlist: {BRAND_CONTACT_TG}.")
+        for ln in lines:
+            story.append(Paragraph(ln, st["body"]))
     story.append(PageBreak())
 
 
