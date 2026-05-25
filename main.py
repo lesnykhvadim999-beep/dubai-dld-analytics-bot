@@ -8393,6 +8393,11 @@ async def main():
         print("Telegram webhook cleared before polling")
     except Exception as e:
         print("WEBHOOK_CLEAR_ERROR", repr(e))
+    # B051 v5: задержка 180с — Railway rolling deploy, старый контейнер жив ~30-60с.
+    # Ждём 3 мин чтобы гарантированно убить его до начала polling.
+    print("[B051] Startup delay 180s — waiting for old Railway container to die…", flush=True)
+    await asyncio.sleep(180)
+    print("[B051] Startup delay done, polling starts now.", flush=True)
     # v133: background MV refresher (mv_offplan_summary daily)
     asyncio.create_task(_mv_offplan_refresher_loop())
     await dp.start_polling(bot)
