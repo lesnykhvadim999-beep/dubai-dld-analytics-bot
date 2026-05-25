@@ -6713,7 +6713,7 @@ async def handle_pdf_request(message):
         from aiogram.types import FSInputFile
         await message.answer_document(
             FSInputFile(pdf_path, filename="vadim_realty_report.pdf"),
-            caption="📄 <b>Vadim Realty</b> · RERA BRN 65011\nИнвестиционный отчёт готов.",
+            caption="📄 <b>Vadim Realty</b>\nИнвестиционный отчёт готов.",
             reply_markup=result_menu(user_id, state.get("scope")),
         )
         return

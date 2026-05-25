@@ -25,7 +25,7 @@ API:
 Performance цель: < 5 сек на отчёт, < 500KB файл.
 
 Бренд:
-  «Vadim Realty · RERA Licensed Broker · BRN 65011 · Dubai»
+  «Vadim Realty · Dubai Real Estate»
   НИКОГДА не упоминать "First Place Realtor L.L.C." (см. memory feedback).
 """
 from __future__ import annotations
@@ -44,8 +44,7 @@ log = logging.getLogger("vadim_pdf")
 
 # ── Brand identity (CRITICAL: don't change without checking memory) ──
 BRAND_NAME = "Vadim Realty"
-BRAND_SUBTITLE = "RERA Licensed Broker · BRN 65011 · Dubai"
-BRAND_BRN = "65011"
+BRAND_SUBTITLE = "Dubai Real Estate"
 BRAND_CONTACT_TG = "@vadim_dubai_realty"
 BRAND_CONTACT_PHONE = "+971 58 539 86 64"
 
@@ -245,9 +244,7 @@ I18N = {
                             "Vadim Realty работает только с проверенными застройщиками",
                             "Прозрачный escrow согласно DLD"],
         "summary_fallback":"Подробный отчёт по выбранному запросу. Все цифры взяты из официальной базы Dubai Pulse / DLD.",
-        "vadim_bio":       ("Вадим — RERA-лицензированный брокер в Дубае (BRN 65011). "
-                            "Специализация: жилая недвижимость, off-plan и вторичный рынок. "
-                            "Все рекомендации основаны на данных Dubai Pulse / DLD и собственной аналитике."),
+        "vadim_bio":       "Вадим — эксперт по недвижимости Дубая.",
         "disclaimer_text": ("Данный отчёт носит информационный характер и не является публичной офертой или "
                             "индивидуальной инвестиционной рекомендацией. Все цифры рассчитаны на основе "
                             "публично доступных данных Dubai Land Department и могут расходиться с реальными "
@@ -284,9 +281,7 @@ I18N = {
                             "Vadim Realty works only with vetted developers",
                             "Transparent DLD escrow"],
         "summary_fallback":"Detailed report for the selected query. All figures come from the official Dubai Pulse / DLD database.",
-        "vadim_bio":       ("Vadim is a RERA-licensed broker in Dubai (BRN 65011). "
-                            "Specialization: residential property, off-plan and secondary market. "
-                            "All recommendations are based on Dubai Pulse / DLD data and proprietary analytics."),
+        "vadim_bio":       "Vadim — Dubai real estate expert.",
         "disclaimer_text": ("This report is for informational purposes only and does not constitute a public offer "
                             "or individual investment advice. All figures are calculated from publicly available "
                             "Dubai Land Department data and may differ from actual transactions. Past performance "
@@ -323,7 +318,7 @@ I18N = {
                             "تعمل Vadim Realty مع المطورين الموثوقين فقط",
                             "ضمان شفاف من DLD"],
         "summary_fallback":"تقرير مفصل. تأتي جميع الأرقام من قاعدة بيانات DLD.",
-        "vadim_bio":       "وديم وسيط مرخص من RERA في دبي (BRN 65011).",
+        "vadim_bio":       "وديم خبير عقارات في دبي.",
         "disclaimer_text": "هذا التقرير لأغراض إعلامية فقط ولا يشكل عرضًا عامًا أو نصيحة استثمارية فردية.",
     },
 }
@@ -939,7 +934,7 @@ def _make_footer(lang: str, total_pages: int = 3):
         canvas.setFont(_FONT_REG if _FONT_REG in pdfmetrics.getRegisteredFontNames() else "Helvetica", 7)
         canvas.setFillColor(STONE_500)
         canvas.drawString(1.4 * cm, 0.9 * cm,
-                          f"{BRAND_NAME} · RERA BRN {BRAND_BRN} · Dubai")
+                          f"{BRAND_NAME} · Dubai Real Estate")
         page = canvas.getPageNumber()
         canvas.drawRightString(A4[0] - 1.4 * cm, 0.9 * cm,
                                f"{_t(lang, 'page')} {page} {_t(lang, 'of')} {total_pages}")
@@ -1207,7 +1202,7 @@ def _build_page1(story: list, st: dict, report_type: str,
         f"{_t(lang, 'vadim_bio')}<br/>"
         f"<b>Telegram:</b> {BRAND_CONTACT_TG}   "
         f"<b>Phone:</b> {BRAND_CONTACT_PHONE}   "
-        f"<b>RERA BRN:</b> {BRAND_BRN}"
+        f"<b>Contact:</b> {BRAND_CONTACT_TG}"
     )
     profile_right = Paragraph(contact_html, st["contact"])
 
@@ -1594,7 +1589,7 @@ def _build_page3(story: list, st: dict, payload: dict, lang: str):
         story.append(Paragraph(para.strip(), st["disclaimer"]))
     story.append(Spacer(1, 0.2 * cm))
     story.append(Paragraph(
-        f"© {datetime.utcnow().year} {BRAND_NAME} · BRN {BRAND_BRN} · Dubai, UAE · "
+        f"© {datetime.utcnow().year} {BRAND_NAME} · Dubai, UAE · "
         f"{BRAND_CONTACT_TG} · {BRAND_CONTACT_PHONE}",
         st["muted"]))
     # no PageBreak — last page
