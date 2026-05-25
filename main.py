@@ -6703,7 +6703,7 @@ async def handle_pdf_request(message):
         }
         # try add dynamics if available in state
         if state.get("dynamics_series"):
-            payload["dynamics_series"] = state["dynamics_series"]
+            payload["dynamics_series"] = state.get("dynamics_series")
         pdf_path = generate_pdf_report(report_type, payload, lang="ru")
     except Exception as _e:
         import logging as _lg
