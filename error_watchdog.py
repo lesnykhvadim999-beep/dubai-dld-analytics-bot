@@ -58,6 +58,8 @@ ADMIN_BOT_TOKEN = os.environ.get("HUB_BOT_TOKEN") or SELF_BOT_TOKEN
 
 _RECOVERY_NO_ERROR_WINDOW_MIN = 5
 _AUTO_RESTART_AFTER_MIN = 60
+_ALERT_REPEAT_MIN = 60
+_maintenance_alerted: dict = {}
 
 
 def _get_conn():
@@ -502,20 +504,25 @@ def recovery_tick():
             )
             print(msg, flush=True)
             out.append((bot, started))
-            # Best-effort admin alert
-            try:
-                import requests
-                if ADMIN_BOT_TOKEN and ADMIN_CHAT_ID:
-                    requests.post(
-                        f"https://api.telegram.org/bot{ADMIN_BOT_TOKEN}/sendMessage",
-                        json={
-                            "chat_id": ADMIN_CHAT_ID,
-                            "text": f"⚠️ {bot} в maintenance >{_AUTO_RESTART_AFTER_MIN} мин. Нужен redeploy.",
-                        },
-                        timeout=5,
-                    )
-            except Exception:
-                pass
+            # Best-effort admin alert — не чаще 1 раза в час на бота
+            import time as _time
+            now_ts = _time.time()
+            last_sent = _maintenance_alerted.get(bot, 0)
+            if now_ts - last_sent >= _ALERT_REPEAT_MIN * 60:
+                _maintenance_alerted[bot] = now_ts
+                try:
+                    import requests
+                    if ADMIN_BOT_TOKEN and ADMIN_CHAT_ID:
+                        requests.post(
+                            f"https://api.telegram.org/bot{ADMIN_BOT_TOKEN}/sendMessage",
+                            json={
+                                "chat_id": ADMIN_CHAT_ID,
+                                "text": f"⚠️ {bot} в maintenance >{_AUTO_RESTART_AFTER_MIN} мин. Нужен redeploy.",
+                            },
+                            timeout=5,
+                        )
+                except Exception:
+                    pass
         cur.close()
         conn.close()
     except Exception as e:
