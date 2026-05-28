@@ -497,6 +497,15 @@ def main():
                     ic.commit()
             except Exception:
                 pass
+        # Also refresh daily_market_reports (separate table consumed by PDF/analytics).
+        try:
+            import daily_reports
+            daily_reports.run_daily(
+                max_areas=int(os.getenv("DAILY_REPORTS_MAX_AREAS", "150")),
+                max_buildings=int(os.getenv("DAILY_REPORTS_MAX_BUILDINGS", "300")),
+            )
+        except Exception:
+            logging.exception("daily_reports.run_daily failed")
         logging.info("Sleeping %s seconds before next intelligence cycle...", CYCLE_SECONDS)
         time.sleep(CYCLE_SECONDS)
 
