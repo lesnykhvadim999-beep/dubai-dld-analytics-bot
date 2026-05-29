@@ -42,11 +42,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 log = logging.getLogger("vadim_pdf")
 
-# ── Brand identity (text cleared — logo image only) ──
-BRAND_NAME = ""
-BRAND_SUBTITLE = ""
-BRAND_RERA = ""
-BRAND_BRN = ""
+# ── Brand identity ──
+BRAND_NAME = "Vadim Realty"
+BRAND_SUBTITLE = "Premium Dubai Real Estate"
+BRAND_RERA = "RERA BRN 65011"
+BRAND_BRN = "65011"
 
 # ── reportlab (lazy load – may not be installed in dev) ──
 try:
@@ -1922,7 +1922,22 @@ def _build_page1(story: list, st: dict, report_type: str,
         ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
     ]))
     story.append(header_tbl)
-    story.append(Spacer(1, 0.35 * cm))
+    story.append(Spacer(1, 0.15 * cm))
+
+    # P1-6: brand + RERA BRN line directly under navy header
+    _brand_style = ParagraphStyle(
+        "brand_line",
+        fontName=st["FB"],
+        fontSize=9,
+        textColor=GOLD,
+        alignment=TA_CENTER,
+        leading=11,
+    )
+    story.append(Paragraph(
+        f"<b>{BRAND_NAME}</b>  ·  {BRAND_SUBTITLE}  ·  {BRAND_RERA}",
+        _brand_style,
+    ))
+    story.append(Spacer(1, 0.25 * cm))
 
     # ── Report title block ──
     title = I18N.get(lang, I18N["en"])["report_types"].get(
