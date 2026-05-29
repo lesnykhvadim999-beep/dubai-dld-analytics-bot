@@ -207,14 +207,39 @@ def try_area_stats(area_name: str,
     rm = _norm_rooms(rooms)
     dl = _norm_deal(deal_type)
 
-    sql = """
+    # P1: single source of truth — same MV as resale-bot reads. Eliminates
+    # AVG(median_price) bug (медиана медиан != медиана) and ensures cross-bot
+    # consistency. mv_area_12m_summary is pre-aggregated per
+    # (area_key, rooms, property_type, deal_type), so no aggregation needed.
+    # Falls back to legacy area_stats SUM/AVG if MV row missing.
+    mv_sql = """
+        SELECT
+            area_name,
+            deals                                AS deals,
+            avg_price                            AS avg_price,
+            avg_price                            AS median_price,
+            top_quartile_price                   AS top_quartile_price,
+            avg_price_psf                        AS avg_price_psf,
+            top_quartile_psf                     AS top_quartile_psf,
+            yoy_growth_pct                       AS yoy_growth_pct,
+            yoy_growth_top_pct                   AS yoy_growth_top_pct,
+            avg_rental_yield_pct                 AS avg_rental_yield_pct,
+            top_rental_yield_pct                 AS top_rental_yield_pct,
+            NULL::timestamptz                    AS computed_at
+        FROM mv_area_12m_summary
+        WHERE area_key = %s
+          AND property_type = %s
+          AND rooms = %s
+          AND deal_type = %s
+    """
+    legacy_sql = """
         SELECT
             MIN(area_name)                                                       AS area_name,
             SUM(deals_count)::int                                                AS deals,
             (SUM(avg_price_aed * deals_count) / NULLIF(SUM(deals_count),0))      AS avg_price,
-            AVG(median_price_aed)                                                AS median_price,
+            (SUM(median_price_aed * deals_count) / NULLIF(SUM(deals_count),0))   AS median_price,
             MAX(top_quartile_price_aed)                                          AS top_quartile_price,
-            AVG(avg_price_psf)                                                   AS avg_price_psf,
+            (SUM(avg_price_psf * deals_count) / NULLIF(SUM(deals_count),0))      AS avg_price_psf,
             MAX(top_quartile_psf)                                                AS top_quartile_psf,
             AVG(yoy_growth_pct)                                                  AS yoy_growth_pct,
             MAX(yoy_growth_top_pct)                                              AS yoy_growth_top_pct,
@@ -228,10 +253,20 @@ def try_area_stats(area_name: str,
           AND deal_type = %s
           AND period_month >= %s
     """
+    row = None
     try:
         with _conn().cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(sql, (ak, pt, rm, dl, start))
-            row = cur.fetchone()
+            # Try MV first (only valid for 12m, default period)
+            if period_months == 12:
+                try:
+                    cur.execute(mv_sql, (ak, pt, rm, dl))
+                    row = cur.fetchone()
+                except Exception as mv_e:
+                    LOG.debug("mv_area_12m_summary query failed, fallback to area_stats: %s", mv_e)
+                    row = None
+            if not row or not row.get("deals"):
+                cur.execute(legacy_sql, (ak, pt, rm, dl, start))
+                row = cur.fetchone()
     except Exception as e:
         LOG.warning("try_area_stats failed: %s", e)
         return None
