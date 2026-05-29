@@ -1209,6 +1209,167 @@ def _grade_from_payload(payload: dict) -> str:
         return "B"
 
 
+# ── ROI-bot structured calc renderer ─────────────────────────────────────────
+def _build_roi_calc_section(story: list, st: dict, payload: dict, lang: str, _cw):
+    """
+    v_pdf3: renders structured ROI calculator output as PDF sections.
+    Mirrors the exact bot chat format: yield / mortgage / growth / total / world.
+    Called from _build_page1 when report_type=='roi' and income_year is present.
+    """
+    is_ru = lang == "ru"
+    is_ar = lang == "ar"
+
+    # ── localized labels ──────────────────────────────────────────────────────
+    def L(ru, en, ar=None):
+        if is_ru: return ru
+        if is_ar and ar: return ar
+        return en
+
+    lbl_rental  = L("ДОХОДНОСТЬ ОТ АРЕНДЫ", "RENTAL YIELD",       "عائد الإيجار")
+    lbl_mort    = L("ИПОТЕЧНЫЙ РАСЧЁТ",      "MORTGAGE BREAKDOWN", "حساب الرهن العقاري")
+    lbl_growth  = L("РОСТ КАПИТАЛА",         "CAPITAL GROWTH",     "نمو رأس المال")
+    lbl_total   = L("ИТОГО ЗА 5 ЛЕТ",       "5-YEAR TOTAL RETURN","العائد الإجمالي 5 سنوات")
+    lbl_world   = L("ДУБАЙ VS МИР",         "DUBAI vs WORLD",     "دبي مقابل العالم")
+
+    lbl_inc_yr  = L("Доход / год",        "Annual income")
+    lbl_yield   = "Rental Yield"
+    lbl_payback = L("Окупаемость",        "Payback period")
+    lbl_rent_mo = L("Аренда / мес",       "Monthly rent")
+    lbl_down    = L("Взнос",              "Down payment")
+    lbl_loan    = L("Кредит",             "Loan amount")
+    lbl_mp      = L("Платёж / мес",       "Monthly payment")
+    lbl_net_mo  = L("Чистый доход / мес", "Net monthly income")
+    lbl_coc     = "Cash-on-cash"
+    lbl_yr1     = L("Год 1",   "Year 1")
+    lbl_yr3     = L("3 года",  "Year 3")
+    lbl_yr5     = L("5 лет",   "Year 5")
+    lbl_rent5   = L("Аренда за 5 лет",     "Rental income (5yr)")
+    lbl_capgain = L("Прирост стоимости",   "Capital gain")
+    lbl_total_l = L("Итого",              "Total income")
+    lbl_roi_5   = L("ROI 5 лет",         "5yr ROI")
+
+    # ── data ──────────────────────────────────────────────────────────────────
+    budget  = float(payload.get("budget") or 0)
+    y       = float(payload.get("yield") or 0)
+    g       = float(payload.get("growth") or 0)
+    inc_yr  = float(payload.get("income_year") or 0)
+    rent_mo = float(payload.get("monthly_rent") or 0)
+    payback = float(payload.get("payback") or 0)
+    v1      = float(payload.get("v1") or 0)
+    v3      = float(payload.get("v3") or 0)
+    v5      = float(payload.get("v5") or 0)
+    g5      = float(payload.get("g5") or 0)
+    r5      = float(payload.get("roi_5y") or 0)
+    rent5   = float(payload.get("rental_5yr") or (inc_yr * 5))
+    has_mortgage = bool(payload.get("mortgage_payment"))
+
+    # ── row builder (label / value) ───────────────────────────────────────────
+    def row(label, value, bold_val=False):
+        vstyle = st["h3"] if bold_val else st["body_l"]
+        return [Paragraph(label, st["muted"]), Paragraph(value, vstyle)]
+
+    def pct_vs_base(v, b):
+        try:
+            return f"(+{(float(v)/float(b) - 1)*100:.0f}%)"
+        except Exception:
+            return ""
+
+    def make_table(rows, col_split=0.55):
+        t = Table(rows, colWidths=[_cw * col_split, _cw * (1 - col_split)], hAlign="LEFT")
+        t.setStyle(TableStyle([
+            ("FONTSIZE",      (0, 0), (-1, -1), 8),
+            ("TOPPADDING",    (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING",  (0, 0), (-1, -1), 0),
+        ]))
+        return t
+
+    # ── SECTION 1: Rental Yield ───────────────────────────────────────────────
+    story.append(SectionTitle(lbl_rental,
+                              subtitle=f"+{y:.1f}% yield · {payback:.1f}yr payback" if y else None,
+                              w=_cw))
+    story.append(Spacer(1, 0.1 * cm))
+    story.append(make_table([
+        row(lbl_inc_yr,  f"{_money(inc_yr)}  (+{y:.1f}%)"),
+        row(lbl_rent_mo, _money(rent_mo)),
+        row(lbl_payback, f"{payback:.1f} yr" if payback else "—"),
+    ]))
+    story.append(Spacer(1, 0.2 * cm))
+
+    # ── SECTION 2: Mortgage (if applicable) ──────────────────────────────────
+    if has_mortgage:
+        story.append(SectionTitle(lbl_mort, w=_cw))
+        story.append(Spacer(1, 0.1 * cm))
+        story.append(make_table([
+            row(lbl_down,   _money(payload.get("down_payment"))),
+            row(lbl_loan,   _money(payload.get("loan"))),
+            row(lbl_mp,     _money(payload.get("mortgage_payment"))),
+            row(lbl_net_mo, _money(payload.get("net_monthly"))),
+            row(lbl_coc,    f"{payload.get('cash_on_cash', 0):.1f}%"),
+        ]))
+        story.append(Spacer(1, 0.2 * cm))
+
+    # ── SECTION 3: Capital Growth ─────────────────────────────────────────────
+    story.append(SectionTitle(lbl_growth,
+                              subtitle=f"+{g:.0f}%/yr" if g else None,
+                              w=_cw))
+    story.append(Spacer(1, 0.1 * cm))
+    story.append(make_table([
+        row(lbl_yr1, f"{_money(v1)}  {pct_vs_base(v1, budget)}"),
+        row(lbl_yr3, f"{_money(v3)}  {pct_vs_base(v3, budget)}"),
+        row(lbl_yr5, f"{_money(v5)}  {pct_vs_base(v5, budget)}"),
+    ], col_split=0.45))
+    story.append(Spacer(1, 0.2 * cm))
+
+    # ── SECTION 4: 5-year total ───────────────────────────────────────────────
+    story.append(SectionTitle(lbl_total, w=_cw))
+    story.append(Spacer(1, 0.1 * cm))
+    total_tbl = Table([
+        row(lbl_rent5,   _money(rent5)),
+        row(lbl_capgain, _money(g5)),
+        row(lbl_total_l, _money(rent5 + g5), bold_val=True),
+        row(lbl_roi_5,   f"{r5:.1f}%",        bold_val=True),
+    ], colWidths=[_cw * 0.55, _cw * 0.45], hAlign="LEFT")
+    total_tbl.setStyle(TableStyle([
+        ("FONTSIZE",      (0, 0), (-1, -1), 8),
+        ("TOPPADDING",    (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 0),
+        ("LINEABOVE",     (0, 2), (-1, 2),  0.8, GOLD),
+        ("BACKGROUND",    (0, 2), (-1, 3),  OFF_WHITE),
+    ]))
+    story.append(total_tbl)
+    story.append(Spacer(1, 0.2 * cm))
+
+    # ── SECTION 5: Dubai vs World ─────────────────────────────────────────────
+    WORLD_STATIC = {
+        "London": 2.5, "New York": 2.9, "Paris": 2.2,
+        "Singapore": 3.1, "Hong Kong": 2.3, "Berlin": 3.8,
+    }
+    world_data = payload.get("world_comparison") or WORLD_STATIC
+    district = payload.get("name") or "Dubai"
+    story.append(SectionTitle(lbl_world, w=_cw))
+    story.append(Spacer(1, 0.1 * cm))
+    world_rows = [[Paragraph(f"🏙 {district}", st["h3"]),
+                   Paragraph(f"{y:.1f}%", st["h3"])]]
+    for city, yy in list(world_data.items())[:6]:
+        world_rows.append([Paragraph(city, st["muted"]),
+                           Paragraph(f"{yy:.1f}%", st["muted"])])
+    wt = Table(world_rows, colWidths=[_cw * 0.65, _cw * 0.35], hAlign="LEFT")
+    wt.setStyle(TableStyle([
+        ("FONTSIZE",      (0, 0), (-1, -1), 8),
+        ("TOPPADDING",    (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 0),
+        ("LINEBELOW",     (0, 0), (-1, 0),  0.8, TEAL),
+    ]))
+    story.append(wt)
+    story.append(Spacer(1, 0.15 * cm))
+
+
 # ── V3 Page builders ──────────────────────────────────────────────────────────
 def _build_page1(story: list, st: dict, report_type: str, payload: dict, lang: str):
     """Page 1: PremiumHeader + executive summary + 4 invest cards + 8 KPIs."""
@@ -1228,6 +1389,12 @@ def _build_page1(story: list, st: dict, report_type: str, payload: dict, lang: s
                                meta=" · ".join(meta_parts), price_str=price_str,
                                grade=grade, h=3.6*cm, cw=_cw))
     story.append(Spacer(1, 0.35*cm))
+
+    # v_pdf3: ROI-bot gets structured calc sections instead of garbled summary
+    if report_type == "roi" and payload.get("income_year"):
+        _build_roi_calc_section(story, st, payload, lang, _cw)
+        story.append(PageBreak())
+        return
 
     lbl_sum = "ИНВЕСТИЦИОННОЕ РЕЗЮМЕ" if lang == "ru" else "EXECUTIVE SUMMARY"
     story.append(SectionTitle(lbl_sum,
@@ -1778,6 +1945,12 @@ def _build_page1(story: list, st: dict, report_type: str,
     sub_line_parts.append(today)
     story.append(Paragraph(" · ".join(sub_line_parts), st["cover_meta"]))
     story.append(Spacer(1, 0.4 * cm))
+
+    # v_pdf3: ROI-bot gets structured calc sections instead of garbled summary
+    if report_type == "roi" and payload.get("income_year"):
+        _build_roi_calc_section(story, st, payload, lang, 17.8 * cm)
+        story.append(PageBreak())
+        return
 
     # ── Executive Summary section ──
     story.append(Paragraph(_t(lang, "exec_summary"), st["h1"]))
