@@ -39,6 +39,23 @@ except Exception as _ir_import_error:
 
 load_dotenv()
 
+# FSST: callback dedup + stale button middleware + health server
+try:
+    from fsst_core import (
+        CallbackDeduplicator, is_stale_button_error,
+        answer_stale, start_health_server,
+    )
+    _cb_dedup = CallbackDeduplicator()
+    _fsst_ok = True
+except Exception:
+    class CallbackDeduplicator:  # type: ignore
+        def is_dup_aiogram(self, cb): return False
+    _cb_dedup = CallbackDeduplicator()
+    _fsst_ok = False
+    def is_stale_button_error(e): return False
+    async def answer_stale(cb, lang="en"): pass
+    def start_health_server(**kw): pass
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -320,6 +337,14 @@ TEXTS = {
         "sale": "🏠 Продажа",
         "rent": "🔑 Аренда",
         "both": "📊 Всё",
+        "m_smart_pick": "🧠 Подбор",
+        "m_best_obj": "🏆 Лучший объект",
+        "m_area": "🏙 Район",
+        "m_building": "🏢 Здание",
+        "m_dubai": "🌆 Дубай",
+        "m_deals": "🧾 Сделки",
+        "m_ratings": "📊 Рейтинги",
+        "m_compare": "⚖️ Сравнение",
     },
     "en": {
         "choose_lang": "🏙 <b>Dubai DLD Analytics</b>\n\nChoose language:",
@@ -360,6 +385,14 @@ TEXTS = {
         "sale": "🏠 Sale",
         "rent": "🔑 Rent",
         "both": "📊 All",
+        "m_smart_pick": "🧠 Smart Pick",
+        "m_best_obj": "🏆 Best Property",
+        "m_area": "🏙 Area",
+        "m_building": "🏢 Building",
+        "m_dubai": "🌆 Dubai",
+        "m_deals": "🧾 Deals",
+        "m_ratings": "📊 Rankings",
+        "m_compare": "⚖️ Compare",
     },
     "ar": {
         "choose_lang": "🏙 <b>Dubai DLD Analytics</b>\n\nاختر اللغة:",
@@ -400,6 +433,14 @@ TEXTS = {
         "sale": "🏠 بيع",
         "rent": "🔑 إيجار",
         "both": "📊 الكل",
+        "m_smart_pick": "🧠 اختيار ذكي",
+        "m_best_obj": "🏆 أفضل عقار",
+        "m_area": "🏙 المنطقة",
+        "m_building": "🏢 المبنى",
+        "m_dubai": "🌆 دبي",
+        "m_deals": "🧾 الصفقات",
+        "m_ratings": "📊 التصنيفات",
+        "m_compare": "⚖️ مقارنة",
     },
 }
 
@@ -470,10 +511,16 @@ def tr(user_id, key):
     return TEXTS.get(user_lang, TEXTS["en"]).get(key, TEXTS["en"].get(key, key))
 
 
+def _is_menu_btn(text, key):
+    """Returns True if text matches the given key in ANY language (for robust handler matching)."""
+    return text in {TEXTS[l].get(key, "") for l in TEXTS}
+
+
 def kb(rows):
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text=item) for item in row] for row in rows],
-        resize_keyboard=True
+        resize_keyboard=True,
+        is_persistent=True,
     )
 
 
@@ -766,8 +813,9 @@ STOP_WORDS = {
 }
 
 BUILDING_ALIASES = {
-    "grande signature": ["grande", "signature"],
-    "grande signature residences": ["grande", "signature"],
+    # FIX 2026-05-29: short DLD registry names only (no marketing suffixes).
+    "grande signature": ["grande"],
+    "grande signature residences": ["grande"],
     "address opera": ["address", "opera"],
     "the address opera": ["address", "opera"],
     "address residences dubai opera": ["address", "opera"],
@@ -3307,14 +3355,12 @@ async def language_handler(message: Message):
 # =========================
 
 def main_menu(user_id):
-    """v72 + Layla UX: 4 ряда. Топ-сценарии наверху.
-    «📑 Полный отчёт» убран из главного — дублирует /pdf и Дубай/Район/Здание отчёты.
-    Доступен через команду /report или после выбора объекта."""
+    """v72 + Layla UX: 4 ряда. Топ-сценарии наверху. Локализованные кнопки (B052)."""
     return kb([
-        ["🧠 Подбор", "🏆 Лучший объект"],
-        ["🏙 Район", "🏢 Здание"],
-        ["🌆 Дубай", "🧾 Сделки"],
-        ["📊 Рейтинги", "⚖️ Сравнение"],
+        [tr(user_id, "m_smart_pick"), tr(user_id, "m_best_obj")],
+        [tr(user_id, "m_area"), tr(user_id, "m_building")],
+        [tr(user_id, "m_dubai"), tr(user_id, "m_deals")],
+        [tr(user_id, "m_ratings"), tr(user_id, "m_compare")],
     ])
 
 
@@ -3902,7 +3948,7 @@ async def main_handler(message: Message):
             if text in ["📊 Аналитика", "💼 Резюме", "📊 Обзор 360"]:
                 await _execute_selected_report_v72(message, {**state, "report_kind": "full"})
                 return
-            if text in ["🧾 Сделки"]:
+            if _is_menu_btn(text, "m_deals") or text in ["🧾 Сделки"]:
                 await _execute_selected_report_v72(message, {**state, "report_kind": "deals"})
                 return
             if text in ["📈 Периоды", "📈 Динамика"]:
@@ -3910,44 +3956,44 @@ async def main_handler(message: Message):
                 return
 
         # Главное меню: 6 понятных сценариев.
-        if text == "🧠 Подбор":
+        if _is_menu_btn(text, "m_smart_pick"):
             user_states[user_id] = {"step": "smart_goal", "history": []}
             await message.answer("🧠 <b>Инвестиционный подбор</b>\n\nВыберите цель покупки.", reply_markup=smart_goal_menu(user_id))
             return
-        if text in ["⚖️ Сравнение", "⚖️ Сравнение форматов"]:
+        if _is_menu_btn(text, "m_compare") or text == "⚖️ Сравнение форматов":
             user_states[user_id] = {"step": "format_compare_scope", "history": []}
             await message.answer(
                 "⚖️ <b>Сравнение форматов</b>\n\nСравню апартаменты, виллы и таунхаусы по цене входа, ликвидности, приросту, выгодности и инвестиционной логике.\n\nВыберите рынок анализа:",
                 reply_markup=format_compare_scope_menu(user_id)
             )
             return
-        if text == "🏆 Лучший объект":
+        if _is_menu_btn(text, "m_best_obj"):
             user_states[user_id] = {"step": "best_object_deal_type", "history": []}
             await message.answer(
                 "🏆 <b>Лучший объект</b>\n\nЯ проведу по дереву выбора и подберу топ-3 района и топ-3 объекта/здания под цель, бюджет и формат.\n\nШаг 1 из 5 — выберите тип сделки:",
                 reply_markup=best_object_deal_type_menu(user_id)
             )
             return
-        if text == "🏢 Здание":
+        if _is_menu_btn(text, "m_building"):
             user_states[user_id] = {"step": "building_query", "scope": "building", "history": []}
             await message.answer(tr(user_id, "enter_building"), reply_markup=back_menu(user_id))
             return
-        if text == "🏙 Район":
+        if _is_menu_btn(text, "m_area"):
             user_states[user_id] = {"step": "area_query", "scope": "area", "history": []}
             await message.answer(tr(user_id, "enter_area"), reply_markup=back_menu(user_id))
             return
-        if text == "🧾 Сделки" and state.get("step") not in ["building_action", "area_action", "dubai_action", "result"]:
+        if _is_menu_btn(text, "m_deals") and state.get("step") not in ["building_action", "area_action", "dubai_action", "result"]:
             user_states[user_id] = {"step": "deals_scope", "history": []}
             await message.answer("🧾 <b>Сделки DLD</b>\n\nГде показать сделки?", reply_markup=deals_scope_menu(user_id))
             return
-        if text == "📊 Рейтинги":
+        if _is_menu_btn(text, "m_ratings"):
             user_states[user_id] = {"step": "ranking_menu", "history": []}
             await message.answer(
                 "📊 <b>Рейтинги рынка</b>\n\nВыберите, какой рейтинг построить.",
                 reply_markup=ranking_menu(user_id),
             )
             return
-        if text == "🌆 Дубай":
+        if _is_menu_btn(text, "m_dubai"):
             st = {"step": "dubai_action", "scope": "dubai", "name": None, "history": []}
             await _ask_action_menu_v72(message, st)
             return
@@ -5869,11 +5915,15 @@ def building_search_expression():
 
 def building_aliases(name):
     q = normalize_search_text(name)
+    # FIX 2026-05-29: marketing-suffixed names (e.g. "Grande Signature Residences",
+    # "Address Residences Dubai Opera") are stored in DLD under their SHORT
+    # registry name ("Grande", "Address Opera"). Returning multi-token aliases
+    # forces AND-search which yields zero results. Map to the short name only.
     aliases = {
         'grande': ['grande'],
-        'grande signature': ['grande', 'signature'],
-        'grande signature residences': ['grande', 'signature'],
-        'opera grande': ['opera', 'grand'],
+        'grande signature': ['grande'],
+        'grande signature residences': ['grande'],
+        'opera grande': ['opera', 'grande'],
         'address opera': ['address', 'opera'],
         'the address opera': ['address', 'opera'],
         'address residences dubai opera': ['address', 'opera'],
@@ -6712,8 +6762,8 @@ async def handle_pdf_request(message):
     if pdf_path:
         from aiogram.types import FSInputFile
         await message.answer_document(
-            FSInputFile(pdf_path, filename="vadim_realty_report.pdf"),
-            caption="📄 <b>Vadim Realty</b>\nИнвестиционный отчёт готов.",
+            FSInputFile(pdf_path, filename="investment_report.pdf"),
+            caption="📄 Инвестиционный отчёт готов.",
             reply_markup=result_menu(user_id, state.get("scope")),
         )
         return
@@ -6742,7 +6792,7 @@ async def handle_consultation_request(message):
         await message.answer("⌛️ Заявку можно отправить один раз в 10 минут. Попробуйте немного позже.", reply_markup=result_menu(user_id))
         return
     LAST_LEAD_TS[user_id] = now
-    await message.answer(f"💼 <b>Консультация</b>\n\nОставьте заявку Вадиму:\n{LEAD_BOT_URL}", reply_markup=result_menu(user_id))
+    await message.answer(f"💼 <b>Консультация</b>\n\nОставьте заявку агенту:\n{LEAD_BOT_URL}", reply_markup=result_menu(user_id))
 
 
 async def handle_admin_dashboard(message):
@@ -8386,7 +8436,28 @@ async def _mv_offplan_refresher_loop():
         await asyncio.sleep(24 * 3600)
 
 
+try:
+    from aiogram import BaseMiddleware as _BaseMiddleware
+    class _StaleButtonMiddleware(_BaseMiddleware):
+        """FSST: catch stale-button errors from ALL callback handlers."""
+        async def __call__(self, handler, event, data):
+            try:
+                return await handler(event, data)
+            except Exception as e:
+                if is_stale_button_error(e):
+                    await answer_stale(event, "en")
+                else:
+                    raise
+    dp.callback_query.middleware(_StaleButtonMiddleware())
+    print("[FSST] stale-button middleware registered (class-based)")
+except Exception as _mw_err:
+    print(f"[FSST] stale middleware skip: {_mw_err}")
+
+
 async def main():
+    # FSST: HTTP health endpoint
+    if _fsst_ok:
+        start_health_server(bot_name="analytics-bot")
     print("Dubai DLD Analytics Bot started")
     try:
         await bot.delete_webhook(drop_pending_updates=True)
@@ -11324,7 +11395,7 @@ async def send_full_market_report(message, scope: str, name=None):
     )
     cross_nav_html += (
         f"💼 <a href=\"https://t.me/dubai_fpr_lead_bot?start={lead_payload}\">"
-        f"Оставить заявку Вадиму</a>"
+        f"Оставить заявку агенту</a>"
     )
     html += cross_nav_html
 
