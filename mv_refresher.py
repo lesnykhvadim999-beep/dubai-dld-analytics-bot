@@ -25,11 +25,6 @@ from datetime import datetime, timezone
 
 import psycopg2
 
-DEFAULT_DSN = (
-    "postgresql://postgres:REDACTED_ARCHIVE_DB_PASSWORD"
-    "@switchback.proxy.rlwy.net:23244/railway"
-)
-
 MV_REFRESH_LIST: list[tuple[str, bool]] = [
     # (matview_name, supports_concurrently)
     ("mv_offplan_summary", True),
@@ -37,11 +32,10 @@ MV_REFRESH_LIST: list[tuple[str, bool]] = [
 
 
 def _dsn() -> str:
-    return (
-        os.environ.get("ANALYTICS_DATABASE_URL")
-        or os.environ.get("DATABASE_URL")
-        or DEFAULT_DSN
-    )
+    dsn = os.environ.get("ANALYTICS_DATABASE_URL") or os.environ.get("DATABASE_URL")
+    if not dsn:
+        raise RuntimeError("ANALYTICS_DATABASE_URL or DATABASE_URL required")
+    return dsn
 
 
 def refresh_once() -> dict:
