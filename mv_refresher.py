@@ -12,7 +12,8 @@ Designed to be invoked by Railway cron (recommended: daily at 04:00 UTC, after
 DLD ingest) OR by a long-running container with --loop.
 
 DSN priority:
-    ANALYTICS_DATABASE_URL → DATABASE_URL → hard-coded switchback fallback.
+    ANALYTICS_DATABASE_URL → DATABASE_URL. Fail-fast if neither is set —
+    we never silently fall back to a hard-coded production DSN.
 """
 from __future__ import annotations
 
