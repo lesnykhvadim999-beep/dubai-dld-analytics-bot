@@ -13786,61 +13786,7 @@ def get_latest_deals_smart(scope, name, prop=None, period=None, deal_type=None, 
     return [], prop, period, deal_type
 
 
-print("Loaded v141 Grande/Burj-Khalifa fix: strip '|||area' suffix + area fallback")
-
-
-def _v142_grande_boot_diag():
-    """Boot-time data dump for Grande/Burj Khalifa debugging. Removed after fix."""
-    try:
-        conn = db()
-        try:
-            with conn.cursor() as cur:
-                queries = [
-                    ("01_grande_any",
-                     "SELECT COUNT(*) FROM public.dld_transactions_full WHERE LOWER(building_name_en) LIKE '%grande%'"),
-                    ("02_grande_buildings",
-                     "SELECT DISTINCT building_name_en FROM public.dld_transactions_full WHERE LOWER(building_name_en) LIKE '%grande%' LIMIT 30"),
-                    ("03_grande_areas",
-                     "SELECT area_name_en, COUNT(*) AS c FROM public.dld_transactions_full WHERE LOWER(building_name_en) LIKE '%grande%' GROUP BY 1 ORDER BY c DESC LIMIT 20"),
-                    ("04_burj_khalifa_areas",
-                     "SELECT area_name_en, COUNT(*) AS c FROM public.dld_transactions_full WHERE LOWER(area_name_en) LIKE '%burj%' OR LOWER(area_name_en) LIKE '%khalifa%' GROUP BY 1 ORDER BY c DESC LIMIT 20"),
-                    ("05_burj_khalifa_buildings",
-                     "SELECT building_name_en, COUNT(*) AS c FROM public.dld_transactions_full WHERE LOWER(area_name_en) LIKE '%burj%khalifa%' GROUP BY 1 ORDER BY c DESC LIMIT 30"),
-                    ("06_burj_khalifa_12m_rooms",
-                     "SELECT rooms_en, COUNT(*) AS c FROM public.dld_transactions_full WHERE LOWER(area_name_en) LIKE '%burj%khalifa%' AND instance_date >= CURRENT_DATE - INTERVAL '12 months' GROUP BY 1 ORDER BY c DESC LIMIT 20"),
-                    ("07_grande_dates",
-                     "SELECT MIN(instance_date::text) AS mn, MAX(instance_date::text) AS mx, COUNT(*) AS c FROM public.dld_transactions_full WHERE LOWER(building_name_en) LIKE '%grande%'"),
-                    ("08_archive_grande",
-                     "SELECT COUNT(*) FROM public.dld_sale_archive WHERE LOWER(building_name_en) LIKE '%grande%'"),
-                    ("09_archive_grande_burj",
-                     "SELECT building_name_en, area_name_en, rooms_en, COUNT(*) AS c FROM public.dld_sale_archive WHERE LOWER(building_name_en) LIKE '%grande%' AND (LOWER(area_name_en) LIKE '%burj%' OR LOWER(area_name_en) LIKE '%downtown%') GROUP BY 1,2,3 ORDER BY c DESC LIMIT 30"),
-                    ("10_archive_burj_12m_3br",
-                     "SELECT COUNT(*) FROM public.dld_sale_archive WHERE LOWER(area_name_en) LIKE '%burj%khalifa%' AND (LOWER(rooms_en) LIKE '%3 b%' OR LOWER(rooms_en) LIKE '%three%') AND instance_date::text >= (CURRENT_DATE - INTERVAL '12 months')::text"),
-                ]
-                for name, sql in queries:
-                    try:
-                        cur.execute(sql)
-                        rows = cur.fetchall()
-                        print(f"[V142 DIAG] {name}: {rows[:10]}", flush=True)
-                    except Exception as e:
-                        print(f"[V142 DIAG] {name} ERR: {e}", flush=True)
-                        try:
-                            conn.rollback()
-                        except Exception:
-                            pass
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
-    except Exception as e:
-        print(f"[V142 DIAG] outer ERR: {e}", flush=True)
-
-
-try:
-    _v142_grande_boot_diag()
-except Exception as _diag_e:
-    print(f"[V142 DIAG] wrapper ERR: {_diag_e}", flush=True)
+print("Loaded v143 Grande honest-combo hint: building+area mismatch shows real DLD coverage")
 
 
 if __name__ == "__main__":
