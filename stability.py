@@ -13,7 +13,9 @@ Designed to be dropped into every bot in the ecosystem identically.
 """
 from __future__ import annotations
 
+import contextvars
 import functools
+import hashlib
 import json
 import logging
 import os
@@ -145,8 +147,139 @@ def new_request_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
+# ─── DISTRIBUTED TRACING (request_id propagation) ────────────────────────────
+#
+# request_id is propagated across async/threading boundaries via ContextVar.
+# Auto-injected into every log_event() call so Sentinel can grep one ID and
+# see the full request lifecycle: handler entry → DB query → LLM call →
+# response.
+#
+# Usage:
+#     # entry point (Telegram handler):
+#     async def on_message(update, ctx):
+#         with request_context(user_id=update.effective_user.id) as rid:
+#             ... rest of handler ...
+#
+#     # downstream code — no changes needed, log_event picks up rid:
+#     log_event("INFO", msg="db query", table="listings")
+#
+#     # cross-bot deep link:
+#     url = f"https://t.me/other_bot?start=foo__rid_{get_request_id()}"
+
+_request_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "request_id", default=None,
+)
+_user_id_var: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(
+    "user_id", default=None,
+)
+
+
+def get_request_id() -> Optional[str]:
+    """Return current request_id from contextvar, or None."""
+    return _request_id_var.get()
+
+
+def set_request_id(rid: Optional[str]) -> contextvars.Token:
+    """Set request_id for the current async/thread context. Returns token
+    that can be passed to reset_request_id() to restore the previous value."""
+    return _request_id_var.set(rid)
+
+
+def reset_request_id(token: contextvars.Token) -> None:
+    _request_id_var.reset(token)
+
+
+def get_user_id() -> Optional[int]:
+    return _user_id_var.get()
+
+
+class request_context:
+    """Context manager / decorator that sets request_id (and optionally user_id)
+    for everything inside it. New request_id auto-generated if not supplied.
+
+    Usage as context manager:
+        with request_context(user_id=12345) as rid:
+            log_event("INFO", msg="start")  # rid is auto-attached
+            do_work()
+
+    Usage as decorator:
+        @request_context()
+        async def handler(update, ctx): ...
+
+    External rid (e.g. from cross-bot deep link) can be passed in:
+        with request_context(rid="abc123", user_id=u.id):
+            ...
+    """
+
+    def __init__(self, rid: Optional[str] = None,
+                 user_id: Optional[int] = None) -> None:
+        self.rid = rid or new_request_id()
+        self.user_id = user_id
+        self._rid_token: Optional[contextvars.Token] = None
+        self._uid_token: Optional[contextvars.Token] = None
+
+    def __enter__(self) -> str:
+        self._rid_token = _request_id_var.set(self.rid)
+        if self.user_id is not None:
+            self._uid_token = _user_id_var.set(self.user_id)
+        return self.rid
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self._rid_token is not None:
+            _request_id_var.reset(self._rid_token)
+        if self._uid_token is not None:
+            _user_id_var.reset(self._uid_token)
+
+    def __call__(self, fn: Callable) -> Callable:
+        import asyncio
+        if asyncio.iscoroutinefunction(fn):
+            @functools.wraps(fn)
+            async def inner_async(*a, **kw):
+                with request_context(self.rid, self.user_id):
+                    return await fn(*a, **kw)
+            return inner_async
+
+        @functools.wraps(fn)
+        def inner(*a, **kw):
+            with request_context(self.rid, self.user_id):
+                return fn(*a, **kw)
+        return inner
+
+
+def extract_rid_from_start_param(start_param: Optional[str]) -> Optional[str]:
+    """Parse a Telegram /start payload like 'foo__rid_abc123' and return rid.
+
+    Bots receive cross-bot deep links of the form:
+        https://t.me/bot?start=<action>__rid_<requestid>
+
+    Returns None if no rid suffix.
+    """
+    if not start_param or "__rid_" not in start_param:
+        return None
+    try:
+        return start_param.rsplit("__rid_", 1)[1][:32] or None
+    except Exception:
+        return None
+
+
+def append_rid_to_start_param(payload: str,
+                              rid: Optional[str] = None) -> str:
+    """Append current (or given) request_id to a Telegram start payload.
+
+        append_rid_to_start_param("buy_listing_42")
+        → "buy_listing_42__rid_a3f9c8e1b2d4"
+    """
+    rid = rid or get_request_id()
+    if not rid:
+        return payload
+    return f"{payload}__rid_{rid}"
+
+
 def log_event(level: str = "INFO", **fields: Any) -> None:
     """Emit a single-line JSON log. Always includes ts + bot + level + msg.
+
+    Automatically injects request_id and user_id from the current context if
+    they aren't already in `fields`. This is what enables single-grep tracing.
 
     Usage:
         log_event("INFO", msg="incoming", user_id=u.id, cmd="/start")
@@ -157,6 +290,13 @@ def log_event(level: str = "INFO", **fields: Any) -> None:
         "bot": _bot_name(),
         "level": level,
     }
+    # Auto-inject tracing context (caller can still override).
+    rid = _request_id_var.get()
+    if rid is not None and "request_id" not in fields and "rid" not in fields:
+        payload["request_id"] = rid
+    uid_ctx = _user_id_var.get()
+    if uid_ctx is not None and "user_id" not in fields:
+        payload["user_id"] = uid_ctx
     payload.update(fields)
     log = get_logger()
     lvl = getattr(logging, level.upper(), logging.INFO)
@@ -426,6 +566,145 @@ def _msg(lang: str, key: str) -> str:
     return _VAL_MESSAGES.get(lang, _VAL_MESSAGES["en"]).get(key, key)
 
 
+# ─── IDEMPOTENCY KEYS FOR WRITES ──────────────────────────────────────────────
+#
+# Telegram retries, double-taps, network glitches and bot restarts mean the
+# SAME user write request can arrive 2-5 times in a few seconds. Without
+# idempotency keys this creates duplicate listings, duplicate leads,
+# double-charged subscriptions, etc.
+#
+# Pattern: caller computes a deterministic key from
+# (user_id, action, time_bucket_minute) and wraps the write in
+# idempotent_write(). If the key already exists in `idempotency_keys`, the
+# previously stored response is returned without re-running fn.
+#
+# Required DB table (see shared/migrations/idempotency_keys.sql):
+#     CREATE TABLE idempotency_keys (
+#         key        TEXT PRIMARY KEY,
+#         response   JSONB,
+#         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+#     );
+#     CREATE INDEX idempotency_keys_created_at_idx
+#         ON idempotency_keys(created_at);
+#
+# A background job (or pg_cron) deletes rows older than 24h.
+
+_IDEMPOTENCY_BUCKET_SECONDS = 60  # 1-minute resolution by default
+
+
+def make_idempotency_key(user_id: Any,
+                         action: str,
+                         bucket_seconds: int = _IDEMPOTENCY_BUCKET_SECONDS,
+                         extra: Optional[str] = None) -> str:
+    """Build a deterministic idempotency key.
+
+    Key = sha1(bot|user_id|action|bucket|extra)[:24]
+
+    bucket = floor(now / bucket_seconds) — so two identical requests inside
+    the same minute share a key, but the same user can repeat the action
+    legitimately in the next minute.
+
+    `extra` lets you scope the key to a particular target (e.g. a listing
+    id, a search query hash) so unrelated writes never collide.
+    """
+    bucket = int(time.time() // max(1, bucket_seconds))
+    parts = [
+        _bot_name(),
+        str(user_id),
+        str(action),
+        str(bucket),
+        str(extra or ""),
+    ]
+    raw = "|".join(parts).encode("utf-8", errors="replace")
+    return hashlib.sha1(raw).hexdigest()[:24]
+
+
+def idempotent_write(conn: Any,
+                     key: str,
+                     fn: Callable[[], Any],
+                     ttl_hours: int = 24,
+                     table: str = "idempotency_keys") -> Any:
+    """Run `fn` exactly once for the given idempotency key.
+
+    Args:
+        conn: an open psycopg2-compatible connection (auto-commit or managed
+              externally — we use a SAVEPOINT-free pattern via short txns).
+        key:  the idempotency key (see make_idempotency_key()).
+        fn:   zero-arg callable that performs the write and returns a
+              JSON-serialisable response.
+        ttl_hours: rows older than this can be GC'd by the cleanup job. Does
+              NOT affect the duplicate-detection logic itself (PRIMARY KEY
+              does that).
+        table: idempotency table name (override for tests).
+
+    Returns:
+        cached response (dict / list / scalar) if key already present;
+        otherwise fn()'s return value (also stored).
+
+    On any DB error the helper falls back to calling fn() directly — losing
+    idempotency is better than losing the user's write. Metrics tagged
+    `idempotent_writes_total{result=hit|miss|error}` so we can monitor it.
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT response FROM {table} WHERE key = %s",  # noqa: S608
+                (key,),
+            )
+            row = cur.fetchone()
+        if row is not None:
+            metrics.inc("idempotent_writes_total", result="hit")
+            log_event("INFO", msg="idempotency_hit", key=key)
+            cached = row[0]
+            if isinstance(cached, (str, bytes, bytearray)):
+                try:
+                    cached = json.loads(cached)
+                except Exception:
+                    pass
+            return cached
+    except Exception as e:
+        metrics.inc("idempotent_writes_total", result="error")
+        log_event("WARNING", msg="idempotency_lookup_failed",
+                  key=key, err=str(e))
+        return fn()  # fall back: better to write than to lose data
+
+    # Miss → run the write, then persist response.
+    result = fn()
+    try:
+        payload = json.dumps(result, default=str, ensure_ascii=False)
+    except Exception:
+        payload = json.dumps({"_unserialisable": True}, ensure_ascii=False)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"INSERT INTO {table}(key, response) VALUES (%s, %s) "  # noqa: S608
+                f"ON CONFLICT (key) DO NOTHING",
+                (key, payload),
+            )
+        metrics.inc("idempotent_writes_total", result="miss")
+    except Exception as e:
+        metrics.inc("idempotent_writes_total", result="error")
+        log_event("WARNING", msg="idempotency_insert_failed",
+                  key=key, err=str(e))
+    return result
+
+
+def cleanup_idempotency_keys(conn: Any, older_than_hours: int = 24,
+                             table: str = "idempotency_keys") -> int:
+    """Delete idempotency rows older than the cutoff. Returns rows removed."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"DELETE FROM {table} "  # noqa: S608
+                f"WHERE created_at < now() - INTERVAL '%s hours'",
+                (older_than_hours,),
+            )
+            return cur.rowcount or 0
+    except Exception as e:
+        log_event("WARNING", msg="idempotency_cleanup_failed", err=str(e))
+        return 0
+
+
 # ─── METRICS ──────────────────────────────────────────────────────────────────
 
 class Metrics:
@@ -611,9 +890,357 @@ def count_db(table: str, status: str = "ok") -> None:
     metrics.inc("db_queries_total", table=table, status=status)
 
 
+# ─── SLOW QUERY LOG ───────────────────────────────────────────────────────────
+
+import hashlib  # noqa: E402
+from collections import deque as _ev_deque  # noqa: E402
+from logging.handlers import RotatingFileHandler  # noqa: E402
+
+SLOW_QUERY_THRESHOLD_MS = float(os.environ.get("SLOW_QUERY_MS", "500"))
+SLOW_QUERY_LOG_PATH = os.environ.get("SLOW_QUERY_LOG", "slow_queries.log")
+SLOW_QUERY_DB_TABLE = "slow_queries"
+_SLOW_QUERY_MAX_TEXT = 500
+
+_slow_q_logger: Optional[logging.Logger] = None
+_slow_q_lock = threading.Lock()
+_slow_q_db_table_ready = False
+_slow_q_db_disabled = False  # disabled after first DB failure
+
+
+def _get_slow_query_logger() -> logging.Logger:
+    global _slow_q_logger
+    if _slow_q_logger is not None:
+        return _slow_q_logger
+    lg = logging.getLogger("stability.slow_query")
+    if not lg.handlers:
+        try:
+            h = RotatingFileHandler(
+                SLOW_QUERY_LOG_PATH,
+                maxBytes=10 * 1024 * 1024,  # 10 MB
+                backupCount=3,
+                encoding="utf-8",
+            )
+            h.setFormatter(logging.Formatter("%(message)s"))
+            lg.addHandler(h)
+            lg.setLevel(logging.INFO)
+            lg.propagate = False
+        except Exception:
+            lg.addHandler(logging.NullHandler())
+    _slow_q_logger = lg
+    return lg
+
+
+def _query_hash(query_text: str) -> str:
+    norm = re.sub(r"\s+", " ", (query_text or "").strip().lower())[:2000]
+    return hashlib.sha1(norm.encode("utf-8", "replace")).hexdigest()[:16]
+
+
+def _record_slow_query_db(ts: float, bot: str, qhash: str,
+                          duration_ms: float, query_text: str) -> None:
+    global _slow_q_db_table_ready, _slow_q_db_disabled
+    if _slow_q_db_disabled:
+        return
+    dsn = (os.environ.get("INTELLIGENCE_DATABASE_URL")
+           or os.environ.get("INTEL_DATABASE_URL")
+           or os.environ.get("DATABASE_URL"))
+    if not dsn:
+        _slow_q_db_disabled = True
+        return
+    try:
+        import psycopg2  # type: ignore
+        with psycopg2.connect(dsn, connect_timeout=3) as c, c.cursor() as cur:
+            if not _slow_q_db_table_ready:
+                cur.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS {SLOW_QUERY_DB_TABLE} (
+                        id BIGSERIAL PRIMARY KEY,
+                        ts DOUBLE PRECISION NOT NULL,
+                        bot TEXT NOT NULL,
+                        query_hash TEXT NOT NULL,
+                        duration_ms DOUBLE PRECISION NOT NULL,
+                        query_text TEXT
+                    );
+                    CREATE INDEX IF NOT EXISTS slow_queries_ts_idx
+                        ON {SLOW_QUERY_DB_TABLE}(ts DESC);
+                    CREATE INDEX IF NOT EXISTS slow_queries_bot_idx
+                        ON {SLOW_QUERY_DB_TABLE}(bot, ts DESC);
+                    """
+                )
+                _slow_q_db_table_ready = True
+            cur.execute(
+                f"INSERT INTO {SLOW_QUERY_DB_TABLE} "
+                f"(ts, bot, query_hash, duration_ms, query_text) "
+                f"VALUES (%s, %s, %s, %s, %s)",
+                (ts, bot, qhash, duration_ms,
+                 query_text[:_SLOW_QUERY_MAX_TEXT]),
+            )
+    except Exception as e:  # noqa: BLE001
+        _slow_q_db_disabled = True
+        log_event("WARNING", msg="slow_query_db_disabled", err=str(e)[:200])
+
+
+def record_slow_query(query_text: str, duration_ms: float) -> None:
+    """Log a slow query (file + best-effort DB). No-op if below threshold."""
+    if duration_ms < SLOW_QUERY_THRESHOLD_MS:
+        return
+    ts = time.time()
+    bot = _bot_name()
+    qtext = (query_text or "")[:_SLOW_QUERY_MAX_TEXT]
+    qhash = _query_hash(query_text or "")
+    with _slow_q_lock:
+        try:
+            _get_slow_query_logger().info(json.dumps({
+                "ts": ts, "bot": bot, "query_hash": qhash,
+                "duration_ms": round(duration_ms, 1), "query_text": qtext,
+            }, ensure_ascii=False))
+        except Exception:
+            pass
+    metrics.inc("slow_queries_total", bot=bot)
+    threading.Thread(
+        target=_record_slow_query_db,
+        args=(ts, bot, qhash, duration_ms, qtext),
+        daemon=True, name="slow-query-db",
+    ).start()
+
+
+class TimedCursor:
+    """psycopg2 cursor wrapper that times execute() / executemany().
+
+    Usage:
+        with conn.cursor() as raw:
+            cur = TimedCursor(raw)
+            cur.execute("SELECT ...")
+    """
+
+    __slots__ = ("_c",)
+
+    def __init__(self, cursor: Any) -> None:
+        self._c = cursor
+
+    def execute(self, query, vars=None):  # noqa: A002
+        t0 = time.perf_counter()
+        try:
+            if vars is None:
+                return self._c.execute(query)
+            return self._c.execute(query, vars)
+        finally:
+            dur_ms = (time.perf_counter() - t0) * 1000.0
+            try:
+                qtxt = (query.decode("utf-8", "replace")
+                        if isinstance(query, (bytes, bytearray))
+                        else str(query))
+                record_slow_query(qtxt, dur_ms)
+            except Exception:
+                pass
+
+    def executemany(self, query, vars_list):  # noqa: A002
+        t0 = time.perf_counter()
+        try:
+            return self._c.executemany(query, vars_list)
+        finally:
+            dur_ms = (time.perf_counter() - t0) * 1000.0
+            try:
+                record_slow_query(f"[executemany] {query}", dur_ms)
+            except Exception:
+                pass
+
+    def __getattr__(self, name):
+        return getattr(self._c, name)
+
+    def __iter__(self):
+        return iter(self._c)
+
+    def __enter__(self):
+        self._c.__enter__()
+        return self
+
+    def __exit__(self, *a):
+        return self._c.__exit__(*a)
+
+
+def timed_cursor(connection) -> "TimedCursor":
+    """Open a TimedCursor on a psycopg2 connection."""
+    return TimedCursor(connection.cursor())
+
+
+# ─── REPLAY BUFFER ────────────────────────────────────────────────────────────
+
+class EventBuffer:
+    """Thread-safe ring buffer of recent bot events for post-mortem replay.
+
+    Each event: ts, user_id, command, response_summary, latency_ms, error.
+    Bounded by maxlen (default 1000).
+    """
+
+    def __init__(self, maxlen: int = 1000) -> None:
+        self.maxlen = maxlen
+        self._buf: "_ev_deque[dict[str, Any]]" = _ev_deque(maxlen=maxlen)
+        self._lock = threading.Lock()
+
+    def append(self, user_id: Any = None, command: str = "",
+               response_summary: str = "", latency_ms: float = 0.0,
+               error: Optional[str] = None, **extra: Any) -> None:
+        ev: dict[str, Any] = {
+            "ts": time.time(),
+            "user_id": user_id,
+            "command": (command or "")[:120],
+            "response_summary": (response_summary or "")[:240],
+            "latency_ms": round(float(latency_ms or 0), 1),
+            "error": None if error is None else str(error)[:240],
+        }
+        for k, v in (extra or {}).items():
+            try:
+                json.dumps(v, default=str)
+                ev[k] = v
+            except Exception:
+                ev[k] = str(v)[:120]
+        with self._lock:
+            self._buf.append(ev)
+
+    def recent(self, n: int = 100) -> list[dict[str, Any]]:
+        with self._lock:
+            if n <= 0 or n >= len(self._buf):
+                return list(self._buf)
+            return list(self._buf)[-n:]
+
+    def serialize(self, n: Optional[int] = None) -> str:
+        items = self.recent(n or self.maxlen)
+        return json.dumps({
+            "bot": _bot_name(), "count": len(items), "events": items,
+        }, default=str, ensure_ascii=False)
+
+    def __len__(self) -> int:
+        return len(self._buf)
+
+
+# Module-level singleton, bots usually need only one buffer.
+event_buffer = EventBuffer(maxlen=1000)
+
+
+def record_event(user_id: Any = None, command: str = "",
+                 response_summary: str = "", latency_ms: float = 0.0,
+                 error: Optional[str] = None, **extra: Any) -> None:
+    """Append to the default replay buffer. Never raises."""
+    try:
+        event_buffer.append(
+            user_id=user_id, command=command,
+            response_summary=response_summary,
+            latency_ms=latency_ms, error=error, **extra,
+        )
+    except Exception:
+        pass
+
+
+def replay_buffer_json(n: int = 100) -> str:
+    return event_buffer.serialize(n)
+
+
+def replay_handler_dispatch(fn: Callable, command_label: str = "") -> Callable:
+    """Decorator: records each handler call in event_buffer."""
+    import asyncio
+
+    def _extract_user_id(args):
+        for a in args[:3]:
+            try:
+                uid = (getattr(getattr(a, "effective_user", None), "id", None)
+                       or getattr(getattr(a, "from_user", None), "id", None)
+                       or getattr(a, "user_id", None))
+                if uid:
+                    return uid
+            except Exception:
+                pass
+        return None
+
+    if asyncio.iscoroutinefunction(fn):
+        @functools.wraps(fn)
+        async def inner_a(*a, **kw):
+            t0 = time.perf_counter()
+            err = None
+            try:
+                return await fn(*a, **kw)
+            except Exception as e:  # noqa: BLE001
+                err = type(e).__name__ + ": " + str(e)[:200]
+                raise
+            finally:
+                record_event(
+                    user_id=_extract_user_id(a),
+                    command=command_label or fn.__name__,
+                    latency_ms=(time.perf_counter() - t0) * 1000.0,
+                    error=err,
+                )
+        return inner_a
+
+    @functools.wraps(fn)
+    def inner(*a, **kw):
+        t0 = time.perf_counter()
+        err = None
+        try:
+            return fn(*a, **kw)
+        except Exception as e:  # noqa: BLE001
+            err = type(e).__name__ + ": " + str(e)[:200]
+            raise
+        finally:
+            record_event(
+                user_id=_extract_user_id(a),
+                command=command_label or fn.__name__,
+                latency_ms=(time.perf_counter() - t0) * 1000.0,
+                error=err,
+            )
+    return inner
+
+
+def start_replay_endpoint(port: int) -> Optional[int]:
+    """Standalone /replay HTTP server. Returns port or None."""
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class _RH(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            p = self.path.split("?", 1)[0].rstrip("/")
+            if p in ("/replay", "/replay/"):
+                try:
+                    n = 100
+                    if "?" in self.path:
+                        from urllib.parse import parse_qs
+                        qs = parse_qs(self.path.split("?", 1)[1])
+                        n = int((qs.get("n") or ["100"])[0])
+                except Exception:
+                    n = 100
+                body = replay_buffer_json(n).encode("utf-8")
+                self.send_response(200)
+                self.send_header(
+                    "Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, *a, **kw):  # silence
+            return
+
+    try:
+        srv = HTTPServer(("0.0.0.0", port), _RH)
+    except OSError as e:
+        log_event("WARNING", msg="replay_server_bind_failed",
+                  port=port, err=str(e))
+        return None
+    actual = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True,
+                     name="replay-http").start()
+    log_event("INFO", msg="replay_server_started", port=actual)
+    return actual
+
+
 __all__ = [
     "TTLCache", "ttl_cache",
     "log_event", "new_request_id", "set_bot_name", "get_logger",
+    # tracing
+    "get_request_id", "set_request_id", "reset_request_id",
+    "get_user_id", "request_context",
+    "extract_rid_from_start_param", "append_rid_to_start_param",
+    # idempotency
+    "make_idempotency_key", "idempotent_write", "cleanup_idempotency_keys",
     "retry_on_transient", "retry_on_transient_async",
     "ValidationError",
     "validate_price", "validate_bedrooms", "validate_area_name",
@@ -621,4 +1248,306 @@ __all__ = [
     "SUPPORTED_LANGS",
     "metrics", "timed", "start_metrics_server",
     "count_request", "count_error", "count_llm", "count_db",
+    # slow query
+    "record_slow_query", "TimedCursor", "timed_cursor",
+    "SLOW_QUERY_THRESHOLD_MS",
+    # replay buffer
+    "EventBuffer", "event_buffer", "record_event", "replay_buffer_json",
+    "replay_handler_dispatch", "start_replay_endpoint",
 ]
+
+
+# ─── CIRCUIT BREAKER ──────────────────────────────────────────────────────────
+#
+# Simple state machine: CLOSED → OPEN (after N failures in window) → HALF_OPEN
+# (after cooldown, 1 probe) → CLOSED on success / OPEN on failure.
+# No external deps. Thread-safe. Notifies @vadim_admin_bot on OPEN transitions.
+#
+# Usage:
+#     db_cb = get_breaker("db_main")
+#     try:
+#         conn = db_cb.call(psycopg2.connect, DATABASE_URL)
+#     except CircuitOpenError:
+#         conn = None  # degraded path
+#
+#     # or with fallback:
+#     result = llm_cb.call(llm_call, prompt, fallback=None)
+
+from collections import deque as _cb_deque
+
+
+class CircuitOpenError(RuntimeError):
+    """Raised when a breaker is OPEN and no fallback was supplied."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"circuit breaker '{name}' is OPEN")
+        self.name = name
+
+
+_BREAKER_ADMIN_NOTIFY_BOT_TOKEN = os.environ.get("ADMIN_NOTIFY_BOT_TOKEN") or \
+    os.environ.get("VADIM_ADMIN_BOT_TOKEN") or os.environ.get("BOT_TOKEN_ADMIN")
+_BREAKER_ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID") or \
+    os.environ.get("VADIM_ADMIN_CHAT_ID")
+
+
+def _breaker_notify_admin(text: str) -> None:
+    """Best-effort notification to @vadim_admin_bot. Never raises."""
+    try:
+        token = _BREAKER_ADMIN_NOTIFY_BOT_TOKEN
+        chat_id = _BREAKER_ADMIN_CHAT_ID
+        if not token or not chat_id:
+            return
+        import urllib.request
+        import urllib.parse
+        data = urllib.parse.urlencode({
+            "chat_id": chat_id,
+            "text": text,
+            "disable_web_page_preview": "true",
+        }).encode()
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data=data,
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=3)
+    except Exception:
+        # never let admin notification break the breaker
+        pass
+
+
+class CircuitBreaker:
+    """Per-service circuit breaker.
+
+    States:
+      CLOSED    — calls pass through, failures counted in rolling window.
+      OPEN      — calls short-circuited to fallback (or CircuitOpenError).
+      HALF_OPEN — exactly one probe call allowed; success closes, fail re-opens.
+    """
+
+    def __init__(self, name: str, threshold: int = 5, window: int = 60,
+                 cooldown: int = 60) -> None:
+        self.name = name
+        self.threshold = threshold
+        self.window = window
+        self.cooldown = cooldown
+        self.failures: "_cb_deque[float]" = _cb_deque()
+        self.state = "CLOSED"
+        self.opened_at = 0.0
+        self._lock = threading.Lock()
+        self._notified_open_at = 0.0  # de-dup admin notifications
+
+    def _open(self) -> None:
+        prev = self.state
+        self.state = "OPEN"
+        self.opened_at = time.time()
+        metrics.inc("circuit_breaker_open_total", breaker=self.name)
+        log_event("WARNING", msg="circuit_breaker_open", breaker=self.name,
+                  failures=len(self.failures), threshold=self.threshold)
+        # One admin notification per OPEN transition (not per cooldown cycle)
+        if prev != "OPEN" and (self.opened_at - self._notified_open_at) > 300:
+            self._notified_open_at = self.opened_at
+            _breaker_notify_admin(
+                f"⚠️ circuit OPEN: {_bot_name()}/{self.name} "
+                f"({len(self.failures)} fails in {self.window}s) — "
+                f"degraded mode for {self.cooldown}s"
+            )
+
+    def _close(self) -> None:
+        if self.state != "CLOSED":
+            log_event("INFO", msg="circuit_breaker_close", breaker=self.name)
+            metrics.inc("circuit_breaker_close_total", breaker=self.name)
+        self.state = "CLOSED"
+        self.failures.clear()
+
+    def call(self, fn: Callable, *args: Any, fallback: Any = _SENTINEL,
+             **kwargs: Any) -> Any:
+        """Invoke fn through the breaker.
+
+        If OPEN: returns fallback (callable invoked, else value). If fallback
+        was not supplied, raises CircuitOpenError.
+        If CLOSED/HALF_OPEN: invokes fn, accounts for failures, may transition.
+        """
+        with self._lock:
+            now = time.time()
+            if self.state == "OPEN":
+                if now - self.opened_at < self.cooldown:
+                    metrics.inc("circuit_breaker_short_circuit_total",
+                                breaker=self.name)
+                    if fallback is _SENTINEL:
+                        raise CircuitOpenError(self.name)
+                    return fallback() if callable(fallback) else fallback
+                # cooldown elapsed → allow a probe
+                self.state = "HALF_OPEN"
+                log_event("INFO", msg="circuit_breaker_half_open",
+                          breaker=self.name)
+
+        # Outside the lock for the actual call (don't serialize traffic)
+        try:
+            result = fn(*args, **kwargs)
+        except Exception as e:  # noqa: BLE001
+            with self._lock:
+                now = time.time()
+                self.failures.append(now)
+                # drop failures older than window
+                while self.failures and now - self.failures[0] > self.window:
+                    self.failures.popleft()
+                if self.state == "HALF_OPEN":
+                    # probe failed → re-open
+                    self._open()
+                elif len(self.failures) >= self.threshold:
+                    self._open()
+                metrics.inc("circuit_breaker_fail_total", breaker=self.name,
+                            err=type(e).__name__)
+            raise
+
+        with self._lock:
+            if self.state == "HALF_OPEN":
+                self._close()
+            metrics.inc("circuit_breaker_ok_total", breaker=self.name)
+        return result
+
+    def is_open(self) -> bool:
+        with self._lock:
+            if self.state == "OPEN":
+                if time.time() - self.opened_at < self.cooldown:
+                    return True
+            return False
+
+    def stats(self) -> dict:
+        with self._lock:
+            return {
+                "name": self.name,
+                "state": self.state,
+                "failures": len(self.failures),
+                "threshold": self.threshold,
+                "opened_at": self.opened_at,
+            }
+
+
+_BREAKERS: dict[str, CircuitBreaker] = {}
+_BREAKERS_LOCK = threading.Lock()
+
+
+def get_breaker(name: str, threshold: int = 5, window: int = 60,
+                cooldown: int = 60) -> CircuitBreaker:
+    """Get or create a named breaker. Defaults: 5 fails / 60s → OPEN for 60s."""
+    with _BREAKERS_LOCK:
+        cb = _BREAKERS.get(name)
+        if cb is None:
+            cb = CircuitBreaker(name, threshold=threshold, window=window,
+                                cooldown=cooldown)
+            _BREAKERS[name] = cb
+        return cb
+
+
+def breaker_stats_all() -> list:
+    with _BREAKERS_LOCK:
+        return [cb.stats() for cb in _BREAKERS.values()]
+
+
+# ─── FEATURE FLAGS ────────────────────────────────────────────────────────────
+#
+# Env-var driven. Convention: FF_<NAME>_ENABLED = "1"/"true"/"yes"/"on" (case-
+# insensitive). Defaults ON — disabling must never break the bot, just degrade.
+#
+# Usage:
+#     if ff("VOICE_SEARCH"):
+#         transcribe(audio)
+#     else:
+#         return _msg(lang, "feature_unavailable")
+
+_FF_TRUE = {"1", "true", "yes", "on", "y", "t"}
+_FF_FALSE = {"0", "false", "no", "off", "n", "f"}
+
+
+def ff(name: str, default: bool = True) -> bool:
+    """Read FF_<NAME>_ENABLED env var. Defaults True if unset.
+
+    name can be passed without the FF_ prefix and _ENABLED suffix.
+    """
+    key = name.upper()
+    if not key.startswith("FF_"):
+        key = "FF_" + key
+    if not key.endswith("_ENABLED"):
+        key = key + "_ENABLED"
+    val = os.environ.get(key)
+    if val is None:
+        return default
+    v = val.strip().lower()
+    if v in _FF_TRUE:
+        return True
+    if v in _FF_FALSE:
+        return False
+    return default
+
+
+# Pre-baked common flags (no-op helpers — explicit names for grep-ability)
+def ff_voice_search() -> bool: return ff("VOICE_SEARCH")
+def ff_ai_consultant() -> bool: return ff("AI_CONSULTANT")
+def ff_heatmap() -> bool: return ff("HEATMAP")
+def ff_translate() -> bool: return ff("TRANSLATE")
+def ff_pdf_report() -> bool: return ff("PDF_REPORT")
+def ff_telethon_parser() -> bool: return ff("TELETHON_PARSER")
+def ff_llm_extra_pass() -> bool: return ff("LLM_EXTRA_PASS")
+
+
+# ─── GRACEFUL DEGRADATION HELPERS ─────────────────────────────────────────────
+
+_DEGRADE_MESSAGES = {
+    "en": {
+        "feature_unavailable": "This feature is temporarily unavailable. Please try again later.",
+        "data_updating": "📊 Data updating… showing cached snapshot.",
+        "llm_unavailable": "AI assistant is busy. Try a structured search instead.",
+        "photo_unavailable": "🖼️ Photo unavailable",
+        "stats_unavailable": "—",
+    },
+    "ru": {
+        "feature_unavailable": "Эта функция временно недоступна. Попробуйте позже.",
+        "data_updating": "📊 Данные обновляются… показан кешированный снапшот.",
+        "llm_unavailable": "AI-ассистент занят. Попробуйте обычный поиск.",
+        "photo_unavailable": "🖼️ Фото недоступно",
+        "stats_unavailable": "—",
+    },
+    "ar": {
+        "feature_unavailable": "هذه الميزة غير متاحة مؤقتاً. حاول لاحقاً.",
+        "data_updating": "📊 جارٍ تحديث البيانات…",
+        "llm_unavailable": "المساعد الذكي مشغول.",
+        "photo_unavailable": "🖼️ الصورة غير متاحة",
+        "stats_unavailable": "—",
+    },
+}
+
+
+def degrade_msg(key: str, lang: str = "en") -> str:
+    """Get a user-facing degraded-mode message in user's language."""
+    lang = validate_lang(lang, default="en")
+    return _DEGRADE_MESSAGES.get(lang, _DEGRADE_MESSAGES["en"]).get(
+        key, _DEGRADE_MESSAGES["en"].get(key, key))
+
+
+def safe_call(breaker_name: str, fn: Callable, *args: Any,
+              fallback: Any = None, **kwargs: Any) -> Any:
+    """Convenience wrapper: get_breaker(name).call(fn, *a, fallback=..., **kw).
+
+    Catches all exceptions when fallback is provided (treats them like an
+    open circuit). Returns fallback on any failure.
+    """
+    cb = get_breaker(breaker_name)
+    try:
+        return cb.call(fn, *args, fallback=fallback, **kwargs)
+    except CircuitOpenError:
+        return fallback() if callable(fallback) else fallback
+    except Exception:
+        return fallback() if callable(fallback) else fallback
+
+
+# extend __all__
+try:
+    __all__ += [  # type: ignore[name-defined]
+        "CircuitBreaker", "CircuitOpenError", "get_breaker", "breaker_stats_all",
+        "ff", "ff_voice_search", "ff_ai_consultant", "ff_heatmap", "ff_translate",
+        "ff_pdf_report", "ff_telethon_parser", "ff_llm_extra_pass",
+        "degrade_msg", "safe_call",
+    ]
+except NameError:
+    pass
