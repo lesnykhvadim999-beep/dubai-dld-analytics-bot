@@ -288,6 +288,81 @@ I18N = {
                             "индивидуальной инвестиционной рекомендацией. Все цифры рассчитаны на основе "
                             "публично доступных данных Dubai Land Department и могут расходиться с реальными "
                             "сделками. Прошлая доходность не гарантирует будущую."),
+        # ── extended (B051 full i18n) ──
+        "footer_brand":    "Аналитика недвижимости Дубая",
+        "top_buildings":   "Топ зданий района",
+        "area_stats":      "Статистика района",
+        "price_trend_12m": "Динамика цен — 12 мес",
+        "price_trend_sub": "Медиана цен по месяцам · DLD",
+        "area_comparison": "Сравнение районов",
+        "area_comparison_sub": "Цена за м² и yield по районам",
+        "roi_forecast_10y":"Прогноз доходности — 10 лет",
+        "roi_forecast_sub":"Кумулятивный прогноз доходности",
+        "risks_signals":   "Риски · Сигналы роста",
+        "investor_metrics":"Что вы получаете",
+        "investor_metrics_sub": "Что получает инвестор",
+        "key_metrics":     "Ключевые параметры",
+        "exec_summary_caps":"Инвестиционное резюме",
+        "exec_summary_sub":"Инвестиционное резюме",
+        "market_dynamics": "Рыночная динамика",
+        "market_overview": "Обзор рынка",
+        "roi_projection":  "Прогноз ROI и статистика района",
+        "investment_analysis": "Инвестиционный анализ",
+        "no_history":      "Историческая 12-мес динамика недоступна для off-plan проектов до старта вторичного рынка. KPI слева — агрегаты по району и сравнимым активам из публичных данных DLD.",
+        "no_price_history":"Исторические данные динамики цен загружаются при первом запросе.",
+        "no_area_comparison":"Сравнительные данные по районам будут доступны после синхронизации.",
+        "yield_growth_note":"Yield {y}% + рост {g}%/год · без реинвестирования.",
+        "no_comparison_intro":"<b>{area}</b> — район Dubai, активный сегмент off-plan / secondary.",
+        "no_comparison_avg":"Средняя цена сделок в районе: {v}.",
+        "no_comparison_psf":"Цена за м² (медиана района): {v}.",
+        "no_comparison_yield":"Типичная rental yield: {v}.",
+        "no_comparison_tail":"Прямое сравнение с похожими проектами доступно для активов, имеющих вторичный трек; для большинства off-plan проектов это сравнение появляется после handover.",
+        # Comparison table header (page 3)
+        "th_num":          "#",
+        "th_name":         "Название",
+        "th_area":         "Район",
+        "th_price_m2":     "Цена/м²",
+        "th_deals":        "Сделок",
+        "th_yield":        "Yield",
+        "th_growth":       "Рост",
+        "th_building":     "Здание",
+        "th_year":         "Год",
+        "th_return":       "Доходность (%)",
+        # KPI labels
+        "kpi_avg_price":      "Средняя цена",
+        "kpi_median_price":   "Медиана",
+        "kpi_price_per_m2":   "Цена за м²",
+        "kpi_deals_12m":      "Сделок (12m)",
+        "kpi_yield":          "Rental yield",
+        "kpi_growth_yoy":     "Рост YoY",
+        "kpi_liquidity":      "Ликвидность",
+        "kpi_units":          "Юнитов",
+        "kpi_area_m2":        "Площадь",
+        "kpi_developer":      "Застройщик",
+        "kpi_handover":       "Сдача",
+        "kpi_bedrooms":       "Спальни",
+        "kpi_emirate":        "Эмират",
+        "kpi_stage":          "Стадия",
+        "kpi_score":          "Инв. score",
+        "kpi_payback":        "Окупаемость",
+        "kpi_return_5y":      "Доход 5y",
+        "kpi_top_psf":        "Top-quartile PSF",
+        "kpi_growth_5y":      "Рост 5y",
+        "kpi_growth_10y":     "Рост 10y",
+        "kpi_monthly_rent":   "Аренда/мес",
+        "kpi_budget":         "Бюджет",
+        "kpi_price":          "Цена",
+        "kpi_deals_yr":       "Сделок/год",
+        "kpi_deals_mo":       "Сделок/мес",
+        "kpi_days_on_market": "Срок продажи",
+        "kpi_rent_1br":       "Аренда 1BR/мес",
+        "kpi_rent_2br":       "Аренда 2BR/мес",
+        "kpi_rent_3br":       "Аренда 3BR/мес",
+        # units
+        "u_days_short":   "дн",
+        "u_years_short":  "лет",
+        "u_total_5y":     "Совокупная 5y:",
+        "u_payback_about":"Окупаемость ~",
     },
     "en": {
         "report_types": {
@@ -322,6 +397,81 @@ I18N = {
                             "or individual investment advice. All figures are calculated from publicly available "
                             "Dubai Land Department data and may differ from actual transactions. Past performance "
                             "is not indicative of future results."),
+        # ── extended (B051 full i18n) ──
+        "footer_brand":    "Dubai Real Estate Analytics",
+        "top_buildings":   "Top buildings in area",
+        "area_stats":      "Area statistics",
+        "price_trend_12m": "Price trend — 12 months",
+        "price_trend_sub": "Monthly median price · DLD",
+        "area_comparison": "Area comparison",
+        "area_comparison_sub": "Price/m² and rental yield by area",
+        "roi_forecast_10y":"10-year ROI forecast",
+        "roi_forecast_sub":"Cumulative return forecast",
+        "risks_signals":   "Risks · Growth signals",
+        "investor_metrics":"Investor metrics",
+        "investor_metrics_sub": "What you get as an investor",
+        "key_metrics":     "Key metrics",
+        "exec_summary_caps":"Executive summary",
+        "exec_summary_sub":"Investment summary",
+        "market_dynamics": "Market dynamics",
+        "market_overview": "Market overview",
+        "roi_projection":  "ROI projection & area statistics",
+        "investment_analysis": "Investment analysis",
+        "no_history":      "12-month price dynamics is not yet available for off-plan units prior to the secondary-market launch. KPI on the left are area-level aggregates from public DLD data.",
+        "no_price_history":"Price history data is loaded on first request.",
+        "no_area_comparison":"Area comparison is available after DLD sync.",
+        "yield_growth_note":"Yield {y}% + YoY growth {g}%/yr · no compounding.",
+        "no_comparison_intro":"<b>{area}</b> — active Dubai sub-market across off-plan and secondary segments.",
+        "no_comparison_avg":"Average area deal: {v}.",
+        "no_comparison_psf":"Median price per m²: {v}.",
+        "no_comparison_yield":"Typical rental yield: {v}.",
+        "no_comparison_tail":"Side-by-side comparison is available for assets with a secondary-market track record. For most off-plan projects this comparison forms after handover.",
+        # Comparison table header (page 3)
+        "th_num":          "#",
+        "th_name":         "Name",
+        "th_area":         "Area",
+        "th_price_m2":     "Price/m²",
+        "th_deals":        "Deals",
+        "th_yield":        "Yield",
+        "th_growth":       "Growth",
+        "th_building":     "Building",
+        "th_year":         "Year",
+        "th_return":       "Return (%)",
+        # KPI labels
+        "kpi_avg_price":      "Avg price",
+        "kpi_median_price":   "Median",
+        "kpi_price_per_m2":   "Price / m²",
+        "kpi_deals_12m":      "Deals (12m)",
+        "kpi_yield":          "Rental yield",
+        "kpi_growth_yoy":     "YoY growth",
+        "kpi_liquidity":      "Liquidity",
+        "kpi_units":          "Units",
+        "kpi_area_m2":        "Area",
+        "kpi_developer":      "Developer",
+        "kpi_handover":       "Handover",
+        "kpi_bedrooms":       "Bedrooms",
+        "kpi_emirate":        "Emirate",
+        "kpi_stage":          "Stage",
+        "kpi_score":          "Inv. score",
+        "kpi_payback":        "Payback",
+        "kpi_return_5y":      "5y return",
+        "kpi_top_psf":        "Top-q PSF",
+        "kpi_growth_5y":      "Growth 5y",
+        "kpi_growth_10y":     "Growth 10y",
+        "kpi_monthly_rent":   "Rent/mo",
+        "kpi_budget":         "Budget",
+        "kpi_price":          "Price",
+        "kpi_deals_yr":       "Deals/yr",
+        "kpi_deals_mo":       "Deals/mo",
+        "kpi_days_on_market": "Days on market",
+        "kpi_rent_1br":       "Rent 1BR/mo",
+        "kpi_rent_2br":       "Rent 2BR/mo",
+        "kpi_rent_3br":       "Rent 3BR/mo",
+        # units
+        "u_days_short":   "d",
+        "u_years_short":  "y",
+        "u_total_5y":     "Total 5y:",
+        "u_payback_about":"Payback ~",
     },
     "ar": {
         "report_types": {
@@ -353,13 +503,95 @@ I18N = {
                             "ضمان شفاف من DLD"],
         "summary_fallback":"تقرير مفصل. تأتي جميع الأرقام من قاعدة بيانات DLD.",
         "disclaimer_text": "هذا التقرير لأغراض إعلامية فقط ولا يشكل عرضًا عامًا أو نصيحة استثمارية فردية.",
+        # ── extended (B051 full i18n) ──
+        "footer_brand":    "تحليلات عقارات دبي",
+        "top_buildings":   "أفضل المباني في المنطقة",
+        "area_stats":      "إحصائيات المنطقة",
+        "price_trend_12m": "اتجاه الأسعار — 12 شهرًا",
+        "price_trend_sub": "متوسط السعر الشهري · DLD",
+        "area_comparison": "مقارنة المناطق",
+        "area_comparison_sub": "السعر/م² وعائد الإيجار حسب المنطقة",
+        "roi_forecast_10y":"توقعات العائد — 10 سنوات",
+        "roi_forecast_sub":"توقعات العائد التراكمي",
+        "risks_signals":   "المخاطر · إشارات النمو",
+        "investor_metrics":"مؤشرات المستثمر",
+        "investor_metrics_sub": "ما يحصل عليه المستثمر",
+        "key_metrics":     "المؤشرات الرئيسية",
+        "exec_summary_caps":"الملخص التنفيذي",
+        "exec_summary_sub":"ملخص الاستثمار",
+        "market_dynamics": "ديناميكيات السوق",
+        "market_overview": "نظرة عامة على السوق",
+        "roi_projection":  "توقعات العائد وإحصائيات المنطقة",
+        "investment_analysis": "تحليل الاستثمار",
+        "no_history":      "بيانات الأسعار التاريخية لمدة 12 شهرًا غير متاحة لمشاريع off-plan قبل إطلاق السوق الثانوي. مؤشرات الأداء على اليسار هي بيانات إجمالية للمنطقة من DLD.",
+        "no_price_history":"يتم تحميل بيانات تاريخ الأسعار عند الطلب الأول.",
+        "no_area_comparison":"ستتوفر مقارنة المناطق بعد مزامنة DLD.",
+        "yield_growth_note":"عائد {y}% + نمو سنوي {g}%/سنة · بدون إعادة الاستثمار.",
+        "no_comparison_intro":"<b>{area}</b> — منطقة دبي نشطة في قطاعات off-plan والثانوي.",
+        "no_comparison_avg":"متوسط سعر الصفقات في المنطقة: {v}.",
+        "no_comparison_psf":"السعر لكل م² (متوسط المنطقة): {v}.",
+        "no_comparison_yield":"عائد الإيجار النموذجي: {v}.",
+        "no_comparison_tail":"المقارنة المباشرة متاحة للأصول ذات السجل في السوق الثانوي. بالنسبة لمعظم مشاريع off-plan، تتشكل هذه المقارنة بعد التسليم.",
+        # Comparison table header (page 3)
+        "th_num":          "#",
+        "th_name":         "الاسم",
+        "th_area":         "المنطقة",
+        "th_price_m2":     "السعر/م²",
+        "th_deals":        "الصفقات",
+        "th_yield":        "العائد",
+        "th_growth":       "النمو",
+        "th_building":     "المبنى",
+        "th_year":         "السنة",
+        "th_return":       "العائد (%)",
+        # KPI labels
+        "kpi_avg_price":      "متوسط السعر",
+        "kpi_median_price":   "الوسيط",
+        "kpi_price_per_m2":   "السعر / م²",
+        "kpi_deals_12m":      "الصفقات (12 شهر)",
+        "kpi_yield":          "عائد الإيجار",
+        "kpi_growth_yoy":     "النمو السنوي",
+        "kpi_liquidity":      "السيولة",
+        "kpi_units":          "الوحدات",
+        "kpi_area_m2":        "المساحة",
+        "kpi_developer":      "المطور",
+        "kpi_handover":       "التسليم",
+        "kpi_bedrooms":       "غرف النوم",
+        "kpi_emirate":        "الإمارة",
+        "kpi_stage":          "المرحلة",
+        "kpi_score":          "درجة الاستثمار",
+        "kpi_payback":        "فترة الاسترداد",
+        "kpi_return_5y":      "عائد 5 سنوات",
+        "kpi_top_psf":        "أعلى ربع PSF",
+        "kpi_growth_5y":      "نمو 5 سنوات",
+        "kpi_growth_10y":     "نمو 10 سنوات",
+        "kpi_monthly_rent":   "إيجار / شهر",
+        "kpi_budget":         "الميزانية",
+        "kpi_price":          "السعر",
+        "kpi_deals_yr":       "صفقات / سنة",
+        "kpi_deals_mo":       "صفقات / شهر",
+        "kpi_days_on_market": "أيام في السوق",
+        "kpi_rent_1br":       "إيجار 1BR/شهر",
+        "kpi_rent_2br":       "إيجار 2BR/شهر",
+        "kpi_rent_3br":       "إيجار 3BR/شهر",
+        # units
+        "u_days_short":   "يوم",
+        "u_years_short":  "سنة",
+        "u_total_5y":     "إجمالي 5 سنوات:",
+        "u_payback_about":"الاسترداد ~",
     },
 }
 
 
 def _t(lang: str, key: str, default: str = "") -> str:
+    """Translate key. Falls back EN → key/default to avoid mixed languages."""
     d = I18N.get(lang, I18N["en"])
-    return d.get(key, default or key)
+    if key in d:
+        return d[key]
+    # cross-language fallback to EN (never RU) so AR/EN never leak Russian
+    en = I18N.get("en", {})
+    if key in en:
+        return en[key]
+    return default or key
 
 
 # ── DB cache ──
@@ -1722,7 +1954,7 @@ def _make_footer(lang: str, total_pages: int = 3):
         canvas.setFont(_FONT_REG if _FONT_REG in pdfmetrics.getRegisteredFontNames() else "Helvetica", 7)
         canvas.setFillColor(STONE_500)
         canvas.drawString(1.4 * cm, 0.9 * cm,
-                          f"Dubai Real Estate Analytics")
+                          _t(lang, "footer_brand"))
         page = canvas.getPageNumber()
         canvas.drawRightString(A4[0] - 1.4 * cm, 0.9 * cm,
                                f"{_t(lang, 'page')} {page} {_t(lang, 'of')} {total_pages}")
@@ -2022,57 +2254,31 @@ def _build_page2(story: list, st: dict, payload: dict, lang: str):
     story.append(Paragraph(_t(lang, "details"), st["h1"]))
 
     # ── Build LEFT column content (KPI + risks + signals) ──
-    LABELS = {
-        "ru": {
-            "avg_price":  "Средняя цена",
-            "median_price": "Медиана",
-            "price_per_m2": "Цена за м²",
-            "deals":      "Сделок (12m)",
-            "yield":      "Rental yield",
-            "growth":     "Рост YoY",
-            "liquidity":  "Ликвидность",
-            "units":      "Юнитов",
-            "area":       "Площадь",
-            "developer":  "Застройщик",
-            "handover":   "Сдача",
-            "bedrooms":   "Спальни",
-            "emirate":    "Эмират",
-            "stage":      "Стадия",
-            "score":      "Инв. score",
-            "payback":    "Окупаемость",
-            "return_5y":  "Доход 5y",
-            "top_psf":    "Top-quartile PSF",
-            "area_growth_5y":  "Рост 5y",
-            "area_growth_10y": "Рост 10y",
-            "monthly_rent":    "Аренда/мес",
-            "budget":          "Бюджет",
-        },
-        "en": {
-            "avg_price":  "Avg price",
-            "median_price": "Median",
-            "price_per_m2": "Price / m²",
-            "deals":      "Deals (12m)",
-            "yield":      "Rental yield",
-            "growth":     "YoY growth",
-            "liquidity":  "Liquidity",
-            "units":      "Units",
-            "area":       "Area",
-            "developer":  "Developer",
-            "handover":   "Handover",
-            "bedrooms":   "Bedrooms",
-            "emirate":    "Emirate",
-            "stage":      "Stage",
-            "score":      "Inv. score",
-            "payback":    "Payback",
-            "return_5y":  "5y return",
-            "top_psf":    "Top-q PSF",
-            "area_growth_5y":  "Growth 5y",
-            "area_growth_10y": "Growth 10y",
-            "monthly_rent":    "Rent/mo",
-            "budget":          "Budget",
-        },
+    # B051: all labels via _t() — supports RU/EN/AR (and any future lang).
+    L = {
+        "avg_price":       _t(lang, "kpi_avg_price"),
+        "median_price":    _t(lang, "kpi_median_price"),
+        "price_per_m2":    _t(lang, "kpi_price_per_m2"),
+        "deals":           _t(lang, "kpi_deals_12m"),
+        "yield":           _t(lang, "kpi_yield"),
+        "growth":          _t(lang, "kpi_growth_yoy"),
+        "liquidity":       _t(lang, "kpi_liquidity"),
+        "units":           _t(lang, "kpi_units"),
+        "area":            _t(lang, "kpi_area_m2"),
+        "developer":       _t(lang, "kpi_developer"),
+        "handover":        _t(lang, "kpi_handover"),
+        "bedrooms":        _t(lang, "kpi_bedrooms"),
+        "emirate":         _t(lang, "kpi_emirate"),
+        "stage":           _t(lang, "kpi_stage"),
+        "score":           _t(lang, "kpi_score"),
+        "payback":         _t(lang, "kpi_payback"),
+        "return_5y":       _t(lang, "kpi_return_5y"),
+        "top_psf":         _t(lang, "kpi_top_psf"),
+        "area_growth_5y":  _t(lang, "kpi_growth_5y"),
+        "area_growth_10y": _t(lang, "kpi_growth_10y"),
+        "monthly_rent":    _t(lang, "kpi_monthly_rent"),
+        "budget":          _t(lang, "kpi_budget"),
     }
-    L = LABELS.get(lang, LABELS["en"])
 
     kpis = payload.get("kpis") or []
     if not kpis:
@@ -2088,8 +2294,8 @@ def _build_page2(story: list, st: dict, payload: dict, lang: str):
         add(L["yield"],         _pct(payload.get("yield") or payload.get("rental_yield")))
         add(L["growth"],        _pct(payload.get("growth_yoy") or payload.get("growth")))
         add(L["return_5y"],     _pct(payload.get("total_return_5y_pct")))
-        add(L["payback"],       (f"{payload.get('payback_years')} лет" if lang == "ru" and payload.get("payback_years")
-                                 else (f"{payload.get('payback_years')}y" if payload.get("payback_years") else None)))
+        add(L["payback"],       (f"{payload.get('payback_years')} {_t(lang, 'u_years_short')}"
+                                 if payload.get("payback_years") else None))
         add(L["monthly_rent"],  _money(payload.get("monthly_rent")) if payload.get("monthly_rent") else None)
         add(L["budget"],        _money(payload.get("budget")) if payload.get("budget") else None)
         add(L["units"],         _num(payload.get("total_units") or payload.get("units")))
@@ -2184,14 +2390,7 @@ def _build_page2(story: list, st: dict, payload: dict, lang: str):
     # If no charts at all — show notes/fallback
     if not right_col:
         right_col.append(Paragraph(_t(lang, "dld_chart"), st["h2"]))
-        msg = ("Историческая 12-мес динамика недоступна для off-plan проектов "
-               "до старта вторичного рынка. KPI слева — агрегаты по району "
-               "и сравнимым активам из публичных данных DLD."
-               if lang == "ru" else
-               "12-month price dynamics is not yet available for off-plan units "
-               "prior to the secondary-market launch. KPI on the left are "
-               "area-level aggregates from public DLD data.")
-        right_col.append(Paragraph(msg, st["muted"]))
+        right_col.append(Paragraph(_t(lang, "no_history"), st["muted"]))
 
     if notes:
         right_col.append(Spacer(1, 0.15 * cm))
@@ -2219,10 +2418,11 @@ def _build_page3(story: list, st: dict, payload: dict, lang: str):
     story.append(Paragraph(_t(lang, "comparison"), st["h1"]))
     comp = payload.get("comparison") or payload.get("similar") or []
     if comp:
-        if lang == "ru":
-            head = ["#", "Название", "Район", "Цена/м²", "Сделок", "Yield", "Рост"]
-        else:
-            head = ["#", "Name", "Area", "Price/m²", "Deals", "Yield", "Growth"]
+        head = [
+            _t(lang, "th_num"), _t(lang, "th_name"), _t(lang, "th_area"),
+            _t(lang, "th_price_m2"), _t(lang, "th_deals"),
+            _t(lang, "th_yield"), _t(lang, "th_growth"),
+        ]
         rows = [head]
         for i, c in enumerate(comp[:10], 1):
             rows.append([
@@ -2256,32 +2456,16 @@ def _build_page3(story: list, st: dict, payload: dict, lang: str):
         avg = payload.get("avg_price") or payload.get("area_avg_price")
         psf = payload.get("price_per_m2") or payload.get("area_median_psf")
         yld = payload.get("yield") or payload.get("rental_yield")
-        if lang == "ru":
-            lines = []
-            if area:
-                lines.append(f"<b>{area}</b> — район Dubai, активный сегмент off-plan / secondary.")
-            if avg:
-                lines.append(f"Средняя цена сделок в районе: {_money(avg)}.")
-            if psf:
-                lines.append(f"Цена за м² (медиана района): {_money(psf, ' AED/m²')}.")
-            if yld:
-                lines.append(f"Типичная rental yield: {_pct(yld)}.")
-            lines.append("Прямое сравнение с похожими проектами доступно для активов, "
-                         "имеющих вторичный трек; для большинства off-plan проектов это "
-                         "сравнение появляется после handover.")
-        else:
-            lines = []
-            if area:
-                lines.append(f"<b>{area}</b> — active Dubai sub-market across off-plan and secondary segments.")
-            if avg:
-                lines.append(f"Average area deal: {_money(avg)}.")
-            if psf:
-                lines.append(f"Median price per m²: {_money(psf, ' AED/m²')}.")
-            if yld:
-                lines.append(f"Typical rental yield: {_pct(yld)}.")
-            lines.append("Side-by-side comparison is available for assets with a secondary-market "
-                         "track record. For most off-plan projects this comparison forms after "
-                         "handover.")
+        lines = []
+        if area:
+            lines.append(_t(lang, "no_comparison_intro").format(area=area))
+        if avg:
+            lines.append(_t(lang, "no_comparison_avg").format(v=_money(avg)))
+        if psf:
+            lines.append(_t(lang, "no_comparison_psf").format(v=_money(psf, " AED/m²")))
+        if yld:
+            lines.append(_t(lang, "no_comparison_yield").format(v=_pct(yld)))
+        lines.append(_t(lang, "no_comparison_tail"))
         for ln in lines:
             story.append(Paragraph(ln, st["body"]))
 
@@ -2296,10 +2480,7 @@ def _build_page3(story: list, st: dict, payload: dict, lang: str):
     if has_roi:
         story.append(Paragraph(_t(lang, "roi_chart"), st["h2"]))
         if bd:
-            if lang == "ru":
-                head = ["Год", "Доходность (%)"]
-            else:
-                head = ["Year", "Return (%)"]
+            head = [_t(lang, "th_year"), _t(lang, "th_return")]
             rows = [head]
             for b in bd[:10]:
                 lab = str(b.get("year") or b.get("label") or "—")
@@ -2332,13 +2513,13 @@ def _build_page3(story: list, st: dict, payload: dict, lang: str):
                 parts.append(f"10y: {float(roi10):.1f}%")
             if payload.get("total_return_5y_pct") is not None:
                 parts.append(
-                    ("Совокупная 5y: " if lang == "ru" else "Total 5y: ")
+                    _t(lang, "u_total_5y") + " "
                     + _pct(payload.get("total_return_5y_pct")))
             if payload.get("payback_years"):
                 parts.append(
-                    ("Окупаемость ~" if lang == "ru" else "Payback ~")
-                    + f"{payload.get('payback_years')}"
-                    + (" лет" if lang == "ru" else "y"))
+                    _t(lang, "u_payback_about")
+                    + f"{payload.get('payback_years')} "
+                    + _t(lang, "u_years_short"))
             if parts:
                 story.append(Paragraph(" · ".join(parts), st["body"]))
 
@@ -2346,11 +2527,9 @@ def _build_page3(story: list, st: dict, payload: dict, lang: str):
     tb = payload.get("top_buildings") or []
     if tb and isinstance(tb, list):
         story.append(Spacer(1, 0.25 * cm))
-        story.append(Paragraph(
-            "Топ зданий района" if lang == "ru" else "Top buildings in area",
-            st["h2"]))
-        head = (["#", "Здание", "Цена/м²", "Сделок"] if lang == "ru"
-                else ["#", "Building", "Price/m²", "Deals"])
+        story.append(Paragraph(_t(lang, "top_buildings"), st["h2"]))
+        head = [_t(lang, "th_num"), _t(lang, "th_building"),
+                _t(lang, "th_price_m2"), _t(lang, "th_deals")]
         rows = [head]
         for i, b in enumerate(tb[:6], 1):
             rows.append([
