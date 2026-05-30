@@ -449,8 +449,8 @@ TEXTS = {
         "smart_timing_header": "📅 <b>Горизонт покупки</b>\n\nКогда планируется сделка?",
         "smart_risk_header": "🛡 <b>Профиль риска</b>\n\nВыберите подходящий стиль.",
         "rankings_market_pick": "📊 <b>Рейтинги рынка</b>\n\nВыберите, какой рейтинг построить.",
-        "wizard_step2_property": "🏠 <b>Шаг 2 из 3</b>\n\nВыберите тип недвижимости или комнатность.",
-        "wizard_step3_period": "📅 <b>Шаг 3 из 3</b>\n\nВыберите период анализа.",
+        "wizard_step2_property": "🏠 <b>Тип жилья?</b>",
+        "wizard_step3_period": "📅 <b>Период?</b>",
         "pick_new_scenario": "🔁 Выберите новый сценарий.",
         "action_building_title": "🏢 <b>{name}</b>\n\nВыберите, что показать по зданию.",
         "action_area_title": "🏙 <b>{name}</b>\n\nВыберите, что показать по району.",
@@ -461,7 +461,7 @@ TEXTS = {
         "report_kind_price": "Ценовая аналитика",
         "report_kind_top_buildings": "Топ зданий",
         "report_kind_default": "Аналитика",
-        "report_step1_deal": "📊 <b>{kind}</b>\n\nШаг 1 из 3 — выберите тип сделки.",
+        "report_step1_deal": "📊 <b>{kind}</b>\n\nКакие сделки?",
         "tech_error": "⚠️ Произошла техническая ошибка в сценарии. Нажмите «Главное меню» и повторите запрос.",
         "format_compare_loading": "⏳ <b>Сравниваю форматы</b>\n\n◇ Подключаю DLD-архив, live-базу и intelligence-слой.\n◇ Сравниваю апартаменты, виллы и таунхаусы.\n◇ Формирую инвестиционное заключение 360°.",
         "lead_rate_limited": "⌛️ Заявку можно отправить один раз в 10 минут. Попробуйте немного позже.",
@@ -563,8 +563,8 @@ TEXTS = {
         "smart_timing_header": "📅 <b>Purchase horizon</b>\n\nWhen are you planning the deal?",
         "smart_risk_header": "🛡 <b>Risk profile</b>\n\nChoose your style.",
         "rankings_market_pick": "📊 <b>Market Rankings</b>\n\nChoose which ranking to build.",
-        "wizard_step2_property": "🏠 <b>Step 2 of 3</b>\n\nChoose property type or bedrooms.",
-        "wizard_step3_period": "📅 <b>Step 3 of 3</b>\n\nChoose analysis period.",
+        "wizard_step2_property": "🏠 <b>Property type?</b>",
+        "wizard_step3_period": "📅 <b>Period?</b>",
         "pick_new_scenario": "🔁 Choose a new scenario.",
         "action_building_title": "🏢 <b>{name}</b>\n\nWhat do you want to see for this building?",
         "action_area_title": "🏙 <b>{name}</b>\n\nWhat do you want to see for this area?",
@@ -575,7 +575,7 @@ TEXTS = {
         "report_kind_price": "Price Analytics",
         "report_kind_top_buildings": "Top Buildings",
         "report_kind_default": "Analytics",
-        "report_step1_deal": "📊 <b>{kind}</b>\n\nStep 1 of 3 — choose deal type.",
+        "report_step1_deal": "📊 <b>{kind}</b>\n\nWhich deals?",
         "tech_error": "⚠️ A technical error occurred in the scenario. Press \"Main menu\" and try again.",
         "format_compare_loading": "⏳ <b>Comparing formats</b>\n\n◇ Connecting DLD archive, live DB and intelligence layer.\n◇ Comparing apartments, villas and townhouses.\n◇ Building 360° investment conclusion.",
         "lead_rate_limited": "⌛️ You can submit a request once every 10 minutes. Please try again later.",
@@ -677,8 +677,8 @@ TEXTS = {
         "smart_timing_header": "📅 <b>أفق الشراء</b>\n\nمتى تخطط للصفقة؟",
         "smart_risk_header": "🛡 <b>ملف المخاطرة</b>\n\nاختر النمط المناسب.",
         "rankings_market_pick": "📊 <b>تصنيفات السوق</b>\n\nاختر التصنيف الذي تريد بناءه.",
-        "wizard_step2_property": "🏠 <b>الخطوة 2 من 3</b>\n\nاختر نوع العقار أو الغرف.",
-        "wizard_step3_period": "📅 <b>الخطوة 3 من 3</b>\n\nاختر فترة التحليل.",
+        "wizard_step2_property": "🏠 <b>نوع العقار؟</b>",
+        "wizard_step3_period": "📅 <b>الفترة؟</b>",
         "pick_new_scenario": "🔁 اختر سيناريو جديد.",
         "action_building_title": "🏢 <b>{name}</b>\n\nماذا تريد أن ترى عن هذا المبنى؟",
         "action_area_title": "🏙 <b>{name}</b>\n\nماذا تريد أن ترى عن هذه المنطقة؟",
@@ -689,7 +689,7 @@ TEXTS = {
         "report_kind_price": "تحليلات الأسعار",
         "report_kind_top_buildings": "أفضل المباني",
         "report_kind_default": "تحليلات",
-        "report_step1_deal": "📊 <b>{kind}</b>\n\nالخطوة 1 من 3 — اختر نوع الصفقة.",
+        "report_step1_deal": "📊 <b>{kind}</b>\n\nأي صفقات؟",
         "tech_error": "⚠️ حدث خطأ تقني في السيناريو. اضغط «القائمة الرئيسية» وحاول مرة أخرى.",
         "format_compare_loading": "⏳ <b>مقارنة الأنواع</b>\n\n◇ توصيل أرشيف DLD والقاعدة المباشرة وطبقة الذكاء.\n◇ مقارنة الشقق والفيلات والتاون هاوس.\n◇ توليد خلاصة استثمارية 360°.",
         "lead_rate_limited": "⌛️ يمكنك إرسال طلب واحد كل 10 دقائق. حاول لاحقاً.",
@@ -815,23 +815,23 @@ def deal_type_menu(user_id):
 
 
 def property_menu(user_id):
+    """v55 compact: 4 rows. Bedrooms on one line; property types on next two lines.
+    All previously available choices retained — just reorganised to feel lighter."""
     return kb([
         ["Studio", "1 BR", "2 BR"],
         ["3 BR", "4 BR", "5 BR+"],
-        ["Apartment", "Villa"],
-        ["Townhouse", "Penthouse"],
-        ["Office", "Shop"],
-        [tr(user_id, "skip")],
-        [tr(user_id, "back"), tr(user_id, "main")]
+        ["Apartment", "Villa", "Townhouse"],
+        ["Penthouse", "Office", "Shop"],
+        [tr(user_id, "skip"), tr(user_id, "back"), tr(user_id, "main")],
     ])
 
 
 def period_menu(user_id):
+    """v55 compact: 3 rows. Order matches user task — Last year / 3m / 6m first."""
     return kb([
-        [tr(user_id, "p3"), tr(user_id, "p6")],
-        [tr(user_id, "p12"), tr(user_id, "p36")],
-        [tr(user_id, "all_time"), tr(user_id, "skip")],
-        [tr(user_id, "back"), tr(user_id, "main")]
+        [tr(user_id, "p12"), tr(user_id, "p3"), tr(user_id, "p6")],
+        [tr(user_id, "p36"), tr(user_id, "all_time"), tr(user_id, "skip")],
+        [tr(user_id, "back"), tr(user_id, "main")],
     ])
 
 
@@ -6595,11 +6595,30 @@ def _set_data_source(source):
     _clear_schema_caches()
 
 
+# Circuit breaker around main DB — opens after repeated connect failures
+# so handlers can return degraded responses instead of timing out.
+try:
+    from stability import get_breaker as _get_breaker_db
+    _db_breaker = _get_breaker_db("db_main")
+except Exception:
+    _db_breaker = None
+
+
 def db():
     """Совместимая db() функция: старый код продолжает вызывать db(),
     но фактически подключается к активной базе archive/live.
     v107: жёсткие таймауты, чтобы запросы к dld_transactions_full не висели.
+    Wrapped by CircuitBreaker — when OPEN, raises so callers fall to degraded
+    paths (cached / "Data updating…" placeholders) instead of hanging.
     """
+    if _db_breaker is not None:
+        return _db_breaker.call(
+            psycopg2.connect,
+            _ACTIVE_DATABASE_URL,
+            cursor_factory=RealDictCursor,
+            connect_timeout=8,
+            options="-c statement_timeout=15000 -c idle_in_transaction_session_timeout=20000",
+        )
     return psycopg2.connect(
         _ACTIVE_DATABASE_URL,
         cursor_factory=RealDictCursor,
@@ -6998,6 +7017,19 @@ def build_pdf_bytes(title, content):
 async def handle_pdf_request(message):
     user_id = message.from_user.id
     state = user_states.get(user_id, {}) or {}
+
+    # Feature flag: FF_PDF_REPORT_ENABLED=0 → degrade with friendly message.
+    try:
+        from stability import ff as _ff, degrade_msg as _dmsg
+        if not _ff("PDF_REPORT"):
+            try:
+                lang = state.get("lang") or "ru"
+                await message.answer(_dmsg("feature_unavailable", lang))
+            except Exception:
+                pass
+            return
+    except Exception:
+        pass
 
     # PDF v65: сначала используем последний реально показанный отчёт.
     # Так PDF не пересчитывает слишком узкий фильтр и не падает после рейтингов/подбора.
