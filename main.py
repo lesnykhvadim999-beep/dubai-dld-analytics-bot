@@ -190,6 +190,34 @@ user_states = {}
 # v132: cache welcome logo file_id (avoids 1.5MB re-upload on every /start)
 _ANALYTICS_LOGO_FILE_ID = None
 
+# Memory-leak guard (2026-05-30, audit STEP 9): cap state dicts so they
+# don't grow unbounded over weeks of uptime.
+_MAX_STATE_USERS = int(os.environ.get("MAX_STATE_USERS", "5000"))
+
+
+def _gc_state_dicts():
+    """Hourly pruner — evicts oldest 25% if a state dict exceeds the cap.
+    Note: user_languages persists in DB via set_lang/get_lang so we may evict
+    from RAM freely; lang is re-read from DB on next message."""
+    import time as _t
+    while True:
+        try:
+            _t.sleep(3600)
+            for name, d in (("user_languages", user_languages),
+                            ("user_states", user_states)):
+                if not isinstance(d, dict) or len(d) <= _MAX_STATE_USERS:
+                    continue
+                drop_n = len(d) - int(_MAX_STATE_USERS * 0.75)
+                for k in list(d.keys())[:drop_n]:
+                    d.pop(k, None)
+                print(f"[gc] {name}: evicted {drop_n} ({len(d)} left)", flush=True)
+        except Exception as _gc_err:
+            print(f"[gc] error: {_gc_err}", flush=True)
+
+
+import threading as _gc_th
+_gc_th.Thread(target=_gc_state_dicts, name="state_gc", daemon=True).start()
+
 
 def db():
     # v107: жёсткие таймауты, чтобы хэндлеры не зависали на медленных DLD-запросах.
