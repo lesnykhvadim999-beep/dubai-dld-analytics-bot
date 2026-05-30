@@ -8770,6 +8770,17 @@ def _analytics_db_ping() -> bool:
 
 
 async def main():
+    # Resilience: smoke test + watchdog + crash-loop counter (opt-out via envs)
+    try:
+        from resilience import start_resilience as _start_resilience
+        if not _start_resilience("analytics"):
+            print("[resilience] smoke test FAILED — refusing to start polling", flush=True)
+            import sys as _sys
+            _sys.exit(1)
+    except SystemExit:
+        raise
+    except Exception as _re:
+        print(f"[resilience] init error (continuing): {_re}", flush=True)
     # FSST: HTTP health endpoint with DB ping
     if _fsst_ok:
         start_health_server(
