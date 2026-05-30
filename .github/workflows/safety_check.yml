@@ -1,0 +1,41 @@
+name: Safety Check
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+
+jobs:
+  static-analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyyaml
+
+      - name: Static safety analysis (non-blocking initial pass)
+        run: |
+          if [ -f .git_hooks/check_safety.py ]; then
+            python .git_hooks/check_safety.py --all-files || true
+          else
+            echo "No vendored .git_hooks/check_safety.py — skipping"
+          fi
+
+      - name: Syntax check (py_compile)
+        run: |
+          for f in $(git ls-files '*.py'); do
+            python -m py_compile "$f" || { echo "Syntax error in $f"; exit 1; }
+          done
+
+      - name: Secrets scan
+        if: hashFiles('shared/precommit_secrets_check.py') != ''
+        run: |
+          git ls-files '*.py' | python shared/precommit_secrets_check.py

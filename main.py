@@ -1334,15 +1334,26 @@ def is_navigation_text(user_id, text):
     }
     return text in items or text in PROPERTY_OPTIONS
 def base_from():
+    # NOTE: instance_date может приходить как ISO 'YYYY-MM-DD', legacy 'DD-MM-YYYY'
+    # или 'DD/MM/YYYY' (Dubai Pulse). Используем shared safe_date_sql,
+    # иначе regression — все DD-MM-YYYY → NULL → "нет данных".
+    try:
+        from safe_coerce import safe_date_sql as _sd
+        date_expr = _sd("instance_date")
+    except Exception:
+        # Fallback на старый код, расширенный на DD-MM-YYYY (defensive).
+        date_expr = (
+            "CASE "
+            "WHEN instance_date::text ~ '^\\d{4}-\\d{2}-\\d{2}' THEN (instance_date::text)::date "
+            "WHEN instance_date::text ~ '^\\d{2}-\\d{2}-\\d{4}$' THEN to_date(instance_date::text, 'DD-MM-YYYY') "
+            "WHEN instance_date::text ~ '^\\d{2}/\\d{2}/\\d{4}$' THEN to_date(instance_date::text, 'DD/MM/YYYY') "
+            "ELSE NULL END"
+        )
     return f"""
         FROM (
             SELECT
                 *,
-                CASE
-                    WHEN instance_date ~ '^\\d{{4}}-\\d{{2}}-\\d{{2}}'
-                    THEN instance_date::date
-                    ELSE NULL
-                END AS safe_date
+                {date_expr} AS safe_date
             FROM {TABLE}
         ) t
         WHERE 1=1
@@ -2425,7 +2436,20 @@ def date_expr_from_cols(cols, candidates):
     col = first_existing(cols, candidates)
     if not col:
         return "NULL::date"
-    return f"CASE WHEN {qcol(col)}::text ~ '^\\d{{4}}-\\d{{2}}-\\d{{2}}' THEN {qcol(col)}::date ELSE NULL END"
+    # Используем shared safe_date_sql — поддерживает DD-MM-YYYY/DD/MM/YYYY/ISO/epoch.
+    try:
+        from safe_coerce import safe_date_sql as _sd
+        return _sd(qcol(col).strip('"'))
+    except Exception:
+        # Fallback: ISO + DD-MM-YYYY + DD/MM/YYYY вручную (без shared).
+        c = qcol(col)
+        return (
+            "CASE "
+            f"WHEN {c}::text ~ '^\\d{{4}}-\\d{{2}}-\\d{{2}}' THEN ({c}::text)::date "
+            f"WHEN {c}::text ~ '^\\d{{2}}-\\d{{2}}-\\d{{4}}$' THEN to_date({c}::text, 'DD-MM-YYYY') "
+            f"WHEN {c}::text ~ '^\\d{{2}}/\\d{{2}}/\\d{{4}}$' THEN to_date({c}::text, 'DD/MM/YYYY') "
+            "ELSE NULL END"
+        )
 
 
 def rent_meta():
@@ -3478,10 +3502,10 @@ def format_compare_best_areas(prop, period=None, budget=None, limit=7):
     return rows[:limit]
 
 
-def show_format_best_areas(prop, period=None, budget=None):
+def show_format_best_areas(prop, period=None, budget=None, *, user_id=None):
     rows = format_compare_best_areas(prop, period, budget)
     if not rows:
-        return no_data_message("Лучшие районы")
+        return no_data_message("Лучшие районы", user_id=user_id)
     text = f"🏙 <b>Лучшие районы для формата {prop}</b>\n\n"
     for i, r in enumerate(rows, 1):
         text += (
@@ -3495,7 +3519,7 @@ def show_format_best_areas(prop, period=None, budget=None):
     return text
 
 
-def show_format_best_buildings(prop, area=None, period=None):
+def show_format_best_buildings(prop, area=None, period=None, *, user_id=None):
     scope = "area" if area else "dubai"
     name = area if area else None
     try:
@@ -3504,7 +3528,7 @@ def show_format_best_buildings(prop, area=None, period=None):
         print("FORMAT_BEST_BUILDINGS_ERROR:", repr(e))
         rows = []
     if not rows:
-        return no_data_message("Лучшие здания")
+        return no_data_message("Лучшие здания", user_id=user_id)
     text = f"🏢 <b>Лучшие здания / проекты</b>\n"
     if area:
         text += f"📍 Район: <b>{area}</b>\n"
@@ -4539,7 +4563,7 @@ async def main_handler(message: Message):
             user_states[user_id] = state
             await send_processing(message, tr(user_id, "best_object_loading"))
             try:
-                html = build_best_object_report_v95(state)
+                html = build_best_object_report_v95(state, user_id=user_id)
             except Exception as e:
                 print("BEST_OBJECT_REPORT_ERROR:", repr(e))
                 html = no_data_message("Лучший объект", user_id=user_id)
@@ -4670,10 +4694,10 @@ async def main_handler(message: Message):
                 )
                 return
             if text == "🏙 Лучшие районы":
-                await message.answer(show_format_best_areas(best, state.get("period"), state.get("budget")), reply_markup=format_compare_after_menu(user_id))
+                await message.answer(show_format_best_areas(best, state.get("period"), state.get("budget"), user_id=user_id), reply_markup=format_compare_after_menu(user_id))
                 return
             if text == "🏢 Лучшие здания":
-                await message.answer(show_format_best_buildings(best, state.get("name"), state.get("period")), reply_markup=format_compare_after_menu(user_id))
+                await message.answer(show_format_best_buildings(best, state.get("name"), state.get("period"), user_id=user_id), reply_markup=format_compare_after_menu(user_id))
                 return
             if text == "📄 PDF":
                 await message.answer(tr(user_id, "pdf_after_selection"), reply_markup=format_compare_after_menu(user_id))
@@ -8711,10 +8735,10 @@ def _v100_try_router_fallbacks(payload, normalized):
         print("V100_ROUTER_FALLBACK_EXEC_ERROR:", repr(e))
     return [], [], notes
 
-def build_best_object_report_v95(state):
+def build_best_object_report_v95(state, *, user_id=None):
     areas, buildings, notes = _v95_top_areas_and_buildings(state)
     if not areas and not buildings:
-        return no_data_message("Лучший объект")
+        return no_data_message("Лучший объект", user_id=user_id)
     best_area = areas[0] if areas else None
     best_building = buildings[0] if buildings else None
     deal_type = state.get("deal_type") or "неважно"
@@ -8848,6 +8872,23 @@ async def main():
             print(f"[metrics] exposed on :{p}")
     except Exception as _me:
         print(f"[metrics] failed: {_me}")
+    # Contract validator (background, non-blocking). См. shared/contract_validator.py.
+    # STRICT_CONTRACTS=0 by default → алертим, но не падаем.
+    try:
+        from contract_boot_hook import async_contract_check
+        try:
+            from admin_notify import admin_notify as _adm_notify
+        except Exception:
+            _adm_notify = None
+        asyncio.create_task(async_contract_check(
+            bot_name="analytics",
+            dsns={"live": LIVE_DATABASE_URL, "archive": ARCHIVE_DATABASE_URL},
+            contracts_filter=["dld_*", "users", "leads", "area_price_benchmark"],
+            admin_notify=_adm_notify,
+        ))
+        print("[contract] boot check scheduled", flush=True)
+    except Exception as _cce:
+        print(f"[contract] boot check skipped: {_cce!r}", flush=True)
     print("Dubai DLD Analytics Bot started")
     try:
         await bot.delete_webhook(drop_pending_updates=True)
@@ -10530,7 +10571,7 @@ def _v100_try_router_fallbacks(payload, normalized):
         print("V100_ROUTER_FALLBACK_EXEC_ERROR:", repr(e))
     return [], [], notes
 
-def build_best_object_report_v95(state):
+def build_best_object_report_v95(state, *, user_id=None):
     """v96 override: best-object flow is now normalized by intelligence_router.
     The SQL selection still uses existing main.py helpers, so no DB architecture is broken.
     """
@@ -10572,7 +10613,7 @@ def build_best_object_report_v95(state):
         if fb_areas or fb_buildings:
             areas, buildings, notes = fb_areas, fb_buildings, fb_notes
         else:
-            html = no_data_message("Лучший объект")
+            html = no_data_message("Лучший объект", user_id=user_id)
             html += "\n\n🧭 <b>Что я уже проверил</b>\n"
             html += "• точный фильтр;\n• расширение периода;\n• расширение бюджета;\n• снятие комнатности;\n• снятие формата объекта.\n\n"
             html += "📌 <b>Рекомендация:</b> попробуйте выбрать «Пропустить» в формате/комнатности или бюджет шире. Я не смешиваю аренду и продажу, чтобы не показать ложную аналитику."
@@ -11503,7 +11544,7 @@ def _v104_best_object_limited_report(state):
     )
 
 
-def build_best_object_report_v95(state):
+def build_best_object_report_v95(state, *, user_id=None):
     """v104 override: graceful degradation instead of hard no-data failure."""
     payload = _ir_v96_prepare(state, 'best object')
     normalized = _v104_clean_best_object_state(state or {})
@@ -13461,7 +13502,109 @@ def _unhandled_exception_hook(exc_type, exc_value, exc_traceback):
 _sys.excepthook = _unhandled_exception_hook
 
 
+# ── Empty-result sanity guards (v111, 2026-05-30) ─────────────────────────
+# Wraps the final v110/v106 versions of get_stats / get_latest_deals so that
+# a successful-but-empty result is audited and, if the base table is big,
+# escalates to admin_notify. Throttled to 1 alert/hour per (label, args sig).
+#
+# Implementation lives in C:\Projects\shared\empty_guard.py. We add the
+# /shared path to sys.path so Railway prod (where /shared ships as a path)
+# can import it.
+try:
+    import sys as _eg_sys, os as _eg_os
+    for _eg_path in ("/app/shared", r"C:\Projects\shared", "../shared"):
+        if _eg_os.path.isdir(_eg_path) and _eg_path not in _eg_sys.path:
+            _eg_sys.path.insert(0, _eg_path)
+    from empty_guard import guarded_query as _guarded_query
+    _EG_BASE_SQL_DLD = "SELECT COUNT(*) FROM public.dld_transactions_full"
+
+    # Save the v110/v106 originals and rebind through the guard. We use the
+    # try/except NameError pattern so this stays safe if any wrapped function
+    # is renamed or removed during a refactor.
+    try:
+        _eg_orig_get_stats = get_stats
+        get_stats = _guarded_query(  # type: ignore[misc]
+            label="analytics.get_stats",
+            base_count_sql=_EG_BASE_SQL_DLD,
+            dsn_env="LIVE_DATABASE_URL",
+            bot="analytics",
+            base_min=10_000,
+            alert_threshold=100_000,
+            is_empty=lambda r: r is None or (isinstance(r, dict) and not r.get("deals")),
+        )(_eg_orig_get_stats)
+    except NameError:
+        pass
+
+    try:
+        _eg_orig_get_stats_smart = get_stats_smart
+        def _eg_smart_empty(r):
+            try:
+                return r is None or r[0] is None or (
+                    isinstance(r[0], dict) and not r[0].get("deals"))
+            except Exception:
+                return False
+        get_stats_smart = _guarded_query(  # type: ignore[misc]
+            label="analytics.get_stats_smart",
+            base_count_sql=_EG_BASE_SQL_DLD,
+            dsn_env="LIVE_DATABASE_URL",
+            bot="analytics",
+            base_min=10_000,
+            alert_threshold=100_000,
+            is_empty=_eg_smart_empty,
+        )(_eg_orig_get_stats_smart)
+    except NameError:
+        pass
+
+    try:
+        _eg_orig_get_latest_deals = get_latest_deals
+        get_latest_deals = _guarded_query(  # type: ignore[misc]
+            label="analytics.get_latest_deals",
+            base_count_sql=_EG_BASE_SQL_DLD,
+            dsn_env="LIVE_DATABASE_URL",
+            bot="analytics",
+            base_min=10_000,
+            alert_threshold=100_000,
+        )(_eg_orig_get_latest_deals)
+    except NameError:
+        pass
+
+    try:
+        _eg_orig_get_latest_deals_smart = get_latest_deals_smart
+        def _eg_smart_list_empty(r):
+            try:
+                return not r or not r[0]
+            except Exception:
+                return False
+        get_latest_deals_smart = _guarded_query(  # type: ignore[misc]
+            label="analytics.get_latest_deals_smart",
+            base_count_sql=_EG_BASE_SQL_DLD,
+            dsn_env="LIVE_DATABASE_URL",
+            bot="analytics",
+            base_min=10_000,
+            alert_threshold=100_000,
+            is_empty=_eg_smart_list_empty,
+        )(_eg_orig_get_latest_deals_smart)
+    except NameError:
+        pass
+
+    print("[empty_guard] v111 wrappers installed on get_stats/get_latest_deals "
+          "(+ smart variants)")
+except Exception as _eg_err:
+    print(f"[empty_guard] init failed (non-fatal): {_eg_err}")
+
+
 if __name__ == "__main__":
+    # Boot-time ecosystem contract verification (fail-soft unless STRICT_CONTRACTS=1).
+    try:
+        from contracts_registry import verify_my_contracts as _vmc
+        _vmc(bot_name="analytics", role="both", notify=True)
+    except Exception as _ce:
+        try:
+            import logging as _lg
+            _lg.getLogger(__name__).warning(
+                "contracts_registry verify failed (non-fatal): %s", _ce)
+        except Exception:
+            pass
     try:
         asyncio.run(main())
     except Exception:
