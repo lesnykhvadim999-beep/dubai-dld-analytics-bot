@@ -8882,8 +8882,12 @@ async def main():
             _adm_notify = None
         asyncio.create_task(async_contract_check(
             bot_name="analytics",
-            dsns={"live": LIVE_DATABASE_URL, "archive": ARCHIVE_DATABASE_URL},
-            contracts_filter=["dld_*", "users", "leads", "area_price_benchmark"],
+            dsns={
+                "live": LIVE_DATABASE_URL,
+                "archive": ARCHIVE_DATABASE_URL,
+                "resale": os.getenv("RESALE_DATABASE_URL") or "",
+            },
+            contracts_filter=["dld_*", "users", "leads", "area_price_benchmark", "listings_v2"],
             admin_notify=_adm_notify,
         ))
         print("[contract] boot check scheduled", flush=True)
@@ -13591,6 +13595,198 @@ try:
           "(+ smart variants)")
 except Exception as _eg_err:
     print(f"[empty_guard] init failed (non-fatal): {_eg_err}")
+
+
+# ============================================================
+# v141 GRANDE FIX — strip "|||area" suffix before read-model lookup
+# ----------------------------------------------------------------
+# Root cause: _state_for_selected_building_v72 stores
+#   name = "Grande|||Burj Khalifa"
+# (building + area encoded with triple-pipe). Downstream v110
+# get_stats / get_stats_smart pass this raw name to
+# read_model.try_building_stats(name), which does
+#   building_key = name.strip().lower()
+# and runs EXACT match: WHERE building_key = %s.
+# Result: "grande|||burj khalifa" never matches any row in
+# building_stats (where building_key = clean "grande"), so v110
+# returns None and bot says "no data".
+#
+# Fix: split "|||" before read-model call. Also add a building-
+# in-area fallback: if exact-building miss, try area lookup
+# (so user still gets useful aggregate even if specific building
+# wasn't pre-aggregated). This is fail-soft — only adds data paths.
+# ============================================================
+
+def _v141_split_building_area(name):
+    """Split state-encoded 'Building|||Area' into (building, area)."""
+    if not name:
+        return None, None
+    raw = str(name)
+    if "|||" in raw:
+        b, a = raw.split("|||", 1)
+        return b.strip() or None, a.strip() or None
+    return raw.strip() or None, None
+
+
+try:
+    _v141_orig_get_stats_smart = get_stats_smart
+except NameError:
+    _v141_orig_get_stats_smart = None
+
+try:
+    _v141_orig_get_stats = get_stats
+except NameError:
+    _v141_orig_get_stats = None
+
+
+def get_stats_smart(scope="dubai", name=None, prop=None, period=None, deal_type=None):  # noqa: F811
+    """v141 wrapper: parse '|||' before read-model + area fallback for buildings."""
+    if _v141_orig_get_stats_smart is None:
+        return None, prop, period, deal_type
+    # 1) try original with as-is name
+    try:
+        row, up, upe, udt = _v141_orig_get_stats_smart(scope, name, prop, period, deal_type)
+        if row and (row.get("deals") or 0) > 0:
+            return row, up, upe, udt
+    except Exception as e:
+        try:
+            _v106_log("v141_get_stats_smart_pass1_err", e, scope=scope, name=str(name)[:120])
+        except Exception:
+            pass
+        row = None
+
+    # 2) if name has '|||', retry with clean building name only
+    bld, area = _v141_split_building_area(name)
+    if bld and bld != (name or ""):
+        try:
+            row2, up2, upe2, udt2 = _v141_orig_get_stats_smart(scope, bld, prop, period, deal_type)
+            if row2 and (row2.get("deals") or 0) > 0:
+                try:
+                    _v106_log("v141_pipe_strip_hit", "get_stats_smart",
+                              raw_name=str(name)[:120], clean=bld, kind=scope)
+                except Exception:
+                    pass
+                return row2, up2, upe2, udt2
+        except Exception as e:
+            try:
+                _v106_log("v141_get_stats_smart_clean_err", e, name=str(name)[:120])
+            except Exception:
+                pass
+
+    # 3) building-scope fallback: query the area for context data
+    if scope in ("building", "buildings", "project", "tower") and area:
+        try:
+            row3, up3, upe3, udt3 = _v141_orig_get_stats_smart("area", area, prop, period, deal_type)
+            if row3 and (row3.get("deals") or 0) > 0:
+                try:
+                    _v106_log("v141_area_fallback_hit", "get_stats_smart",
+                              raw_name=str(name)[:120], area=area)
+                except Exception:
+                    pass
+                return row3, up3, upe3, udt3
+        except Exception as e:
+            try:
+                _v106_log("v141_get_stats_smart_area_fallback_err", e, name=str(name)[:120])
+            except Exception:
+                pass
+
+    return None, prop, period, deal_type
+
+
+def get_stats(scope="dubai", name=None, prop=None, period=None, deal_type=None):  # noqa: F811
+    """v141 wrapper: parse '|||' before read-model + area fallback for buildings."""
+    if _v141_orig_get_stats is None:
+        return None
+    try:
+        row = _v141_orig_get_stats(scope, name, prop, period, deal_type)
+        if row and (row.get("deals") or 0) > 0:
+            return row
+    except Exception as e:
+        try:
+            _v106_log("v141_get_stats_pass1_err", e, scope=scope, name=str(name)[:120])
+        except Exception:
+            pass
+        row = None
+
+    bld, area = _v141_split_building_area(name)
+    if bld and bld != (name or ""):
+        try:
+            row2 = _v141_orig_get_stats(scope, bld, prop, period, deal_type)
+            if row2 and (row2.get("deals") or 0) > 0:
+                return row2
+        except Exception:
+            pass
+
+    if scope in ("building", "buildings", "project", "tower") and area:
+        try:
+            row3 = _v141_orig_get_stats("area", area, prop, period, deal_type)
+            if row3 and (row3.get("deals") or 0) > 0:
+                return row3
+        except Exception:
+            pass
+
+    return None
+
+
+# Also patch get_latest_deals_smart to strip '|||' for raw DLD path
+try:
+    _v141_orig_get_latest_deals_smart = get_latest_deals_smart
+except NameError:
+    _v141_orig_get_latest_deals_smart = None
+
+
+def get_latest_deals_smart(scope, name, prop=None, period=None, deal_type=None, limit=7, unit_query=None):  # noqa: F811
+    """v141: try original first, then retry with clean building name (no '|||area')."""
+    if _v141_orig_get_latest_deals_smart is None:
+        return [], prop, period, deal_type
+    try:
+        rows, up, upe, udt = _v141_orig_get_latest_deals_smart(
+            scope, name, prop, period, deal_type, limit=limit, unit_query=unit_query
+        )
+        if rows:
+            return rows, up, upe, udt
+    except Exception as e:
+        try:
+            _v106_log("v141_latest_deals_smart_pass1_err", e, scope=scope, name=str(name)[:120])
+        except Exception:
+            pass
+
+    bld, area = _v141_split_building_area(name)
+    if bld and bld != (name or ""):
+        try:
+            rows2, up2, upe2, udt2 = _v141_orig_get_latest_deals_smart(
+                scope, bld, prop, period, deal_type, limit=limit, unit_query=unit_query
+            )
+            if rows2:
+                try:
+                    _v106_log("v141_pipe_strip_hit", "latest_deals_smart",
+                              raw_name=str(name)[:120], clean=bld)
+                except Exception:
+                    pass
+                return rows2, up2, upe2, udt2
+        except Exception:
+            pass
+
+    # If still empty and scope=building with area context, try just-area lookup
+    if scope in ("building", "buildings", "project", "tower") and area:
+        try:
+            rows3, up3, upe3, udt3 = _v141_orig_get_latest_deals_smart(
+                "area", area, prop, period, deal_type, limit=limit, unit_query=unit_query
+            )
+            if rows3:
+                try:
+                    _v106_log("v141_area_fallback_hit", "latest_deals_smart",
+                              raw_name=str(name)[:120], area=area)
+                except Exception:
+                    pass
+                return rows3, up3, upe3, udt3
+        except Exception:
+            pass
+
+    return [], prop, period, deal_type
+
+
+print("Loaded v141 Grande/Burj-Khalifa fix: strip '|||area' suffix + area fallback")
 
 
 if __name__ == "__main__":
