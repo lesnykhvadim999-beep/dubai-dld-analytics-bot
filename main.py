@@ -59,6 +59,35 @@ except Exception:
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+# Stability hooks
+try:
+    from stability import (
+        set_bot_name, log_event, ttl_cache, retry_on_transient_async,
+        metrics, start_metrics_server, count_request, count_error, count_db,
+        validate_price, validate_bedrooms, validate_area_name,
+        validate_lang, validate_user_text, ValidationError,
+    )
+    set_bot_name("analytics-bot")
+    _STAB_OK = True
+except Exception as _stab_e:
+    print(f"[stability] disabled: {_stab_e}", flush=True)
+    _STAB_OK = False
+    def log_event(level="INFO", **kw): pass
+    def count_request(command="unknown"): pass
+    def count_error(err_type="unknown"): pass
+    def count_db(table, status="ok"): pass
+    def start_metrics_server(port=None): return None
+    def ttl_cache(maxsize=500, ttl=300):
+        def d(f): return f
+        return d
+    def retry_on_transient_async(retries=3, base_delay=0.5, max_delay=30.0):
+        def d(f): return f
+        return d
+    class ValidationError(ValueError):
+        def __init__(self, code, message=""):
+            self.code = code
+            super().__init__(message or code)
+
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set")
 
@@ -8698,10 +8727,34 @@ except Exception as _mw_err:
     print(f"[FSST] stale middleware skip: {_mw_err}")
 
 
+def _analytics_db_ping() -> bool:
+    """Lightweight DB liveness check for /health endpoint."""
+    if not DATABASE_URL:
+        return True
+    try:
+        import psycopg2
+        with psycopg2.connect(DATABASE_URL, connect_timeout=2) as c, c.cursor() as cur:
+            cur.execute("SELECT 1")
+            cur.fetchone()
+        return True
+    except Exception:
+        return False
+
+
 async def main():
-    # FSST: HTTP health endpoint
+    # FSST: HTTP health endpoint with DB ping
     if _fsst_ok:
-        start_health_server(bot_name="analytics-bot")
+        start_health_server(
+            bot_name="analytics-bot",
+            bot_username=os.environ.get("BOT_USERNAME", "analytics_bot"),
+            db_ping=_analytics_db_ping,
+        )
+    try:
+        p = start_metrics_server()
+        if p:
+            print(f"[metrics] exposed on :{p}")
+    except Exception as _me:
+        print(f"[metrics] failed: {_me}")
     print("Dubai DLD Analytics Bot started")
     try:
         await bot.delete_webhook(drop_pending_updates=True)

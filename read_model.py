@@ -35,6 +35,13 @@ from typing import Any, Dict, List, Optional
 import psycopg2
 import psycopg2.extras
 
+try:
+    from stability import ttl_cache as _ttl_cache
+except Exception:
+    def _ttl_cache(maxsize=500, ttl=300):
+        def d(f): return f
+        return d
+
 
 LOG = logging.getLogger("read_model")
 
@@ -177,6 +184,7 @@ def _period_start(months_back: int) -> dt.date:
 # Высокоуровневые API
 # ------------------------------------------------------------------
 
+@_ttl_cache(maxsize=500, ttl=300)
 def try_area_stats(area_name: str,
                    period_months: int = 12,
                    prop: Optional[str] = None,
@@ -281,6 +289,7 @@ def try_area_stats(area_name: str,
     return row
 
 
+@_ttl_cache(maxsize=500, ttl=300)
 def try_building_stats(building_name: str,
                        period_months: int = 12,
                        rooms: Optional[str] = None,
@@ -336,6 +345,7 @@ def try_building_stats(building_name: str,
     return row
 
 
+@_ttl_cache(maxsize=8, ttl=300)
 def try_market_overview(period_months: int = 12) -> Optional[Dict[str, Any]]:
     """Market overview Дубая (агрегат всех area_stats)."""
     if not READ_MODEL_AVAILABLE:
