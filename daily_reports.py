@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 import os
+import sys
 import logging
 import re
 from datetime import datetime, timedelta, date
@@ -21,6 +22,23 @@ from typing import Optional, List, Dict, Any, Tuple
 
 import psycopg2
 from psycopg2.extras import RealDictCursor, Json
+
+# Use Asia/Dubai for market-day boundaries (DLD instance_date is in Asia/Dubai).
+# Without this, daily reports built around midnight UTC drop transactions from
+# 20:00–23:59 Asia/Dubai of the last calendar day.
+try:
+    from tz_utils import now_dubai, today_dubai  # type: ignore
+except ImportError:
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "shared"))
+        from tz_utils import now_dubai, today_dubai  # type: ignore
+    except ImportError:
+        from zoneinfo import ZoneInfo
+        _DUBAI = ZoneInfo("Asia/Dubai")
+        def now_dubai():  # type: ignore
+            return datetime.now(_DUBAI)
+        def today_dubai():  # type: ignore
+            return now_dubai().date()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger("daily_reports")
@@ -144,7 +162,7 @@ def _num_expr(col: str) -> str:
 
 # ── Period helpers ────────────────────────────────────────────────────────
 def _periods(today: Optional[date] = None) -> dict:
-    today = today or datetime.utcnow().date()
+    today = today or today_dubai()  # Dubai market-day boundary, not UTC
     m_start = today.replace(day=1)
     if m_start.month == 1:
         m_prev_start = m_start.replace(year=m_start.year - 1, month=12)
@@ -491,7 +509,7 @@ def save_report(scope: str, name: Optional[str], report: dict,
                 deal_count_30d: Optional[int] = None,
                 median_price: Optional[float] = None,
                 median_psf: Optional[float] = None):
-    today = datetime.utcnow().date()
+    today = today_dubai()  # report_date must align with Dubai market day
     key = _entity_key(scope, name)
     with _intel_conn() as conn:
         with conn.cursor() as cur:
