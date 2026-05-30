@@ -3966,7 +3966,7 @@ async def send_full_report(message, scope, name=None, prop=None, period=None, de
     await send_processing(message)
     row, used_prop, used_period, used_deal_type = get_stats_smart(scope, name, prop, period, deal_type)
     if not row or not _int(row.get("deals")):
-        await message.answer(no_data_message(title_prefix), reply_markup=report_menu(user_id) if scope in ["building", "area"] else main_menu(user_id))
+        await message.answer(no_data_message(title_prefix, scope=scope, name=name, prop=prop, period=period, deal_type=deal_type, user_id=user_id), reply_markup=report_menu(user_id) if scope in ["building", "area"] else main_menu(user_id))
         return
 
     title = _human_report_title(scope, name, title_prefix)
@@ -4070,7 +4070,7 @@ async def send_ranking_report(message, ranking_type="active"):
         rows = safe_call(get_top_active, default=[]) or []
         title = "📊 Рейтинг зданий по активности и ликвидности"
     if not rows:
-        await message.answer(no_data_message("Рейтинг"), reply_markup=ranking_menu(user_id))
+        await message.answer(no_data_message("Рейтинг", user_id=user_id), reply_markup=ranking_menu(user_id))
         return
     html = f"<b>{title}</b>\n\n"
     for i, r in enumerate(rows[:10], 1):
@@ -4542,7 +4542,7 @@ async def main_handler(message: Message):
                 html = build_best_object_report_v95(state)
             except Exception as e:
                 print("BEST_OBJECT_REPORT_ERROR:", repr(e))
-                html = no_data_message("Лучший объект")
+                html = no_data_message("Лучший объект", user_id=user_id)
             user_states[user_id] = {"step": "result", "scope": "dubai", "last_report_title": "Лучший объект", "last_report_html": html, "history": []}
             await message.answer(html, reply_markup=post_result_menu(user_id, "dubai"))
             return
@@ -4651,7 +4651,7 @@ async def main_handler(message: Message):
                 period=state.get("period"),
             )
             if not report:
-                await message.answer(no_data_message("Сравнение форматов"), reply_markup=format_compare_after_menu(user_id))
+                await message.answer(no_data_message("Сравнение форматов", user_id=user_id), reply_markup=format_compare_after_menu(user_id))
                 state["step"] = "format_compare_result"
                 user_states[user_id] = state
                 return
@@ -7735,10 +7735,23 @@ def _v67_table_plan(deal_type=None):
 
 
 def _date_expr_v67(cols):
+    # FIX 2026-05-30 (Grande regression): support both ISO (YYYY-MM-DD) and
+    # DLD legacy (DD-MM-YYYY) formats. Previously only ISO matched → all rows
+    # got safe_date=NULL when archive shipped DD-MM-YYYY → period filter
+    # `safe_date >= CURRENT_DATE - 12 months` killed every match.
     for c in ["transaction_date", "instance_date", "contract_start_date", "contract_end_date", "load_timestamp", "created_at", "date"]:
         if c in cols:
             qc = qcol(c) if 'qcol' in globals() else '"' + c + '"'
-            return f"CASE WHEN {qc}::text ~ '^\\d{{4}}-\\d{{2}}-\\d{{2}}' THEN ({qc}::text)::date ELSE NULL END"
+            return (
+                f"CASE "
+                f"WHEN {qc}::text ~ '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}' "
+                f"THEN ({qc}::text)::date "
+                f"WHEN {qc}::text ~ '^[0-9]{{2}}-[0-9]{{2}}-[0-9]{{4}}' "
+                f"THEN to_date({qc}::text, 'DD-MM-YYYY') "
+                f"WHEN {qc}::text ~ '^[0-9]{{2}}/[0-9]{{2}}/[0-9]{{4}}' "
+                f"THEN to_date({qc}::text, 'DD/MM/YYYY') "
+                f"ELSE NULL END"
+            )
     return "NULL::date"
 
 
@@ -7851,9 +7864,18 @@ def _run_source_sql_v67(source, table, sql, params):
         with db() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, params)
-                return cur.fetchall()
+                rows = cur.fetchall()
+                # FIX 2026-05-30 (Grande regression diag): log empty results so we can
+                # tell broken-SQL from genuine no-data in production logs.
+                if not rows and os.getenv("V67_DIAG", "").strip() in ("1", "true", "True"):
+                    print(
+                        "RUN_SOURCE_SQL_V67_EMPTY:",
+                        source, table,
+                        "params=", repr(params)[:200],
+                    )
+                return rows
     except Exception as e:
-        print("RUN_SOURCE_SQL_V67_ERROR:", source, table, repr(e))
+        print("RUN_SOURCE_SQL_V67_ERROR:", source, table, repr(e), "params=", repr(params)[:200])
         return []
     finally:
         try:
@@ -9216,7 +9238,7 @@ async def send_full_report(message, scope, name=None, prop=None, period=None, de
     try:
         row, used_prop, used_period, used_deal_type = get_stats_smart(scope, name, prop, period, deal_type)
         if not row or not _int(row.get("deals")):
-            await message.answer(no_data_message(title_prefix), reply_markup=report_menu(user_id) if scope in ["building", "area"] else main_menu(user_id))
+            await message.answer(no_data_message(title_prefix, scope=scope, name=name, prop=prop, period=period, deal_type=deal_type, user_id=user_id), reply_markup=report_menu(user_id) if scope in ["building", "area"] else main_menu(user_id))
             return
 
         title = _human_report_title(scope, name, title_prefix)
@@ -9237,7 +9259,7 @@ async def send_full_report(message, scope, name=None, prop=None, period=None, de
         await message.answer(html, reply_markup=_final_actions_menu(user_id, scope))
     except Exception as e:
         print("SEND_FULL_REPORT_V83_ERROR:", repr(e), "scope=", scope, "name=", name, "prop=", prop, "period=", period, "deal_type=", deal_type)
-        await message.answer(no_data_message(title_prefix), reply_markup=report_menu(user_id) if scope in ["building", "area"] else main_menu(user_id))
+        await message.answer(no_data_message(title_prefix, scope=scope, name=name, prop=prop, period=period, deal_type=deal_type, user_id=user_id), reply_markup=report_menu(user_id) if scope in ["building", "area"] else main_menu(user_id))
 
 print("Loaded v83 report scenario safe fix only")
 
@@ -11315,7 +11337,7 @@ async def send_period_report(message, scope, name=None, prop=None, period=None, 
         return
     current, previous = comparison
     if not current or not previous or not _int(current.get('deals')) or not _int(previous.get('deals')):
-        await message.answer(no_data_message('Сравнение периодов'), reply_markup=report_menu(user_id) if scope in ['building', 'area'] else main_menu(user_id))
+        await message.answer(no_data_message('Сравнение периодов', scope=scope, name=name, prop=prop, period=period, deal_type=deal_type, user_id=user_id), reply_markup=report_menu(user_id) if scope in ['building', 'area'] else main_menu(user_id))
         return
     title = _human_report_title(scope, name, 'Сравнение периодов')
     html = show_comparison(f"<b>{title}</b>", current, previous, period, deal_type)
@@ -13282,6 +13304,143 @@ try:
     print("Loaded v110 master-zone canonical search (overrides v66 find_areas)")
 except Exception as _v110_err:
     print(f"V110 master-zone search NOT loaded: {_v110_err!r}")
+
+
+# =========================================================================
+# v140 GRANDE/BURJ KHALIFA REGRESSION FIX (2026-05-30)
+# =========================================================================
+# Root cause (analytics-bot regression after task #76):
+#   `_v67_table_plan` reads sales from `public.dld_transactions_full` (LIVE
+#   view) and `public.dld_sale_archive` (ARCHIVE table). `_date_expr_v67`
+#   only recognised ISO-formatted dates `YYYY-MM-DD`. If `instance_date`
+#   in either source ships in DLD legacy format `DD-MM-YYYY`, every
+#   `safe_date` is NULL and the `>= CURRENT_DATE - INTERVAL '12 months'`
+#   filter eliminates every row — including 3 BR Grande/Burj Khalifa
+#   deals that DO exist in the archive.
+#
+# Fix applied above (`_date_expr_v67`): accept both formats.
+#
+# This block adds:
+#   1. /diag_grande   — admin-only diagnostic running the same checks the
+#                       offline script would.
+#   2. boot-time VIEW recreate fallback — tries to (re-)create
+#      `dld_transactions_full` in LIVE DB if it disappeared (regression
+#      vector reported by user).
+# =========================================================================
+_V140_ADMIN_IDS = {353806371}  # Вадим
+
+
+def _v140_recreate_dld_view():
+    """Ensure `public.dld_transactions_full` exists in LIVE. Best-effort,
+    never blocks startup. Mirrors the safe-date contract task #76 added."""
+    try:
+        old = globals().get("_ACTIVE_SOURCE", "live")
+        try:
+            _set_data_source("live")
+            with db() as conn:
+                conn.autocommit = True
+                with conn.cursor() as cur:
+                    cur.execute("SELECT to_regclass('public.dld_transactions_full')")
+                    r = cur.fetchone()
+                    val = (r.get("to_regclass") if isinstance(r, dict) else (r[0] if r else None))
+                    if val:
+                        print("[v140] dld_transactions_full present:", val)
+                        return
+                    # Try to find a sales-like table to back it with.
+                    cur.execute("""
+                        SELECT table_name FROM information_schema.tables
+                        WHERE table_schema='public'
+                          AND table_name IN ('dld_sales_unified','dld_transactions','dld_sales','dld_sales_raw')
+                        LIMIT 1
+                    """)
+                    src = cur.fetchone()
+                    src_name = (src.get("table_name") if isinstance(src, dict) else (src[0] if src else None))
+                    if not src_name:
+                        print("[v140] no source table found to back dld_transactions_full")
+                        return
+                    cur.execute(f"CREATE OR REPLACE VIEW public.dld_transactions_full AS SELECT * FROM public.{src_name}")
+                    print(f"[v140] recreated public.dld_transactions_full -> public.{src_name}")
+        finally:
+            try:
+                _set_data_source(old)
+            except Exception:
+                pass
+    except Exception as _e:
+        print(f"[v140] dld_transactions_full ensure failed: {_e!r}")
+
+
+try:
+    _v140_recreate_dld_view()
+except Exception as _v140_boot_err:
+    print(f"[v140] boot ensure failed: {_v140_boot_err!r}")
+
+
+@dp.message(Command("diag_grande"))
+async def _v140_diag_grande(message):
+    uid = message.from_user.id
+    if uid not in _V140_ADMIN_IDS:
+        return
+    lines = [f"<b>DIAG Grande/Burj Khalifa</b> uid={uid}"]
+    checks = [
+        ("ARCHIVE dld_sale_archive total Grande",
+         "archive",
+         "SELECT COUNT(*) AS n FROM public.dld_sale_archive WHERE LOWER(COALESCE(building_name_en,'')) LIKE '%grande%'"),
+        ("ARCHIVE Grande+Burj total",
+         "archive",
+         "SELECT COUNT(*) AS n FROM public.dld_sale_archive WHERE LOWER(COALESCE(building_name_en,'')) LIKE '%grande%' AND LOWER(COALESCE(area_name_en,'')) LIKE '%burj%khalifa%'"),
+        ("ARCHIVE Grande+Burj 12m (safe_date)",
+         "archive",
+         """SELECT COUNT(*) AS n FROM public.dld_sale_archive
+             WHERE LOWER(COALESCE(building_name_en,'')) LIKE '%grande%'
+               AND LOWER(COALESCE(area_name_en,'')) LIKE '%burj%khalifa%'
+               AND (CASE
+                      WHEN instance_date::text ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN (instance_date::text)::date
+                      WHEN instance_date::text ~ '^[0-9]{2}-[0-9]{2}-[0-9]{4}' THEN to_date(instance_date::text,'DD-MM-YYYY')
+                      WHEN instance_date::text ~ '^[0-9]{2}/[0-9]{2}/[0-9]{4}' THEN to_date(instance_date::text,'DD/MM/YYYY')
+                      ELSE NULL END) >= CURRENT_DATE - INTERVAL '12 months'"""),
+        ("ARCHIVE Grande+Burj 12m 3BR",
+         "archive",
+         """SELECT COUNT(*) AS n FROM public.dld_sale_archive
+             WHERE LOWER(COALESCE(building_name_en,'')) LIKE '%grande%'
+               AND LOWER(COALESCE(area_name_en,'')) LIKE '%burj%khalifa%'
+               AND (LOWER(COALESCE(rooms_en,'')) LIKE '%3 b/r%' OR LOWER(COALESCE(rooms_en,'')) LIKE '%3 br%' OR LOWER(COALESCE(rooms_en,'')) LIKE '%three%')
+               AND (CASE
+                      WHEN instance_date::text ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN (instance_date::text)::date
+                      WHEN instance_date::text ~ '^[0-9]{2}-[0-9]{2}-[0-9]{4}' THEN to_date(instance_date::text,'DD-MM-YYYY')
+                      ELSE NULL END) >= CURRENT_DATE - INTERVAL '12 months'"""),
+        ("LIVE dld_transactions_full exists?",
+         "live",
+         "SELECT to_regclass('public.dld_transactions_full')::text AS n"),
+        ("LIVE Grande+Burj total",
+         "live",
+         "SELECT COUNT(*) AS n FROM public.dld_transactions_full WHERE LOWER(COALESCE(building_name_en,'')) LIKE '%grande%' AND LOWER(COALESCE(area_name_en,'')) LIKE '%burj%khalifa%'"),
+        ("ARCHIVE rooms_en formats (Grande+Burj)",
+         "archive",
+         """SELECT string_agg(DISTINCT rooms_en, ' | ') AS n FROM public.dld_sale_archive
+             WHERE LOWER(COALESCE(building_name_en,'')) LIKE '%grande%'
+               AND LOWER(COALESCE(area_name_en,'')) LIKE '%burj%khalifa%'"""),
+        ("ARCHIVE sample instance_date formats",
+         "archive",
+         "SELECT string_agg(DISTINCT substring(instance_date::text, 1, 10), ' | ') AS n FROM (SELECT instance_date FROM public.dld_sale_archive WHERE LOWER(COALESCE(building_name_en,'')) LIKE '%grande%' LIMIT 5) s"),
+    ]
+    for label, src, sql in checks:
+        old = globals().get("_ACTIVE_SOURCE", "live")
+        try:
+            _set_data_source(src)
+            with db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(sql)
+                    r = cur.fetchone()
+                    v = (r.get("n") if isinstance(r, dict) else (r[0] if r else None))
+                    lines.append(f"• <b>{label}</b>: <code>{v}</code>")
+        except Exception as e:
+            lines.append(f"• <b>{label}</b>: ERR <code>{repr(e)[:120]}</code>")
+        finally:
+            try:
+                _set_data_source(old)
+            except Exception:
+                pass
+    await message.answer("\n".join(lines), parse_mode="HTML")
 
 
 # ── Unhandled-exception alert hook (added 2026-05-29) ─────────────────────
