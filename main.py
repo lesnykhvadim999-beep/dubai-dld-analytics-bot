@@ -345,6 +345,72 @@ TEXTS = {
         "m_deals": "🧾 Сделки",
         "m_ratings": "📊 Рейтинги",
         "m_compare": "⚖️ Сравнение",
+        "no_data": "нет данных",
+        "no_data_area": "❌ Нет данных по выбранному району.",
+        "no_data_filters": "❌ Нет данных по выбранным фильтрам.",
+        "no_data_named": "❌ Нет данных по «{name}».",
+        "not_found_examples": "❌ Ничего не найдено. Попробуйте ввести иначе.\n\nПримеры:\n• Grande\n• Address Opera\n• Marina Gate\n• Burj Vista",
+        "searching_buildings": "🔎 Ищу похожие здания...",
+        "searching_buildings_db": "🔎 Ищу похожие здания в archive + live базе...",
+        "searching_area_db": "🔎 Ищу район в archive + live базе...",
+        "deals_dld_header": "🧾 <b>Сделки DLD</b>\n\nГде показать сделки?",
+        "rankings_header": "📊 <b>Рейтинги рынка</b>\n\nВыберите рейтинг.",
+        "rankings_pick_button": "Выберите рейтинг кнопкой.",
+        "full_report_header": "📑 <b>Полный аналитический отчёт</b>\n\nВыберите масштаб:",
+        "full_report_pick_scope": "Выберите масштаб отчёта.",
+        "enter_area_example": "Введите название района (например: Dubai Marina):",
+        "enter_areas_csv": "Введите названия районов через запятую:",
+        "enter_areas_csv_long": "Введите названия районов через запятую (например: Dubai Marina, Business Bay, JVC):",
+        "enter_building_short": "Введите название здания:",
+        "not_understood_areas": "Не понял список. Введите районы через запятую.",
+        "deals_pick_button": "Выберите область сделок кнопкой.",
+        "lang_menu_header": "⚙️ <b>Язык интерфейса</b>\n\nВыберите язык.",
+        "best_object_step1": "🏆 <b>Лучший объект</b>\n\nШаг 1 из 5 — выберите тип сделки:",
+        "best_object_step2": "🏠 <b>Шаг 2 из 5</b>\n\nВыберите формат недвижимости.",
+        "best_object_step3": "💰 <b>Шаг 3 из 5</b>\n\nВыберите бюджет.",
+        "best_object_step4": "🛏 <b>Шаг 4 из 5</b>\n\nВыберите комнатность / наименование юнита.",
+        "best_object_step5": "🎯 <b>Шаг 5 из 5</b>\n\nВыберите цель.",
+        "best_object_intro": "🏆 <b>Лучший объект</b>\n\nЯ проведу по дереву выбора и подберу топ-3 района и топ-3 объекта/здания под цель, бюджет и формат.\n\nШаг 1 из 5 — выберите тип сделки:",
+        "best_object_pick_deal": "Выберите тип сделки кнопкой.",
+        "best_object_pick_format": "Выберите формат кнопкой.",
+        "best_object_pick_budget": "Выберите бюджет кнопкой.",
+        "best_object_pick_rooms": "Выберите комнатность кнопкой.",
+        "best_object_pick_goal": "Выберите цель кнопкой.",
+        "best_object_loading": "⌛️ <b>Ищу лучший объект</b>\n\n◇ Проверяю DLD-сделки по выбранным фильтрам.\n◇ Сравниваю районы, здания/проекты, ликвидность и цену входа.\n◇ Формирую топ-3 вариантов и вывод 360°.",
+        "format_compare_header": "⚖️ <b>Сравнение форматов</b>\n\nВыберите рынок анализа:",
+        "format_compare_intro": "⚖️ <b>Сравнение форматов</b>\n\nСравню апартаменты, виллы и таунхаусы по цене входа, ликвидности, приросту, выгодности и инвестиционной логике.\n\nВыберите рынок анализа:",
+        "format_compare_pick_scope": "Выберите вариант кнопкой.",
+        "format_compare_pick_area_list": "Выберите район из списка.",
+        "format_compare_budget_header": "💰 Выберите ориентир бюджета.",
+        "format_compare_goal_header": "🎯 Выберите инвестиционную цель.",
+        "format_compare_period_header": "📅 Выберите период анализа.",
+        "format_compare_pick_budget": "Выберите бюджет кнопкой.",
+        "format_compare_pick_goal": "Выберите цель кнопкой.",
+        "format_compare_pick_period": "Выберите период кнопкой.",
+        "smart_pick_intro": "🧠 <b>Инвестиционный подбор</b>\n\nВыберите цель покупки.",
+        "smart_budget_header": "💰 <b>Бюджет</b>\n\nВыберите ориентир бюджета.",
+        "smart_timing_header": "📅 <b>Горизонт покупки</b>\n\nКогда планируется сделка?",
+        "smart_risk_header": "🛡 <b>Профиль риска</b>\n\nВыберите подходящий стиль.",
+        "rankings_market_pick": "📊 <b>Рейтинги рынка</b>\n\nВыберите, какой рейтинг построить.",
+        "wizard_step2_property": "🏠 <b>Шаг 2 из 3</b>\n\nВыберите тип недвижимости или комнатность.",
+        "wizard_step3_period": "📅 <b>Шаг 3 из 3</b>\n\nВыберите период анализа.",
+        "pick_new_scenario": "🔁 Выберите новый сценарий.",
+        "action_building_title": "🏢 <b>{name}</b>\n\nВыберите, что показать по зданию.",
+        "action_area_title": "🏙 <b>{name}</b>\n\nВыберите, что показать по району.",
+        "action_dubai_title": "🌆 <b>Рынок Дубая</b>\n\nВыберите аналитический сценарий.",
+        "report_kind_full": "Обзор 360",
+        "report_kind_deals": "Сделки DLD",
+        "report_kind_period": "Динамика периодов",
+        "report_kind_price": "Ценовая аналитика",
+        "report_kind_top_buildings": "Топ зданий",
+        "report_kind_default": "Аналитика",
+        "report_step1_deal": "📊 <b>{kind}</b>\n\nШаг 1 из 3 — выберите тип сделки.",
+        "tech_error": "⚠️ Произошла техническая ошибка в сценарии. Нажмите «Главное меню» и повторите запрос.",
+        "format_compare_loading": "⏳ <b>Сравниваю форматы</b>\n\n◇ Подключаю DLD-архив, live-базу и intelligence-слой.\n◇ Сравниваю апартаменты, виллы и таунхаусы.\n◇ Формирую инвестиционное заключение 360°.",
+        "lead_rate_limited": "⌛️ Заявку можно отправить один раз в 10 минут. Попробуйте немного позже.",
+        "lead_consult": "💼 <b>Консультация</b>\n\nОставьте заявку агенту:\n{url}",
+        "pdf_after_selection": "📄 PDF можно сформировать после финального выбора района или здания.",
+        "consult_link": "💼 Для консультации: https://t.me/dubai_fpr_lead_bot",
     },
     "en": {
         "choose_lang": "🏙 <b>Dubai DLD Analytics</b>\n\nChoose language:",
@@ -380,7 +446,7 @@ TEXTS = {
         "enter_price": "💰 Enter price in AED.\n\nExample: 2500000",
         "enter_size": "📐 Enter size in sq.ft.\n\nExample: 850",
         "loading": "⏳ Calculating DLD analytics...",
-        "error": '⚠️ По этому узкому фильтру нет стабильной выборки. Попробуйте «Всё время», другой тип комнат или нажмите «Назад».',
+        "error": '⚠️ This filter is too narrow for a stable sample. Try "All time", a different room type, or press "Back".',
         "choose_deal_type": "📊 Choose deal type:",
         "sale": "🏠 Sale",
         "rent": "🔑 Rent",
@@ -393,6 +459,72 @@ TEXTS = {
         "m_deals": "🧾 Deals",
         "m_ratings": "📊 Rankings",
         "m_compare": "⚖️ Compare",
+        "no_data": "no data",
+        "no_data_area": "❌ No data for the selected area.",
+        "no_data_filters": "❌ No data for the selected filters.",
+        "no_data_named": "❌ No data for \"{name}\".",
+        "not_found_examples": "❌ Nothing found. Try another query.\n\nExamples:\n• Grande\n• Address Opera\n• Marina Gate\n• Burj Vista",
+        "searching_buildings": "🔎 Searching similar buildings...",
+        "searching_buildings_db": "🔎 Searching buildings in archive + live DB...",
+        "searching_area_db": "🔎 Searching area in archive + live DB...",
+        "deals_dld_header": "🧾 <b>DLD Deals</b>\n\nWhere to show deals?",
+        "rankings_header": "📊 <b>Market Rankings</b>\n\nChoose a ranking.",
+        "rankings_pick_button": "Please pick a ranking from the buttons.",
+        "full_report_header": "📑 <b>Full analytics report</b>\n\nChoose scope:",
+        "full_report_pick_scope": "Please choose the report scope.",
+        "enter_area_example": "Enter area name (e.g.: Dubai Marina):",
+        "enter_areas_csv": "Enter area names separated by commas:",
+        "enter_areas_csv_long": "Enter area names separated by commas (e.g.: Dubai Marina, Business Bay, JVC):",
+        "enter_building_short": "Enter building name:",
+        "not_understood_areas": "Could not parse the list. Please enter areas separated by commas.",
+        "deals_pick_button": "Please pick the deals scope from the buttons.",
+        "lang_menu_header": "⚙️ <b>Interface language</b>\n\nChoose language.",
+        "best_object_step1": "🏆 <b>Best Property</b>\n\nStep 1 of 5 — choose deal type:",
+        "best_object_step2": "🏠 <b>Step 2 of 5</b>\n\nChoose property format.",
+        "best_object_step3": "💰 <b>Step 3 of 5</b>\n\nChoose budget.",
+        "best_object_step4": "🛏 <b>Step 4 of 5</b>\n\nChoose bedrooms / unit type.",
+        "best_object_step5": "🎯 <b>Step 5 of 5</b>\n\nChoose your goal.",
+        "best_object_intro": "🏆 <b>Best Property</b>\n\nI'll walk you through a decision tree and pick top-3 areas and top-3 properties/buildings matching your goal, budget and format.\n\nStep 1 of 5 — choose deal type:",
+        "best_object_pick_deal": "Please pick a deal type from the buttons.",
+        "best_object_pick_format": "Please pick a format from the buttons.",
+        "best_object_pick_budget": "Please pick a budget from the buttons.",
+        "best_object_pick_rooms": "Please pick the number of bedrooms from the buttons.",
+        "best_object_pick_goal": "Please pick a goal from the buttons.",
+        "best_object_loading": "⌛️ <b>Searching for the best property</b>\n\n◇ Checking DLD deals for your filters.\n◇ Comparing areas, buildings/projects, liquidity and entry price.\n◇ Building top-3 options and 360° conclusion.",
+        "format_compare_header": "⚖️ <b>Format comparison</b>\n\nChoose market to analyse:",
+        "format_compare_intro": "⚖️ <b>Format comparison</b>\n\nI'll compare apartments, villas and townhouses by entry price, liquidity, growth, value and investment logic.\n\nChoose market to analyse:",
+        "format_compare_pick_scope": "Please pick an option from the buttons.",
+        "format_compare_pick_area_list": "Please pick an area from the list.",
+        "format_compare_budget_header": "💰 Choose a budget reference.",
+        "format_compare_goal_header": "🎯 Choose investment goal.",
+        "format_compare_period_header": "📅 Choose analysis period.",
+        "format_compare_pick_budget": "Please pick a budget from the buttons.",
+        "format_compare_pick_goal": "Please pick a goal from the buttons.",
+        "format_compare_pick_period": "Please pick a period from the buttons.",
+        "smart_pick_intro": "🧠 <b>Investment Smart Pick</b>\n\nChoose purchase goal.",
+        "smart_budget_header": "💰 <b>Budget</b>\n\nChoose a budget reference.",
+        "smart_timing_header": "📅 <b>Purchase horizon</b>\n\nWhen are you planning the deal?",
+        "smart_risk_header": "🛡 <b>Risk profile</b>\n\nChoose your style.",
+        "rankings_market_pick": "📊 <b>Market Rankings</b>\n\nChoose which ranking to build.",
+        "wizard_step2_property": "🏠 <b>Step 2 of 3</b>\n\nChoose property type or bedrooms.",
+        "wizard_step3_period": "📅 <b>Step 3 of 3</b>\n\nChoose analysis period.",
+        "pick_new_scenario": "🔁 Choose a new scenario.",
+        "action_building_title": "🏢 <b>{name}</b>\n\nWhat do you want to see for this building?",
+        "action_area_title": "🏙 <b>{name}</b>\n\nWhat do you want to see for this area?",
+        "action_dubai_title": "🌆 <b>Dubai market</b>\n\nChoose an analytics scenario.",
+        "report_kind_full": "360 Overview",
+        "report_kind_deals": "DLD Deals",
+        "report_kind_period": "Period Dynamics",
+        "report_kind_price": "Price Analytics",
+        "report_kind_top_buildings": "Top Buildings",
+        "report_kind_default": "Analytics",
+        "report_step1_deal": "📊 <b>{kind}</b>\n\nStep 1 of 3 — choose deal type.",
+        "tech_error": "⚠️ A technical error occurred in the scenario. Press \"Main menu\" and try again.",
+        "format_compare_loading": "⏳ <b>Comparing formats</b>\n\n◇ Connecting DLD archive, live DB and intelligence layer.\n◇ Comparing apartments, villas and townhouses.\n◇ Building 360° investment conclusion.",
+        "lead_rate_limited": "⌛️ You can submit a request once every 10 minutes. Please try again later.",
+        "lead_consult": "💼 <b>Consultation</b>\n\nLeave a request for the agent:\n{url}",
+        "pdf_after_selection": "📄 PDF can be generated after the final area or building selection.",
+        "consult_link": "💼 For consultation: https://t.me/dubai_fpr_lead_bot",
     },
     "ar": {
         "choose_lang": "🏙 <b>Dubai DLD Analytics</b>\n\nاختر اللغة:",
@@ -428,7 +560,7 @@ TEXTS = {
         "enter_price": "💰 أدخل السعر بالدرهم.\n\nمثال: 2500000",
         "enter_size": "📐 أدخل المساحة بالقدم المربع.\n\nمثال: 850",
         "loading": "⏳ يتم حساب تحليلات DLD...",
-        "error": '⚠️ По этому узкому фильтру нет стабильной выборки. Попробуйте «Всё время», другой тип комнат или нажмите «Назад».',
+        "error": "⚠️ هذا الفلتر ضيق جداً لعينة مستقرة. جرب «كل الفترة» أو نوع غرف آخر أو اضغط «رجوع».",
         "choose_deal_type": "📊 اختر نوع الصفقة:",
         "sale": "🏠 بيع",
         "rent": "🔑 إيجار",
@@ -441,6 +573,72 @@ TEXTS = {
         "m_deals": "🧾 الصفقات",
         "m_ratings": "📊 التصنيفات",
         "m_compare": "⚖️ مقارنة",
+        "no_data": "لا توجد بيانات",
+        "no_data_area": "❌ لا توجد بيانات للمنطقة المحددة.",
+        "no_data_filters": "❌ لا توجد بيانات للفلاتر المحددة.",
+        "no_data_named": "❌ لا توجد بيانات لـ «{name}».",
+        "not_found_examples": "❌ لا توجد نتائج. جرب اسماً آخر.\n\nأمثلة:\n• Grande\n• Address Opera\n• Marina Gate\n• Burj Vista",
+        "searching_buildings": "🔎 جاري البحث عن مبانٍ مشابهة...",
+        "searching_buildings_db": "🔎 البحث في قاعدة الأرشيف والمباشرة...",
+        "searching_area_db": "🔎 البحث عن المنطقة في الأرشيف والقاعدة المباشرة...",
+        "deals_dld_header": "🧾 <b>صفقات DLD</b>\n\nأين تريد عرض الصفقات؟",
+        "rankings_header": "📊 <b>تصنيفات السوق</b>\n\nاختر التصنيف.",
+        "rankings_pick_button": "اختر التصنيف من الأزرار.",
+        "full_report_header": "📑 <b>تقرير تحليلي كامل</b>\n\nاختر النطاق:",
+        "full_report_pick_scope": "اختر نطاق التقرير.",
+        "enter_area_example": "اكتب اسم المنطقة (مثال: Dubai Marina):",
+        "enter_areas_csv": "اكتب أسماء المناطق مفصولة بفواصل:",
+        "enter_areas_csv_long": "اكتب أسماء المناطق مفصولة بفواصل (مثال: Dubai Marina, Business Bay, JVC):",
+        "enter_building_short": "اكتب اسم المبنى:",
+        "not_understood_areas": "لم أفهم القائمة. اكتب المناطق مفصولة بفواصل.",
+        "deals_pick_button": "اختر نطاق الصفقات من الأزرار.",
+        "lang_menu_header": "⚙️ <b>لغة الواجهة</b>\n\nاختر اللغة.",
+        "best_object_step1": "🏆 <b>أفضل عقار</b>\n\nالخطوة 1 من 5 — اختر نوع الصفقة:",
+        "best_object_step2": "🏠 <b>الخطوة 2 من 5</b>\n\nاختر نوع العقار.",
+        "best_object_step3": "💰 <b>الخطوة 3 من 5</b>\n\nاختر الميزانية.",
+        "best_object_step4": "🛏 <b>الخطوة 4 من 5</b>\n\nاختر عدد الغرف / نوع الوحدة.",
+        "best_object_step5": "🎯 <b>الخطوة 5 من 5</b>\n\nاختر الهدف.",
+        "best_object_intro": "🏆 <b>أفضل عقار</b>\n\nسأمر معك بشجرة قرار وأختار أفضل 3 مناطق و3 عقارات/مبانٍ تناسب هدفك وميزانيتك ونمطك.\n\nالخطوة 1 من 5 — اختر نوع الصفقة:",
+        "best_object_pick_deal": "اختر نوع الصفقة من الأزرار.",
+        "best_object_pick_format": "اختر النوع من الأزرار.",
+        "best_object_pick_budget": "اختر الميزانية من الأزرار.",
+        "best_object_pick_rooms": "اختر عدد الغرف من الأزرار.",
+        "best_object_pick_goal": "اختر الهدف من الأزرار.",
+        "best_object_loading": "⌛️ <b>البحث عن أفضل عقار</b>\n\n◇ فحص صفقات DLD وفق الفلاتر.\n◇ مقارنة المناطق والمباني والسيولة وسعر الدخول.\n◇ توليد أفضل 3 خيارات وخلاصة 360°.",
+        "format_compare_header": "⚖️ <b>مقارنة الأنواع</b>\n\nاختر السوق للتحليل:",
+        "format_compare_intro": "⚖️ <b>مقارنة الأنواع</b>\n\nسأقارن الشقق والفيلات والتاون هاوس من حيث سعر الدخول والسيولة والنمو والقيمة ومنطق الاستثمار.\n\nاختر السوق للتحليل:",
+        "format_compare_pick_scope": "اختر خياراً من الأزرار.",
+        "format_compare_pick_area_list": "اختر المنطقة من القائمة.",
+        "format_compare_budget_header": "💰 اختر مرجع الميزانية.",
+        "format_compare_goal_header": "🎯 اختر هدف الاستثمار.",
+        "format_compare_period_header": "📅 اختر فترة التحليل.",
+        "format_compare_pick_budget": "اختر الميزانية من الأزرار.",
+        "format_compare_pick_goal": "اختر الهدف من الأزرار.",
+        "format_compare_pick_period": "اختر الفترة من الأزرار.",
+        "smart_pick_intro": "🧠 <b>اختيار استثماري ذكي</b>\n\nاختر هدف الشراء.",
+        "smart_budget_header": "💰 <b>الميزانية</b>\n\nاختر مرجع الميزانية.",
+        "smart_timing_header": "📅 <b>أفق الشراء</b>\n\nمتى تخطط للصفقة؟",
+        "smart_risk_header": "🛡 <b>ملف المخاطرة</b>\n\nاختر النمط المناسب.",
+        "rankings_market_pick": "📊 <b>تصنيفات السوق</b>\n\nاختر التصنيف الذي تريد بناءه.",
+        "wizard_step2_property": "🏠 <b>الخطوة 2 من 3</b>\n\nاختر نوع العقار أو الغرف.",
+        "wizard_step3_period": "📅 <b>الخطوة 3 من 3</b>\n\nاختر فترة التحليل.",
+        "pick_new_scenario": "🔁 اختر سيناريو جديد.",
+        "action_building_title": "🏢 <b>{name}</b>\n\nماذا تريد أن ترى عن هذا المبنى؟",
+        "action_area_title": "🏙 <b>{name}</b>\n\nماذا تريد أن ترى عن هذه المنطقة؟",
+        "action_dubai_title": "🌆 <b>سوق دبي</b>\n\nاختر سيناريو تحليلي.",
+        "report_kind_full": "نظرة 360",
+        "report_kind_deals": "صفقات DLD",
+        "report_kind_period": "ديناميكيات الفترات",
+        "report_kind_price": "تحليلات الأسعار",
+        "report_kind_top_buildings": "أفضل المباني",
+        "report_kind_default": "تحليلات",
+        "report_step1_deal": "📊 <b>{kind}</b>\n\nالخطوة 1 من 3 — اختر نوع الصفقة.",
+        "tech_error": "⚠️ حدث خطأ تقني في السيناريو. اضغط «القائمة الرئيسية» وحاول مرة أخرى.",
+        "format_compare_loading": "⏳ <b>مقارنة الأنواع</b>\n\n◇ توصيل أرشيف DLD والقاعدة المباشرة وطبقة الذكاء.\n◇ مقارنة الشقق والفيلات والتاون هاوس.\n◇ توليد خلاصة استثمارية 360°.",
+        "lead_rate_limited": "⌛️ يمكنك إرسال طلب واحد كل 10 دقائق. حاول لاحقاً.",
+        "lead_consult": "💼 <b>استشارة</b>\n\nاترك طلباً للوكيل:\n{url}",
+        "pdf_after_selection": "📄 يمكن إنشاء PDF بعد اختيار المنطقة أو المبنى نهائياً.",
+        "consult_link": "💼 للاستشارة: https://t.me/dubai_fpr_lead_bot",
     },
 }
 
@@ -509,6 +707,14 @@ def tr(user_id, key):
     if user_lang not in TEXTS:
         user_lang = "en"
     return TEXTS.get(user_lang, TEXTS["en"]).get(key, TEXTS["en"].get(key, key))
+
+
+def trf(user_id, key, **kwargs):
+    """tr() with str.format() interpolation. Falls back safely if a placeholder is missing."""
+    try:
+        return tr(user_id, key).format(**kwargs)
+    except Exception:
+        return tr(user_id, key)
 
 
 def _is_menu_btn(text, key):
@@ -2631,55 +2837,55 @@ async def show_current_state_prompt(message, state):
 
     # Action menus (after building/area selected)
     if step == "building_action":
-        await message.answer(_action_title_v72(state), reply_markup=building_action_menu(user_id))
+        await message.answer(_action_title_v72(state, user_id), reply_markup=building_action_menu(user_id))
         return
     if step == "area_action":
-        await message.answer(_action_title_v72(state), reply_markup=area_action_menu(user_id))
+        await message.answer(_action_title_v72(state, user_id), reply_markup=area_action_menu(user_id))
         return
     if step == "dubai_action":
-        await message.answer(_action_title_v72(state), reply_markup=dubai_action_menu(user_id))
+        await message.answer(_action_title_v72(state, user_id), reply_markup=dubai_action_menu(user_id))
         return
 
     # Deals / Rankings / Full report scopes
     if step == "deals_scope":
-        await message.answer("🧾 <b>Сделки DLD</b>\n\nГде показать сделки?", reply_markup=deals_scope_menu(user_id))
+        await message.answer(tr(user_id, "deals_dld_header"), reply_markup=deals_scope_menu(user_id))
         return
     if step == "ranking_menu":
-        await message.answer("📊 <b>Рейтинги рынка</b>\n\nВыберите рейтинг.", reply_markup=ranking_menu(user_id))
+        await message.answer(tr(user_id, "rankings_header"), reply_markup=ranking_menu(user_id))
         return
     if step == "full_report_menu":
-        await message.answer("📑 <b>Полный аналитический отчёт</b>\n\nВыберите масштаб:", reply_markup=full_report_menu(user_id))
+        await message.answer(tr(user_id, "full_report_header"), reply_markup=full_report_menu(user_id))
         return
     if step == "full_report_area_query":
-        await message.answer("Введите название района (например: Dubai Marina):", reply_markup=back_menu(user_id))
+        await message.answer(tr(user_id, "enter_area_example"), reply_markup=back_menu(user_id))
         return
     if step == "full_report_multi_areas":
-        await message.answer("Введите названия районов через запятую:", reply_markup=back_menu(user_id))
+        await message.answer(tr(user_id, "enter_areas_csv"), reply_markup=back_menu(user_id))
         return
     if step == "full_report_building_query":
-        await message.answer("Введите название здания:", reply_markup=back_menu(user_id))
+        await message.answer(tr(user_id, "enter_building_short"), reply_markup=back_menu(user_id))
         return
 
     # Best object wizard
     if step == "best_object_deal_type":
-        await message.answer("🏆 <b>Лучший объект</b>\n\nШаг 1 из 5 — выберите тип сделки:", reply_markup=best_object_deal_type_menu(user_id))
+        await message.answer(tr(user_id, "best_object_step1"), reply_markup=best_object_deal_type_menu(user_id))
         return
     if step == "best_object_format":
-        await message.answer("🏠 <b>Шаг 2 из 5</b>\n\nВыберите формат недвижимости.", reply_markup=best_object_format_menu(user_id))
+        await message.answer(tr(user_id, "best_object_step2"), reply_markup=best_object_format_menu(user_id))
         return
     if step == "best_object_budget":
-        await message.answer("💰 <b>Шаг 3 из 5</b>\n\nВыберите бюджет.", reply_markup=best_object_budget_menu(user_id))
+        await message.answer(tr(user_id, "best_object_step3"), reply_markup=best_object_budget_menu(user_id))
         return
     if step == "best_object_rooms":
-        await message.answer("🛏 <b>Шаг 4 из 5</b>\n\nВыберите комнатность / наименование юнита.", reply_markup=best_object_rooms_menu(user_id))
+        await message.answer(tr(user_id, "best_object_step4"), reply_markup=best_object_rooms_menu(user_id))
         return
     if step == "best_object_goal":
-        await message.answer("🎯 <b>Шаг 5 из 5</b>\n\nВыберите цель.", reply_markup=best_object_goal_menu(user_id))
+        await message.answer(tr(user_id, "best_object_step5"), reply_markup=best_object_goal_menu(user_id))
         return
 
     # Format comparison wizard
     if step == "format_compare_scope":
-        await message.answer("⚖️ <b>Сравнение форматов</b>\n\nВыберите рынок анализа:", reply_markup=format_compare_scope_menu(user_id))
+        await message.answer(tr(user_id, "format_compare_header"), reply_markup=format_compare_scope_menu(user_id))
         return
     if step == "format_compare_area_query":
         await message.answer(tr(user_id, "enter_area"), reply_markup=back_menu(user_id))
@@ -2691,27 +2897,27 @@ async def show_current_state_prompt(message, state):
         await message.answer(tr(user_id, "choose_area"), reply_markup=kb(buttons))
         return
     if step == "format_compare_budget":
-        await message.answer("💰 Выберите ориентир бюджета.", reply_markup=format_compare_budget_menu(user_id))
+        await message.answer(tr(user_id, "format_compare_budget_header"), reply_markup=format_compare_budget_menu(user_id))
         return
     if step == "format_compare_goal":
-        await message.answer("🎯 Выберите инвестиционную цель.", reply_markup=format_compare_goal_menu(user_id))
+        await message.answer(tr(user_id, "format_compare_goal_header"), reply_markup=format_compare_goal_menu(user_id))
         return
     if step == "format_compare_period":
-        await message.answer("📅 Выберите период анализа.", reply_markup=format_compare_period_menu(user_id))
+        await message.answer(tr(user_id, "format_compare_period_header"), reply_markup=format_compare_period_menu(user_id))
         return
 
     # Smart investment wizard
     if step == "smart_goal":
-        await message.answer("🧠 <b>Инвестиционный подбор</b>\n\nВыберите цель покупки.", reply_markup=smart_goal_menu(user_id))
+        await message.answer(tr(user_id, "smart_pick_intro"), reply_markup=smart_goal_menu(user_id))
         return
     if step == "smart_budget":
-        await message.answer("💰 <b>Бюджет</b>\n\nВыберите ориентир бюджета.", reply_markup=smart_budget_menu(user_id))
+        await message.answer(tr(user_id, "smart_budget_header"), reply_markup=smart_budget_menu(user_id))
         return
     if step == "smart_timing":
-        await message.answer("📅 <b>Горизонт покупки</b>\n\nКогда планируется сделка?", reply_markup=smart_timing_menu(user_id))
+        await message.answer(tr(user_id, "smart_timing_header"), reply_markup=smart_timing_menu(user_id))
         return
     if step == "smart_risk":
-        await message.answer("🛡 <b>Профиль риска</b>\n\nВыберите подходящий стиль.", reply_markup=smart_risk_menu(user_id))
+        await message.answer(tr(user_id, "smart_risk_header"), reply_markup=smart_risk_menu(user_id))
         return
 
     # Result / unknown → fall back to main
@@ -2723,7 +2929,7 @@ async def start_building_search_from_text(message, text):
     user_id = message.from_user.id
 
     try:
-        await message.answer("🔎 Ищу похожие здания...")
+        await message.answer(tr(user_id, "searching_buildings"))
         rows = find_buildings(text)
     except Exception as e:
         print("START BUILDING SEARCH ERROR:", repr(e))
@@ -2736,12 +2942,7 @@ async def start_building_search_from_text(message, text):
         cur["scope"] = "building"
         user_states[user_id] = cur
         await message.answer(
-            "❌ Ничего не найдено. Попробуйте ввести иначе.\n\n"
-            "Примеры:\n"
-            "• Grande\n"
-            "• Address Opera\n"
-            "• Marina Gate\n"
-            "• Burj Vista",
+            tr(user_id, "not_found_examples"),
             reply_markup=back_menu(user_id)
         )
         return
@@ -2785,6 +2986,52 @@ def safe_call(fn, *args, default=None):
         return default
 
 
+_NO_DATA_BODY = {
+    "ru": {
+        "no_data_period": "По выбранным фильтрам нет достаточных данных за этот период.",
+        "hint_year": "💡 За год по «{name}» в DLD: <b>{n:,} сделок</b>.",
+        "hint_2y":   "💡 За 2 года: <b>{n:,} сделок</b>.",
+        "hint_all":  "💡 Всего в архиве: <b>{n:,} сделок</b>.",
+        "what_to_do": (
+            "Что можно сделать:\n"
+            "• выбрать «Всё время» — увидите все сделки;\n"
+            "• увеличить период до 6 / 12 месяцев;\n"
+            "• выбрать «Пропустить» в типе юнита;\n"
+            "• попробовать 1 BR / 2 BR / Studio;\n"
+            "• проверить другое здание или район."
+        ),
+    },
+    "en": {
+        "no_data_period": "Not enough data for the selected filters in this period.",
+        "hint_year": "💡 Past year for \"{name}\" in DLD: <b>{n:,} deals</b>.",
+        "hint_2y":   "💡 Past 2 years: <b>{n:,} deals</b>.",
+        "hint_all":  "💡 Total in archive: <b>{n:,} deals</b>.",
+        "what_to_do": (
+            "What you can do:\n"
+            "• pick \"All time\" — see all deals;\n"
+            "• extend period to 6 / 12 months;\n"
+            "• press \"Skip\" on unit type;\n"
+            "• try 1 BR / 2 BR / Studio;\n"
+            "• check another building or area."
+        ),
+    },
+    "ar": {
+        "no_data_period": "لا توجد بيانات كافية للفلاتر المحددة في هذه الفترة.",
+        "hint_year": "💡 في السنة الماضية لـ «{name}» في DLD: <b>{n:,} صفقة</b>.",
+        "hint_2y":   "💡 خلال السنتين الماضيتين: <b>{n:,} صفقة</b>.",
+        "hint_all":  "💡 الإجمالي في الأرشيف: <b>{n:,} صفقة</b>.",
+        "what_to_do": (
+            "ماذا يمكنك أن تفعل:\n"
+            "• اختر «كل الفترة» — لرؤية كل الصفقات؛\n"
+            "• وسّع الفترة إلى 6 / 12 شهراً؛\n"
+            "• اضغط «تخطي» على نوع الوحدة؛\n"
+            "• جرب 1 BR / 2 BR / Studio؛\n"
+            "• جرب مبنى أو منطقة أخرى."
+        ),
+    },
+}
+
+
 def no_data_message(title="Аналитика", *, scope=None, name=None,
                      prop=None, period=None, deal_type=None, user_id=None):
     """v52: enrich сообщение реальной подсказкой + log event для мониторинга."""
@@ -2794,6 +3041,11 @@ def no_data_message(title="Аналитика", *, scope=None, name=None,
     except Exception:
         pass
 
+    ulang = lang(user_id) if user_id is not None else "en"
+    if ulang not in _NO_DATA_BODY:
+        ulang = "en"
+    L = _NO_DATA_BODY[ulang]
+
     # Smart hint: try wider periods + show counts
     hint_lines = []
     if name and scope in ("area", "building"):
@@ -2801,26 +3053,19 @@ def no_data_message(title="Аналитика", *, scope=None, name=None,
             cnts = _count_deals_by_period(scope, name)
             if cnts:
                 if cnts.get(365):
-                    hint_lines.append(f"💡 За год по «{name}» в DLD: <b>{cnts[365]:,} сделок</b>.")
+                    hint_lines.append(L["hint_year"].format(name=name, n=cnts[365]))
                 if cnts.get(730):
-                    hint_lines.append(f"💡 За 2 года: <b>{cnts[730]:,} сделок</b>.")
+                    hint_lines.append(L["hint_2y"].format(n=cnts[730]))
                 if cnts.get('all'):
-                    hint_lines.append(f"💡 Всего в архиве: <b>{cnts['all']:,} сделок</b>.")
+                    hint_lines.append(L["hint_all"].format(n=cnts['all']))
         except Exception as _e:
             print(f"[no_data hint err] {_e}")
 
     msg = f"⚠️ <b>{title}</b>\n\n"
-    msg += "По выбранным фильтрам нет достаточных данных за этот период.\n\n"
+    msg += L["no_data_period"] + "\n\n"
     if hint_lines:
         msg += "\n".join(hint_lines) + "\n\n"
-    msg += (
-        "Что можно сделать:\n"
-        "• выбрать «Всё время» — увидите все сделки;\n"
-        "• увеличить период до 6 / 12 месяцев;\n"
-        "• выбрать «Пропустить» в типе юнита;\n"
-        "• попробовать 1 BR / 2 BR / Studio;\n"
-        "• проверить другое здание или район."
-    )
+    msg += L["what_to_do"]
     return msg
 
 
@@ -3422,24 +3667,26 @@ def post_result_menu(user_id, scope=None):
     ])
 
 
-def _action_title_v72(state):
+def _action_title_v72(state, user_id=None):
     scope = state.get("scope")
     name = _display_scope_name_v71(state.get("name")) if "_display_scope_name_v71" in globals() else state.get("name")
+    uid = user_id if user_id is not None else state.get("_uid")
     if scope == "building":
-        return f"🏢 <b>{name}</b>\n\nВыберите, что показать по зданию."
+        return trf(uid, "action_building_title", name=name)
     if scope == "area":
-        return f"🏙 <b>{name}</b>\n\nВыберите, что показать по району."
-    return "🌆 <b>Рынок Дубая</b>\n\nВыберите аналитический сценарий."
+        return trf(uid, "action_area_title", name=name)
+    return tr(uid, "action_dubai_title")
 
 
-def _report_kind_label_v72(kind):
-    return {
-        "full": "Обзор 360",
-        "deals": "Сделки DLD",
-        "period": "Динамика периодов",
-        "price": "Ценовая аналитика",
-        "top_buildings": "Топ зданий",
-    }.get(kind, "Аналитика")
+def _report_kind_label_v72(kind, user_id=None):
+    key = {
+        "full": "report_kind_full",
+        "deals": "report_kind_deals",
+        "period": "report_kind_period",
+        "price": "report_kind_price",
+        "top_buildings": "report_kind_top_buildings",
+    }.get(kind, "report_kind_default")
+    return tr(user_id, key)
 
 
 async def _ask_action_menu_v72(message, state):
@@ -3447,11 +3694,11 @@ async def _ask_action_menu_v72(message, state):
     scope = state.get("scope")
     user_states[user_id] = state
     if scope == "building":
-        await message.answer(_action_title_v72(state), reply_markup=building_action_menu(user_id))
+        await message.answer(_action_title_v72(state, user_id), reply_markup=building_action_menu(user_id))
     elif scope == "area":
-        await message.answer(_action_title_v72(state), reply_markup=area_action_menu(user_id))
+        await message.answer(_action_title_v72(state, user_id), reply_markup=area_action_menu(user_id))
     else:
-        await message.answer(_action_title_v72(state), reply_markup=dubai_action_menu(user_id))
+        await message.answer(_action_title_v72(state, user_id), reply_markup=dubai_action_menu(user_id))
 
 
 async def _start_filters_for_report_v72(message, state, kind):
@@ -3460,7 +3707,7 @@ async def _start_filters_for_report_v72(message, state, kind):
     state["step"] = "choose_deal_type"
     user_states[user_id] = state
     await message.answer(
-        f"📊 <b>{_report_kind_label_v72(kind)}</b>\n\nШаг 1 из 3 — выберите тип сделки.",
+        trf(user_id, "report_step1_deal", kind=_report_kind_label_v72(kind, user_id)),
         reply_markup=deal_type_menu(user_id),
     )
 
@@ -3493,7 +3740,7 @@ async def _execute_selected_report_v72(message, state):
     elif kind == "top_buildings":
         await send_ranking_report(message, "active")
     else:
-        await send_full_report(message, scope, name, prop, period, deal_type, _report_kind_label_v72(kind))
+        await send_full_report(message, scope, name, prop, period, deal_type, _report_kind_label_v72(kind, message.from_user.id))
 
 
 def _state_for_selected_building_v72(user_id, chosen, old_state):
@@ -3784,14 +4031,12 @@ async def send_ranking_report(message, ranking_type="active"):
 
 async def start_building_search_from_text(message, text):
     user_id = message.from_user.id
-    await message.answer("🔎 Ищу похожие здания в archive + live базе...", reply_markup=process_menu(user_id))
+    await message.answer(tr(user_id, "searching_buildings_db"), reply_markup=process_menu(user_id))
     rows = safe_call(find_buildings, text, 10, default=[]) or []
     if not rows:
         user_states[user_id] = {"step": "building_query", "scope": "building", "history": user_states.get(user_id, {}).get("history", [])}
         await message.answer(
-            "❌ <b>Здание не найдено.</b>\n\n"
-            "Попробуйте другое написание или часть названия:\n"
-            "• Grande\n• Address Opera\n• Marina Gate\n• Binghatti",
+            tr(user_id, "not_found_examples"),
             reply_markup=back_menu(user_id),
         )
         return
@@ -3818,7 +4063,7 @@ async def start_building_search_from_text(message, text):
 
 async def start_area_search_from_text(message, text):
     user_id = message.from_user.id
-    await message.answer("🔎 Ищу район в archive + live базе...", reply_markup=process_menu(user_id))
+    await message.answer(tr(user_id, "searching_area_db"), reply_markup=process_menu(user_id))
     rows = safe_call(find_areas, text, 10, default=[]) or []
     if not rows:
         cur = user_states.get(user_id, {}) or {}
@@ -3826,9 +4071,7 @@ async def start_area_search_from_text(message, text):
         cur["scope"] = "area"
         user_states[user_id] = cur
         await message.answer(
-            "❌ <b>Район не найден.</b>\n\n"
-            "Попробуйте полное или другое написание:\n"
-            "• Jumeirah Village Circle\n• Downtown Dubai\n• Business Bay\n• Dubai Marina",
+            tr(user_id, "not_found_examples"),
             reply_markup=back_menu(user_id),
         )
         return
@@ -3867,9 +4110,9 @@ async def main_handler(message: Message):
 
     try:
         # Служебные команды — не засоряют главное меню.
-        if text in ["/language", "/settings", "⚙️ Настройки", "⚙️ Язык"]:
+        if text in ["/language", "/settings", "⚙️ Настройки", "⚙️ Язык", "⚙️ Settings", "⚙️ الإعدادات"]:
             user_states[user_id] = {"step": "settings", "history": []}
-            await message.answer("⚙️ <b>Язык интерфейса</b>\n\nВыберите язык.", reply_markup=language_menu())
+            await message.answer(tr(user_id, "lang_menu_header"), reply_markup=language_menu())
             return
         if text == "/pdf" or text == "📄 PDF":
             await handle_pdf_request(message)
@@ -3942,7 +4185,7 @@ async def main_handler(message: Message):
                     await trans.delete()
                 except Exception as _e:
                     print(f"[analytics] B019 main-menu reply-kb clear failed: {_e}", flush=True)
-                await message.answer("🔁 Выберите новый сценарий.", reply_markup=main_menu(user_id))
+                await message.answer(tr(user_id, "pick_new_scenario"), reply_markup=main_menu(user_id))
                 return
             # Если человек нажал старую кнопку отчёта из результата — обработаем мягко.
             if text in ["📊 Аналитика", "💼 Резюме", "📊 Обзор 360"]:
@@ -3958,19 +4201,19 @@ async def main_handler(message: Message):
         # Главное меню: 6 понятных сценариев.
         if _is_menu_btn(text, "m_smart_pick"):
             user_states[user_id] = {"step": "smart_goal", "history": []}
-            await message.answer("🧠 <b>Инвестиционный подбор</b>\n\nВыберите цель покупки.", reply_markup=smart_goal_menu(user_id))
+            await message.answer(tr(user_id, "smart_pick_intro"), reply_markup=smart_goal_menu(user_id))
             return
         if _is_menu_btn(text, "m_compare") or text == "⚖️ Сравнение форматов":
             user_states[user_id] = {"step": "format_compare_scope", "history": []}
             await message.answer(
-                "⚖️ <b>Сравнение форматов</b>\n\nСравню апартаменты, виллы и таунхаусы по цене входа, ликвидности, приросту, выгодности и инвестиционной логике.\n\nВыберите рынок анализа:",
+                tr(user_id, "format_compare_intro"),
                 reply_markup=format_compare_scope_menu(user_id)
             )
             return
         if _is_menu_btn(text, "m_best_obj"):
             user_states[user_id] = {"step": "best_object_deal_type", "history": []}
             await message.answer(
-                "🏆 <b>Лучший объект</b>\n\nЯ проведу по дереву выбора и подберу топ-3 района и топ-3 объекта/здания под цель, бюджет и формат.\n\nШаг 1 из 5 — выберите тип сделки:",
+                tr(user_id, "best_object_intro"),
                 reply_markup=best_object_deal_type_menu(user_id)
             )
             return
@@ -3984,12 +4227,12 @@ async def main_handler(message: Message):
             return
         if _is_menu_btn(text, "m_deals") and state.get("step") not in ["building_action", "area_action", "dubai_action", "result"]:
             user_states[user_id] = {"step": "deals_scope", "history": []}
-            await message.answer("🧾 <b>Сделки DLD</b>\n\nГде показать сделки?", reply_markup=deals_scope_menu(user_id))
+            await message.answer(tr(user_id, "deals_dld_header"), reply_markup=deals_scope_menu(user_id))
             return
         if _is_menu_btn(text, "m_ratings"):
             user_states[user_id] = {"step": "ranking_menu", "history": []}
             await message.answer(
-                "📊 <b>Рейтинги рынка</b>\n\nВыберите, какой рейтинг построить.",
+                tr(user_id, "rankings_market_pick"),
                 reply_markup=ranking_menu(user_id),
             )
             return
@@ -4013,20 +4256,20 @@ async def main_handler(message: Message):
                 return
             if text == "🏙 Отчёт район":
                 push_state(user_id, {"step": "full_report_area_query"})
-                await message.answer("Введите название района (например: Dubai Marina):", reply_markup=back_menu(user_id))
+                await message.answer(tr(user_id, "enter_area_example"), reply_markup=back_menu(user_id))
                 return
             if text == "🏘 Несколько районов":
                 push_state(user_id, {"step": "full_report_multi_areas", "areas": []})
                 await message.answer(
-                    "Введите названия районов через запятую (например: Dubai Marina, Business Bay, JVC):",
+                    tr(user_id, "enter_areas_csv_long"),
                     reply_markup=back_menu(user_id),
                 )
                 return
             if text == "🏢 Отчёт здание":
                 push_state(user_id, {"step": "full_report_building_query"})
-                await message.answer("Введите название здания:", reply_markup=back_menu(user_id))
+                await message.answer(tr(user_id, "enter_building_short"), reply_markup=back_menu(user_id))
                 return
-            await message.answer("Выберите масштаб отчёта.", reply_markup=full_report_menu(user_id))
+            await message.answer(tr(user_id, "full_report_pick_scope"), reply_markup=full_report_menu(user_id))
             return
         if state.get("step") == "full_report_area_query":
             await send_full_market_report(message, "area", text.strip())
@@ -4034,7 +4277,7 @@ async def main_handler(message: Message):
         if state.get("step") == "full_report_multi_areas":
             areas = [a.strip() for a in text.split(",") if a.strip()]
             if not areas:
-                await message.answer("Не понял список. Введите районы через запятую.", reply_markup=back_menu(user_id))
+                await message.answer(tr(user_id, "not_understood_areas"), reply_markup=back_menu(user_id))
                 return
             await send_multi_area_report(message, areas)
             return
@@ -4062,7 +4305,7 @@ async def main_handler(message: Message):
             if text == "💧 Ликвидность":
                 await send_ranking_report(message, "building_liquidity")
                 return
-            await message.answer("Выберите рейтинг кнопкой.", reply_markup=ranking_menu(user_id))
+            await message.answer(tr(user_id, "rankings_pick_button"), reply_markup=ranking_menu(user_id))
             return
 
         # Сделки: выбор области.
@@ -4079,7 +4322,7 @@ async def main_handler(message: Message):
                 push_state(user_id, {"scope": "dubai", "name": None})
                 await _start_filters_for_report_v72(message, user_states[user_id], "deals")
                 return
-            await message.answer("Выберите область сделок кнопкой.", reply_markup=deals_scope_menu(user_id))
+            await message.answer(tr(user_id, "deals_pick_button"), reply_markup=deals_scope_menu(user_id))
             return
 
         # Поиск здания/района.
@@ -4145,7 +4388,7 @@ async def main_handler(message: Message):
                 return
             if text == "📊 Рейтинги":
                 user_states[user_id] = {"step": "ranking_menu", "history": state.get("history", [])}
-                await message.answer("📊 <b>Рейтинги рынка</b>\n\nВыберите рейтинг.", reply_markup=ranking_menu(user_id))
+                await message.answer(tr(user_id, "rankings_header"), reply_markup=ranking_menu(user_id))
                 return
             if text == "🔁 Другое здание":
                 user_states[user_id] = {"step": "building_query", "scope": "building", "history": []}
@@ -4164,7 +4407,7 @@ async def main_handler(message: Message):
             new_state["deal_type"] = _skip_to_none_v86(_normalize_deal_type_from_text(user_id, text))
             new_state["step"] = "choose_property"
             push_state(user_id, new_state)
-            await message.answer("🏠 <b>Шаг 2 из 3</b>\n\nВыберите тип недвижимости или комнатность.", reply_markup=property_menu(user_id))
+            await message.answer(tr(user_id, "wizard_step2_property"), reply_markup=property_menu(user_id))
             return
 
         if state.get("step") == "choose_property":
@@ -4172,7 +4415,7 @@ async def main_handler(message: Message):
             new_state["property"] = _skip_to_none_v86(_normalize_property_from_text(user_id, text))
             new_state["step"] = "choose_period"
             push_state(user_id, new_state)
-            await message.answer("📅 <b>Шаг 3 из 3</b>\n\nВыберите период анализа.", reply_markup=period_menu(user_id))
+            await message.answer(tr(user_id, "wizard_step3_period"), reply_markup=period_menu(user_id))
             return
 
         if state.get("step") == "choose_period":
@@ -4182,61 +4425,62 @@ async def main_handler(message: Message):
 
         # Best object funnel — отдельный сценарий, не меняет существующие меню и отчёты.
         if state.get("step") == "best_object_deal_type":
-            allowed = ["🏠 Продажа", "🔑 Аренда", "📊 Неважно", tr(user_id, "skip")]
+            allowed = ["🏠 Продажа", "🔑 Аренда", "📊 Неважно", tr(user_id, "skip"),
+                       tr(user_id, "sale"), tr(user_id, "rent"), tr(user_id, "both")]
             if text not in allowed:
-                await message.answer("Выберите тип сделки кнопкой.", reply_markup=best_object_deal_type_menu(user_id))
+                await message.answer(tr(user_id, "best_object_pick_deal"), reply_markup=best_object_deal_type_menu(user_id))
                 return
             new_state = dict(state)
-            new_state["deal_type"] = None if text in ["📊 Неважно", tr(user_id, "skip")] else text
+            new_state["deal_type"] = None if text in ["📊 Неважно", tr(user_id, "skip"), tr(user_id, "both")] else text
             new_state["step"] = "best_object_format"
             push_state(user_id, new_state)
-            await message.answer("🏠 <b>Шаг 2 из 5</b>\n\nВыберите формат недвижимости.", reply_markup=best_object_format_menu(user_id))
+            await message.answer(tr(user_id, "best_object_step2"), reply_markup=best_object_format_menu(user_id))
             return
 
         if state.get("step") == "best_object_format":
             allowed = ["🏢 Апартаменты", "🏘 Таунхаус", "🏡 Вилла", "🌍 Plot / Land", "📊 Неважно", tr(user_id, "skip")]
             if text not in allowed:
-                await message.answer("Выберите формат кнопкой.", reply_markup=best_object_format_menu(user_id))
+                await message.answer(tr(user_id, "best_object_pick_format"), reply_markup=best_object_format_menu(user_id))
                 return
             new_state = dict(state)
             new_state["object_format"] = None if text in ["📊 Неважно", tr(user_id, "skip")] else text
             new_state["step"] = "best_object_budget"
             push_state(user_id, new_state)
-            await message.answer("💰 <b>Шаг 3 из 5</b>\n\nВыберите бюджет.", reply_markup=best_object_budget_menu(user_id))
+            await message.answer(tr(user_id, "best_object_step3"), reply_markup=best_object_budget_menu(user_id))
             return
 
         if state.get("step") == "best_object_budget":
             allowed = ["до 1M AED", "1–2M AED", "2–3M AED", "3–5M AED", "5M+ AED", tr(user_id, "skip")]
             if text not in allowed:
-                await message.answer("Выберите бюджет кнопкой.", reply_markup=best_object_budget_menu(user_id))
+                await message.answer(tr(user_id, "best_object_pick_budget"), reply_markup=best_object_budget_menu(user_id))
                 return
             new_state = dict(state)
             new_state["budget"] = None if text == tr(user_id, "skip") else text
             new_state["step"] = "best_object_rooms"
             push_state(user_id, new_state)
-            await message.answer("🛏 <b>Шаг 4 из 5</b>\n\nВыберите комнатность / наименование юнита.", reply_markup=best_object_rooms_menu(user_id))
+            await message.answer(tr(user_id, "best_object_step4"), reply_markup=best_object_rooms_menu(user_id))
             return
 
         if state.get("step") == "best_object_rooms":
             allowed = ["Studio", "1 BR", "2 BR", "3 BR", "4 BR", "5 BR+", "📊 Неважно", tr(user_id, "skip")]
             if text not in allowed:
-                await message.answer("Выберите комнатность кнопкой.", reply_markup=best_object_rooms_menu(user_id))
+                await message.answer(tr(user_id, "best_object_pick_rooms"), reply_markup=best_object_rooms_menu(user_id))
                 return
             new_state = dict(state)
             new_state["rooms"] = None if text in ["📊 Неважно", tr(user_id, "skip")] else text
             new_state["step"] = "best_object_goal"
             push_state(user_id, new_state)
-            await message.answer("🎯 <b>Шаг 5 из 5</b>\n\nВыберите цель.", reply_markup=best_object_goal_menu(user_id))
+            await message.answer(tr(user_id, "best_object_step5"), reply_markup=best_object_goal_menu(user_id))
             return
 
         if state.get("step") == "best_object_goal":
             allowed = ["🏡 Для жизни", "🔑 Для аренды", "📈 Для перепродажи", "💰 Максимальный ROI", "⚖️ Сбалансировано", tr(user_id, "skip")]
             if text not in allowed:
-                await message.answer("Выберите цель кнопкой.", reply_markup=best_object_goal_menu(user_id))
+                await message.answer(tr(user_id, "best_object_pick_goal"), reply_markup=best_object_goal_menu(user_id))
                 return
             state["goal"] = "⚖️ Сбалансировано" if text == tr(user_id, "skip") else text
             user_states[user_id] = state
-            await send_processing(message, "⌛️ <b>Ищу лучший объект</b>\n\n◇ Проверяю DLD-сделки по выбранным фильтрам.\n◇ Сравниваю районы, здания/проекты, ликвидность и цену входа.\n◇ Формирую топ-3 вариантов и вывод 360°.")
+            await send_processing(message, tr(user_id, "best_object_loading"))
             try:
                 html = build_best_object_report_v95(state)
             except Exception as e:
@@ -4252,7 +4496,7 @@ async def main_handler(message: Message):
                 new_state = dict(state)
                 new_state.update({"scope": "dubai", "name": None, "step": "format_compare_budget"})
                 push_state(user_id, new_state)
-                await message.answer("💰 Выберите ориентир бюджета.", reply_markup=format_compare_budget_menu(user_id))
+                await message.answer(tr(user_id, "format_compare_budget_header"), reply_markup=format_compare_budget_menu(user_id))
                 return
             if text == "🏙 По району":
                 new_state = dict(state)
@@ -4260,7 +4504,7 @@ async def main_handler(message: Message):
                 push_state(user_id, new_state)
                 await message.answer(tr(user_id, "enter_area"), reply_markup=back_menu(user_id))
                 return
-            await message.answer("Выберите вариант кнопкой.", reply_markup=format_compare_scope_menu(user_id))
+            await message.answer(tr(user_id, "format_compare_pick_scope"), reply_markup=format_compare_scope_menu(user_id))
             return
 
         if state.get("step") == "format_compare_area_query":
@@ -4270,7 +4514,7 @@ async def main_handler(message: Message):
                 new_state = dict(state)
                 new_state.update({"scope": "area", "name": virtual_area_name(text), "step": "format_compare_budget"})
                 push_state(user_id, new_state)
-                await message.answer("💰 Выберите ориентир бюджета.", reply_markup=format_compare_budget_menu(user_id))
+                await message.answer(tr(user_id, "format_compare_budget_header"), reply_markup=format_compare_budget_menu(user_id))
                 return
             suggestions = []
             for r in rows[:8]:
@@ -4301,46 +4545,46 @@ async def main_handler(message: Message):
                 except Exception:
                     chosen = None
             if not chosen:
-                await message.answer("Выберите район из списка.", reply_markup=back_menu(user_id))
+                await message.answer(tr(user_id, "format_compare_pick_area_list"), reply_markup=back_menu(user_id))
                 return
             new_state = dict(state)
             new_state.update({"scope": "area", "name": chosen, "step": "format_compare_budget"})
             push_state(user_id, new_state)
-            await message.answer("💰 Выберите ориентир бюджета.", reply_markup=format_compare_budget_menu(user_id))
+            await message.answer(tr(user_id, "format_compare_budget_header"), reply_markup=format_compare_budget_menu(user_id))
             return
 
         if state.get("step") == "format_compare_budget":
             allowed = ["до 1M AED", "1–2M AED", "2–3M AED", "3–5M AED", "5M+ AED", tr(user_id, "skip")]
             if text not in allowed:
-                await message.answer("Выберите бюджет кнопкой.", reply_markup=format_compare_budget_menu(user_id))
+                await message.answer(tr(user_id, "format_compare_pick_budget"), reply_markup=format_compare_budget_menu(user_id))
                 return
             new_state = dict(state)
             new_state["budget"] = None if text == tr(user_id, "skip") else text
             new_state["step"] = "format_compare_goal"
             push_state(user_id, new_state)
-            await message.answer("🎯 Выберите инвестиционную цель.", reply_markup=format_compare_goal_menu(user_id))
+            await message.answer(tr(user_id, "format_compare_goal_header"), reply_markup=format_compare_goal_menu(user_id))
             return
 
         if state.get("step") == "format_compare_goal":
             if text not in ["📈 Перепродажа", "🔑 Аренда", "💰 ROI", "⚖️ Сбалансировано"]:
-                await message.answer("Выберите цель кнопкой.", reply_markup=format_compare_goal_menu(user_id))
+                await message.answer(tr(user_id, "format_compare_pick_goal"), reply_markup=format_compare_goal_menu(user_id))
                 return
             new_state = dict(state)
             new_state["goal"] = text
             new_state["step"] = "format_compare_period"
             push_state(user_id, new_state)
-            await message.answer("📅 Выберите период анализа.", reply_markup=format_compare_period_menu(user_id))
+            await message.answer(tr(user_id, "format_compare_period_header"), reply_markup=format_compare_period_menu(user_id))
             return
 
         if state.get("step") == "format_compare_period":
             period_map = {tr(user_id, "p6"): "6", tr(user_id, "p12"): "12", tr(user_id, "p36"): "36", tr(user_id, "all_time"): None}
             if text not in period_map:
-                await message.answer("Выберите период кнопкой.", reply_markup=format_compare_period_menu(user_id))
+                await message.answer(tr(user_id, "format_compare_pick_period"), reply_markup=format_compare_period_menu(user_id))
                 return
             state["period"] = period_map[text]
             user_states[user_id] = state
             await message.answer(
-                "⏳ <b>Сравниваю форматы</b>\n\n◇ Подключаю DLD-архив, live-базу и intelligence-слой.\n◇ Сравниваю апартаменты, виллы и таунхаусы.\n◇ Формирую инвестиционное заключение 360°.",
+                tr(user_id, "format_compare_loading"),
             )
             report, rows = build_format_comparison_report(
                 scope=state.get("scope", "dubai"),
@@ -4375,16 +4619,16 @@ async def main_handler(message: Message):
                 await message.answer(show_format_best_buildings(best, state.get("name"), state.get("period")), reply_markup=format_compare_after_menu(user_id))
                 return
             if text == "📄 PDF":
-                await message.answer("📄 PDF можно сформировать после финального выбора района или здания.", reply_markup=format_compare_after_menu(user_id))
+                await message.answer(tr(user_id, "pdf_after_selection"), reply_markup=format_compare_after_menu(user_id))
                 return
             if text == "💼 Заявка":
-                await message.answer("💼 Для консультации: https://t.me/dubai_fpr_lead_bot", reply_markup=format_compare_after_menu(user_id))
+                await message.answer(tr(user_id, "consult_link"), reply_markup=format_compare_after_menu(user_id))
                 return
             if text == "🔁 Новый отчёт":
                 state.clear()
                 state.update({"step": "format_compare_scope"})
                 user_states[user_id] = state
-                await message.answer("⚖️ <b>Сравнение форматов</b>\n\nВыберите рынок анализа:", reply_markup=format_compare_scope_menu(user_id))
+                await message.answer(tr(user_id, "format_compare_header"), reply_markup=format_compare_scope_menu(user_id))
                 return
 
         # Smart investment flow — оставлен, но после результата только PDF/Заявка/Изменить.
@@ -4392,19 +4636,19 @@ async def main_handler(message: Message):
             new_state = dict(state)
             new_state.update({"goal": text, "step": "smart_budget"})
             push_state(user_id, new_state)
-            await message.answer("💰 <b>Бюджет</b>\n\nВыберите ориентир бюджета.", reply_markup=smart_budget_menu(user_id))
+            await message.answer(tr(user_id, "smart_budget_header"), reply_markup=smart_budget_menu(user_id))
             return
         if state.get("step") == "smart_budget":
             new_state = dict(state)
             new_state.update({"budget": text, "step": "smart_timing"})
             push_state(user_id, new_state)
-            await message.answer("📅 <b>Горизонт покупки</b>\n\nКогда планируется сделка?", reply_markup=smart_timing_menu(user_id))
+            await message.answer(tr(user_id, "smart_timing_header"), reply_markup=smart_timing_menu(user_id))
             return
         if state.get("step") == "smart_timing":
             new_state = dict(state)
             new_state.update({"timing": text, "step": "smart_risk"})
             push_state(user_id, new_state)
-            await message.answer("🛡 <b>Профиль риска</b>\n\nВыберите подходящий стиль.", reply_markup=smart_risk_menu(user_id))
+            await message.answer(tr(user_id, "smart_risk_header"), reply_markup=smart_risk_menu(user_id))
             return
         if state.get("step") == "smart_risk":
             state["risk"] = text
@@ -4526,7 +4770,7 @@ async def main_handler(message: Message):
                            tb=_tb.format_exc()[-1500:])
         except Exception:
             pass
-        await message.answer("⚠️ Произошла техническая ошибка в сценарии. Нажмите «Главное меню» и повторите запрос.", reply_markup=main_menu(user_id))
+        await message.answer(tr(user_id, "tech_error"), reply_markup=main_menu(user_id))
 
 
 # =========================
@@ -6789,10 +7033,10 @@ async def handle_consultation_request(message):
     user_id = message.from_user.id
     now = time.time()
     if now - LAST_LEAD_TS.get(user_id, 0) < 600:
-        await message.answer("⌛️ Заявку можно отправить один раз в 10 минут. Попробуйте немного позже.", reply_markup=result_menu(user_id))
+        await message.answer(tr(user_id, "lead_rate_limited"), reply_markup=result_menu(user_id))
         return
     LAST_LEAD_TS[user_id] = now
-    await message.answer(f"💼 <b>Консультация</b>\n\nОставьте заявку агенту:\n{LEAD_BOT_URL}", reply_markup=result_menu(user_id))
+    await message.answer(trf(user_id, "lead_consult", url=LEAD_BOT_URL), reply_markup=result_menu(user_id))
 
 
 async def handle_admin_dashboard(message):
@@ -10055,7 +10299,7 @@ async def _execute_selected_report_v72(message, state):
     elif kind == "top_buildings":
         await send_ranking_report(message, "active")
     else:
-        await send_full_report(message, scope, name, prop, period, deal_type, _report_kind_label_v72(kind))
+        await send_full_report(message, scope, name, prop, period, deal_type, _report_kind_label_v72(kind, message.from_user.id))
 
 
 def _v96_goal_text(payload, state):
