@@ -14083,6 +14083,28 @@ print("Loaded v148 BUILDING_ALIASES expansion: grande signature residences -> Gr
 
 
 # ============================================================
+# v151 PER-SOURCE TRACE — log every _run_source_sql_v67 call for Grande.
+# ============================================================
+try:
+    _v151_orig_run_source = _run_source_sql_v67
+except NameError:
+    _v151_orig_run_source = None
+
+
+def _run_source_sql_v67(source, table, sql, params):  # noqa: F811
+    rows = _v151_orig_run_source(source, table, sql, params) if _v151_orig_run_source else []
+    try:
+        sql_lower = (sql or "").lower()
+        if "grande" in sql_lower or any(("grande" in str(p).lower() if p else False) for p in (params or [])):
+            print(f"[V151_SQL] source={source} table={table} → rows={len(rows) if rows else 0}", flush=True)
+            if rows and len(rows) > 0:
+                print(f"[V151_SQL]   first_row={dict(rows[0])}", flush=True)
+    except Exception:
+        pass
+    return rows
+
+
+# ============================================================
 # v150 BOOT — count Grande+Burj 3BR last 12m in BOTH LIVE and ARCHIVE.
 # Will be REMOVED after data collected.
 # ============================================================
