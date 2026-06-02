@@ -14164,12 +14164,20 @@ def _v154_query_archive(scope, name, prop, period, deal_type, limit=7):
                   ELSE NULL
                 END) >= CURRENT_DATE - INTERVAL '{int(months)} months'"""
         # building aliases (BUILDING_ALIASES + name)
+        # v154.2: for SHORT aliases (single word, no marketing suffix) use EXACT
+        # match to avoid pollution (e.g. 'grande' matching 'Sobha Creek Vistas
+        # Grande', 'Beverly Grande', 'Crest Grande'). Long aliases stay fuzzy.
         candidates = _v148_expand_building(name)
         building_or = []
         building_params = []
         for c in candidates:
-            building_or.append("LOWER(building_name_en) ILIKE %s")
-            building_params.append(f"%{c.lower()}%")
+            cl = c.strip().lower()
+            if " " not in cl and len(cl) <= 12:
+                building_or.append("LOWER(building_name_en) = %s")
+                building_params.append(cl)
+            else:
+                building_or.append("LOWER(building_name_en) ILIKE %s")
+                building_params.append(f"%{cl}%")
         building_where = "AND (" + " OR ".join(building_or) + ")"
         # discover available columns for archive table
         with _v154_psycopg2.connect(ARCHIVE_DATABASE_URL, connect_timeout=10) as _pc:
