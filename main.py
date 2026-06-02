@@ -1,3 +1,30 @@
+import os
+import sys
+
+# === CRON DISPATCH (must run BEFORE bot imports / BOT_TOKEN checks) ===
+# Some Railway cron services in this project (dld-sale-updater, dld-rent-updater)
+# share the same repo as the main bot but railway.toml forces
+# `startCommand=python main.py`. Without a per-service override they used to
+# crash with `BOT_TOKEN is not set` because they don't have BOT_TOKEN.
+# We dispatch by RAILWAY_SERVICE_NAME (set by Railway automatically) and
+# also accept a manual CRON_TARGET env override.
+_cron_target = (os.getenv("CRON_TARGET") or "").strip().lower()
+if not _cron_target:
+    _svc = (os.getenv("RAILWAY_SERVICE_NAME") or "").strip().lower()
+    if _svc == "dld-sale-updater":
+        _cron_target = "sales_scraper"
+    elif _svc == "dld-rent-updater":
+        _cron_target = "dld_sync"
+
+if _cron_target in ("sales_scraper", "dld_sync"):
+    import runpy
+    print(f"[cron-dispatch] running {_cron_target}.py via main.py shim "
+          f"(RAILWAY_SERVICE_NAME={os.getenv('RAILWAY_SERVICE_NAME')!r})",
+          flush=True)
+    runpy.run_module(_cron_target, run_name="__main__")
+    sys.exit(0)
+# === END CRON DISPATCH ===
+
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
@@ -7,9 +34,7 @@ from aiogram.filters import CommandStart, Command
 from dotenv import load_dotenv
 
 import asyncio
-import os
 import re
-import sys
 import subprocess
 import tempfile
 import time
@@ -11662,7 +11687,7 @@ print('Loaded v103 building format and strict comparison fix')
 def _fmt_aed(v):
     if v is None: return "—"
     try: return f"AED {int(v):,}"
-    except: return str(v)
+    except Exception: return str(v)
 
 
 def _fmt_pct(v):
