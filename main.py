@@ -14171,6 +14171,22 @@ def _v154_query_archive(scope, name, prop, period, deal_type, limit=7):
             building_or.append("LOWER(building_name_en) ILIKE %s")
             building_params.append(f"%{c.lower()}%")
         building_where = "AND (" + " OR ".join(building_or) + ")"
+        # discover available columns for archive table
+        with _v154_psycopg2.connect(ARCHIVE_DATABASE_URL, connect_timeout=10) as _pc:
+            with _pc.cursor() as _pcur:
+                _pcur.execute("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=%s", (table.split(".")[-1],))
+                _arch_cols = set(r[0] for r in _pcur.fetchall())
+        def _pick(*opts):
+            for o in opts:
+                if o in _arch_cols:
+                    return o
+            return None
+        size_col = _pick("procedure_area", "actual_area", "size_sqft", "property_size", "area_size_sqft", "area_size")
+        ptype_col = _pick("property_type_en", "property_type")
+        subtype_col = _pick("property_sub_type_en", "property_sub_type", "unit_type")
+        size_expr = f"NULLIF({size_col}::text, '')::numeric" if size_col else "NULL::numeric"
+        ptype_expr = ptype_col if ptype_col else "''"
+        subtype_expr = subtype_col if subtype_col else "''"
         sql = f"""
             SELECT
                 CASE
@@ -14181,10 +14197,10 @@ def _v154_query_archive(scope, name, prop, period, deal_type, limit=7):
                 building_name_en,
                 area_name_en,
                 rooms_en,
-                property_type_en,
-                property_sub_type_en,
+                {ptype_expr} AS property_type_en,
+                {subtype_expr} AS property_sub_type_en,
                 NULLIF({price_col}::text, '')::numeric AS price,
-                NULLIF(actual_area::text, '')::numeric AS area_size,
+                {size_expr} AS area_size,
                 NULL::numeric AS meter_price
             FROM {table}
             WHERE {price_col} IS NOT NULL AND {price_col}::text != ''
