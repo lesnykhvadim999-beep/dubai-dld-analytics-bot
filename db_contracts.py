@@ -21,6 +21,16 @@ db_contracts.py — декларативные контракты на shared-т
   HIGH     — поломка ⇒ деградация UX (например, "rooms_en" пустой ⇒
              фильтр по комнатам не работает).
   LOW      — желательное поле; алерт только в daily-cron сводке.
+
+ИСТОРИЯ ДЕКЛАРАЦИЙ:
+  v2 (2026-05-30, drift fix):
+    - LIVE DLD таблицы используют новые scraper-имена (transaction_date,
+      area_en, building_en, start_date) — legacy CSV-имена остались только
+      в archive.
+    - leads/users/area_price_benchmark переключены с db='live' на db='resale'
+      (фактически живут в RESALE_DATABASE_URL).
+    - listings_v2 синхронизирован с реальной resale schema
+      (price а не price_aed, area/building без _name).
 """
 
 from __future__ import annotations
@@ -76,71 +86,83 @@ def _col(type, criticality="HIGH", min_non_null_pct=0.0,
     )
 
 
+# Типы-алиасы для краткости.
+_TEXTY = ("text", "character varying")
+_DATEY = ("date", "timestamp without time zone", "timestamp", "text", "character varying")
+_NUMY = ("numeric", "double precision", "text", "character varying", "bigint", "integer")
+_TSTZ = ("timestamp with time zone", "timestamp without time zone", "timestamp")
+
+
 # ----------------------------------------------------------------------
 # Контракты на shared-таблицы
 # ----------------------------------------------------------------------
 
-# Live DLD — обновляется ежедневно из Dubai Pulse.
+# Live DLD sales — обновляется ежедневно из Dubai Pulse API (sales_scraper.py).
+# Имена колонок — новые API-имена (transaction_date, area_en, building_en),
+# а НЕ legacy CSV-имена (instance_date, area_name_en, building_name_en) —
+# те живут только в архиве (dld_sale_archive).
 DLD_TRANSACTIONS_FULL = TableContract(
     table="public.dld_transactions_full",
     db="live",
-    description="DLD sales/mortgages/gifts (live, ~30 дней rolling)",
+    description="DLD sales/mortgages/gifts (live, ~30 дней rolling) — Pulse API схема",
     consumers=("analytics-bot", "resale-bot", "roi-bot", "channel-poster",
                "lead-bot", "hub-bot"),
     required_columns={
-        "instance_date": _col(
-            type=("date", "timestamp without time zone", "timestamp", "text", "character varying"),
+        "transaction_date": _col(
+            type=_DATEY,
             criticality="CRITICAL", min_non_null_pct=99.0,
-            format_hint="ISO 'YYYY-MM-DD' или 'DD-MM-YYYY' — ВСЕГДА safe_date_sql()",
+            format_hint="TEXT — ISO 'YYYY-MM-DD' либо 'DD-MM-YYYY' — ВСЕГДА safe_date_sql()",
         ),
-        "building_name_en": _col(
-            type=("text", "character varying"),
-            criticality="CRITICAL", min_non_null_pct=80.0,
+        "building_en": _col(
+            type=_TEXTY,
+            criticality="CRITICAL", min_non_null_pct=70.0,
+            format_hint="Building name English (Pulse API)",
         ),
-        "area_name_en": _col(
-            type=("text", "character varying"),
+        "area_en": _col(
+            type=_TEXTY,
             criticality="HIGH", min_non_null_pct=80.0,
         ),
         "rooms_en": _col(
-            type=("text", "character varying"),
+            type=_TEXTY,
             criticality="HIGH", min_non_null_pct=70.0,
             format_hint="'1 B/R' | '2 B/R' | '3 B/R' | 'Studio' | 'PENTHOUSE'",
             expected_values_sample=("1 B/R", "2 B/R", "3 B/R", "Studio"),
         ),
         "actual_worth": _col(
-            type=("numeric", "double precision", "text", "character varying"),
+            type=("numeric", "double precision"),
             criticality="CRITICAL", min_non_null_pct=95.0,
-            format_hint="всегда safe_num_sql() — может прийти как text c запятыми",
+            format_hint="NUMERIC, может быть NULL для очень старых строк",
         ),
         "procedure_area": _col(
-            type=("numeric", "double precision", "text", "character varying"),
+            type=("numeric", "double precision"),
             criticality="HIGH", min_non_null_pct=60.0,
         ),
     },
 )
 
-# Архивный DLD — исторические сделки, формат старее, часто DD-MM-YYYY.
+# Архивный DLD — исторические сделки, legacy CSV-import формат
+# (другие имена колонок: instance_date, area_name_en, building_name_en).
 DLD_SALE_ARCHIVE = TableContract(
     table="public.dld_sale_archive",
     db="archive",
-    description="DLD sales archive (исторические, ETL legacy)",
+    description="DLD sales archive (исторические, ETL legacy CSV)",
     consumers=("analytics-bot", "resale-bot", "roi-bot"),
     required_columns={
         "instance_date": _col(
-            type=("date", "timestamp without time zone", "timestamp", "text", "character varying"),
+            type=_DATEY,
             criticality="CRITICAL", min_non_null_pct=99.0,
             format_hint="Legacy 'DD-MM-YYYY' доминирует — обязательно safe_date_sql()",
         ),
         "building_name_en": _col(
-            type=("text", "character varying"),
+            type=_TEXTY,
             criticality="CRITICAL", min_non_null_pct=70.0,
         ),
         "area_name_en": _col(
-            type=("text", "character varying"),
+            type=_TEXTY,
             criticality="HIGH", min_non_null_pct=70.0,
         ),
         "rooms_en": _col(
-            type=("text", "character varying"),
+            type=_TEXTY,
             criticality="HIGH", min_non_null_pct=50.0,
             expected_values_sample=("1 B/R", "2 B/R", "3 B/R", "Studio"),
         ),
@@ -151,34 +173,35 @@ DLD_SALE_ARCHIVE = TableContract(
     },
 )
 
-# Live rentals.
+# Live rentals — Pulse API схема (start_date / area_en / project_en).
 DLD_RENTS_FULL = TableContract(
     table="public.dld_rents_full",
     db="live",
-    description="DLD rent contracts (live)",
+    description="DLD rent contracts (live) — Pulse API схема",
     consumers=("analytics-bot", "resale-bot", "hub-bot"),
     required_columns={
-        "contract_start_date": _col(
-            type=("date", "timestamp without time zone", "timestamp", "text", "character varying"),
+        "start_date": _col(
+            type=_DATEY,
             criticality="CRITICAL", min_non_null_pct=95.0,
-            format_hint="safe_date_sql()",
+            format_hint="TEXT — safe_date_sql()",
         ),
         "annual_amount": _col(
-            type=("numeric", "double precision", "text", "character varying"),
+            type=("numeric", "double precision"),
             criticality="CRITICAL", min_non_null_pct=85.0,
         ),
-        "area_name_en": _col(
-            type=("text", "character varying"),
+        "area_en": _col(
+            type=_TEXTY,
             criticality="HIGH", min_non_null_pct=70.0,
         ),
-        "building_name_en": _col(
-            type=("text", "character varying"),
-            criticality="HIGH", min_non_null_pct=50.0,
+        "project_en": _col(
+            type=_TEXTY,
+            criticality="HIGH", min_non_null_pct=25.0,
+            format_hint="Building/project name в rent API. ~30% non-null — много старых contracts без project.",
         ),
     },
 )
 
-# Архивные rentals.
+# Архивные rentals — legacy формат.
 DLD_RENT_ARCHIVE = TableContract(
     table="public.dld_rent_archive",
     db="archive",
@@ -186,7 +209,7 @@ DLD_RENT_ARCHIVE = TableContract(
     consumers=("analytics-bot",),
     required_columns={
         "contract_start_date": _col(
-            type=("date", "timestamp without time zone", "timestamp", "text", "character varying"),
+            type=_DATEY,
             criticality="CRITICAL", min_non_null_pct=95.0,
             format_hint="часто 'DD-MM-YYYY' — safe_date_sql()",
         ),
@@ -195,116 +218,142 @@ DLD_RENT_ARCHIVE = TableContract(
             criticality="CRITICAL", min_non_null_pct=80.0,
         ),
         "area_name_en": _col(
-            type=("text", "character varying"),
+            type=_TEXTY,
             criticality="HIGH", min_non_null_pct=60.0,
         ),
     },
 )
 
-# Resale read-model.
+# Resale read-model — реальные имена: price/area/building (без _aed/_name).
 LISTINGS_V2 = TableContract(
     table="public.listings_v2",
     db="resale",
     description="Resale read-model (Dubai resale-bot)",
     consumers=("resale-bot", "channel-poster", "hub-bot", "lead-bot"),
     required_columns={
-        "id": _col(type="bigint", criticality="CRITICAL", min_non_null_pct=100.0),
-        "price_aed": _col(
-            type=("numeric", "double precision"),
+        "id": _col(type="integer", criticality="CRITICAL", min_non_null_pct=100.0),
+        "price": _col(
+            type=("bigint", "numeric", "double precision"),
             criticality="CRITICAL", min_non_null_pct=95.0,
+            format_hint="raw price as posted (currency separate)",
         ),
         "bedrooms": _col(
             type=("integer", "smallint", "text"),
-            criticality="HIGH", min_non_null_pct=85.0,
+            criticality="HIGH", min_non_null_pct=70.0,
         ),
-        "area_name": _col(
-            type=("text", "character varying"),
-            criticality="HIGH", min_non_null_pct=90.0,
-        ),
-        "building_name": _col(
-            type=("text", "character varying"),
+        "area": _col(
+            type=_TEXTY,
             criticality="HIGH", min_non_null_pct=80.0,
         ),
+        "building": _col(
+            type=_TEXTY,
+            criticality="HIGH", min_non_null_pct=60.0,
+        ),
         "created_at": _col(
-            type=("timestamp with time zone", "timestamp without time zone", "timestamp"),
+            type=_TSTZ,
             criticality="HIGH", min_non_null_pct=99.0,
         ),
         "status": _col(
-            type=("text", "character varying"),
-            criticality="HIGH", min_non_null_pct=99.0,
-            expected_values_sample=("active", "sold", "removed"),
+            type=_TEXTY,
+            criticality="HIGH", min_non_null_pct=95.0,
         ),
     },
 )
 
-# Leads — общая для lead-bot + analytics.
+# Leads — фактически живёт в RESALE БД (RESALE_DATABASE_URL).
+# Колонки: telegram_user_id (новая) и telegram_id (legacy) сосуществуют.
 LEADS = TableContract(
     table="public.leads",
-    db="live",
-    description="Лиды от всех ботов (single source of truth)",
-    consumers=("lead-bot", "analytics-bot", "hub-bot"),
+    db="resale",
+    description="Лиды от всех ботов (хранятся в resale БД)",
+    consumers=("lead-bot", "analytics-bot", "hub-bot", "resale-bot"),
     required_columns={
-        "id": _col(type="bigint", criticality="CRITICAL", min_non_null_pct=100.0),
-        "tg_user_id": _col(type="bigint", criticality="CRITICAL", min_non_null_pct=95.0),
+        "id": _col(type=("integer", "bigint"), criticality="CRITICAL", min_non_null_pct=100.0),
+        # telegram_id — фактически заполняется приложением (legacy column).
+        "telegram_id": _col(
+            type="bigint", criticality="CRITICAL", min_non_null_pct=95.0,
+            format_hint="реально используемый user_id",
+        ),
+        # telegram_user_id — новая зарезервированная колонка, не пишется (LOW).
+        "telegram_user_id": _col(
+            type="bigint", criticality="LOW", min_non_null_pct=0.0,
+            format_hint="зарезервировано; реально пишется telegram_id",
+        ),
+        # source_bot — задекларирован, но боты пока не пишут (TODO в lead-bot).
         "source_bot": _col(
-            type=("text", "character varying"),
-            criticality="HIGH", min_non_null_pct=99.0,
-            expected_values_sample=("analytics", "resale", "hub", "channel"),
+            type=_TEXTY,
+            criticality="LOW", min_non_null_pct=0.0,
+            format_hint="TODO: боты должны проставлять при insert (планируется)",
+            expected_values_sample=("analytics", "resale", "hub", "channel", "lead"),
         ),
         "created_at": _col(
-            type=("timestamp with time zone", "timestamp without time zone", "timestamp"),
-            criticality="CRITICAL", min_non_null_pct=100.0,
+            type=_TSTZ,
+            criticality="CRITICAL", min_non_null_pct=99.0,
         ),
     },
 )
 
-# Users — каталог пользователей.
+# Users — фактически живёт в RESALE БД.
+# Реальные имена: telegram_id (не tg_user_id), language (не lang),
+# created_at (не first_seen_at).
 USERS = TableContract(
     table="public.users",
-    db="live",
-    description="Глобальный каталог пользователей",
+    db="resale",
+    description="Глобальный каталог пользователей (хранится в resale БД)",
     consumers=("hub-bot", "analytics-bot", "resale-bot", "channel-poster",
                "lead-bot", "roi-bot", "currency-bot"),
     required_columns={
-        "tg_user_id": _col(type="bigint", criticality="CRITICAL", min_non_null_pct=100.0),
-        "lang": _col(
-            type=("text", "character varying"),
-            criticality="HIGH", min_non_null_pct=90.0,
+        "telegram_id": _col(type="bigint", criticality="CRITICAL", min_non_null_pct=100.0),
+        "language": _col(
+            type=_TEXTY,
+            criticality="HIGH", min_non_null_pct=80.0,
             expected_values_sample=("en", "ru"),
         ),
-        "first_seen_at": _col(
-            type=("timestamp with time zone", "timestamp without time zone", "timestamp"),
+        "created_at": _col(
+            type=_TSTZ,
             criticality="HIGH", min_non_null_pct=95.0,
         ),
     },
 )
 
 # Area price benchmark — материализованный профиль районов.
+# Реальные имена: area (не area_name_en), bedrooms+property_type+deal_type ключ,
+# median (не median_price_per_sqft), updated_at.
 AREA_PRICE_BENCHMARK = TableContract(
     table="public.area_price_benchmark",
-    db="live",
-    description="Материализованный профиль районов — цена/м² + p25/p75",
+    db="resale",
+    description="Материализованный профиль районов — цена + p10/median/p90 (resale БД)",
     consumers=("analytics-bot", "resale-bot", "roi-bot", "channel-poster"),
     required_columns={
-        "area_name_en": _col(
-            type=("text", "character varying"),
+        "area": _col(
+            type=_TEXTY,
             criticality="CRITICAL", min_non_null_pct=100.0,
         ),
-        "rooms_en": _col(
-            type=("text", "character varying"),
-            criticality="HIGH", min_non_null_pct=95.0,
+        "property_type": _col(
+            type=_TEXTY,
+            criticality="HIGH", min_non_null_pct=100.0,
         ),
-        "median_price_per_sqft": _col(
+        "bedrooms": _col(
+            type=("integer", "smallint"),
+            criticality="LOW", min_non_null_pct=0.0,
+            format_hint="NULL для агрегатов «все спальни»",
+        ),
+        "deal_type": _col(
+            type=_TEXTY,
+            criticality="HIGH", min_non_null_pct=100.0,
+            expected_values_sample=("sale", "rent"),
+        ),
+        "median": _col(
             type=("numeric", "double precision"),
-            criticality="CRITICAL", min_non_null_pct=90.0,
+            criticality="CRITICAL", min_non_null_pct=80.0,
         ),
         "sample_size": _col(
             type=("integer", "bigint"),
             criticality="HIGH", min_non_null_pct=100.0,
         ),
         "updated_at": _col(
-            type=("timestamp with time zone", "timestamp without time zone", "timestamp"),
-            criticality="HIGH", min_non_null_pct=100.0,
+            type=_TSTZ,
+            criticality="HIGH", min_non_null_pct=95.0,
         ),
     },
 )
