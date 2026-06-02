@@ -14082,6 +14082,70 @@ def get_stats(scope="dubai", name=None, prop=None, period=None, deal_type=None):
 print("Loaded v148 BUILDING_ALIASES expansion: grande signature residences -> Grande, etc.")
 
 
+# ============================================================
+# v150 BOOT — count Grande+Burj 3BR last 12m in BOTH LIVE and ARCHIVE.
+# Will be REMOVED after data collected.
+# ============================================================
+def _v150_count_grande_3br(label, table, date_col):
+    qs = [
+        ("01_total_grande_burj",
+         f"SELECT COUNT(*) FROM public.{table} WHERE LOWER(building_name_en) LIKE '%grande%' AND LOWER(area_name_en) LIKE '%burj%'"),
+        ("02_3br_grande_burj_all_time",
+         f"SELECT COUNT(*) FROM public.{table} WHERE LOWER(building_name_en) LIKE '%grande%' AND LOWER(area_name_en) LIKE '%burj%' AND (LOWER(rooms_en) LIKE '%3 b/r%' OR LOWER(rooms_en) LIKE '%3 br%')"),
+        ("03_3br_grande_burj_12m_safe",
+         f"""SELECT COUNT(*) FROM public.{table} WHERE LOWER(building_name_en) LIKE '%grande%' AND LOWER(area_name_en) LIKE '%burj%' AND (LOWER(rooms_en) LIKE '%3 b/r%' OR LOWER(rooms_en) LIKE '%3 br%') AND (
+            CASE
+              WHEN {date_col}::text ~ '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}' THEN ({date_col}::text)::date
+              WHEN {date_col}::text ~ '^[0-9]{{2}}-[0-9]{{2}}-[0-9]{{4}}' THEN to_date({date_col}::text, 'DD-MM-YYYY')
+              WHEN {date_col}::text ~ '^[0-9]{{2}}/[0-9]{{2}}/[0-9]{{4}}' THEN to_date({date_col}::text, 'DD/MM/YYYY')
+              ELSE NULL
+            END) >= CURRENT_DATE - INTERVAL '12 months'"""),
+        ("04_3br_grande_burj_24m",
+         f"""SELECT COUNT(*) FROM public.{table} WHERE LOWER(building_name_en) LIKE '%grande%' AND LOWER(area_name_en) LIKE '%burj%' AND (LOWER(rooms_en) LIKE '%3 b/r%' OR LOWER(rooms_en) LIKE '%3 br%') AND (
+            CASE
+              WHEN {date_col}::text ~ '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}' THEN ({date_col}::text)::date
+              WHEN {date_col}::text ~ '^[0-9]{{2}}-[0-9]{{2}}-[0-9]{{4}}' THEN to_date({date_col}::text, 'DD-MM-YYYY')
+              WHEN {date_col}::text ~ '^[0-9]{{2}}/[0-9]{{2}}/[0-9]{{4}}' THEN to_date({date_col}::text, 'DD/MM/YYYY')
+              ELSE NULL
+            END) >= CURRENT_DATE - INTERVAL '24 months'"""),
+        ("05_3br_grande_burj_recent_5",
+         f"""SELECT building_name_en, rooms_en, {date_col}, COALESCE(actual_worth, procedure_value, transaction_value, sale_price, price, amount) AS price FROM public.{table} WHERE LOWER(building_name_en) LIKE '%grande%' AND LOWER(area_name_en) LIKE '%burj%' AND (LOWER(rooms_en) LIKE '%3 b/r%' OR LOWER(rooms_en) LIKE '%3 br%') ORDER BY {date_col} DESC LIMIT 5"""),
+    ]
+    try:
+        with db() as conn:
+            with conn.cursor() as cur:
+                for name, sql in qs:
+                    try:
+                        cur.execute(sql)
+                        rows = cur.fetchall()
+                        print(f"[V150_{label}] {name}: {rows[:5]}", flush=True)
+                    except Exception as e:
+                        print(f"[V150_{label}] {name} ERR: {str(e)[:160]}", flush=True)
+    except Exception as e:
+        print(f"[V150_{label}] outer ERR: {str(e)[:160]}", flush=True)
+
+
+try:
+    _v150_orig = globals().get("_ACTIVE_SOURCE", "live")
+    try:
+        _set_data_source("archive")
+        _v150_count_grande_3br("ARCHIVE_SALE", "dld_sale_archive", "instance_date")
+    except Exception as e:
+        print(f"[V150_ARCHIVE_SALE] setup ERR: {e!r}", flush=True)
+    try:
+        _set_data_source("live")
+        _v150_count_grande_3br("LIVE_SALE", "dld_transactions_full", "transaction_date")
+    except Exception as e:
+        print(f"[V150_LIVE_SALE] setup ERR: {e!r}", flush=True)
+    try:
+        _set_data_source(_v150_orig)
+    except Exception:
+        pass
+    print("[V150] grande 3br diagnostic complete", flush=True)
+except Exception as e:
+    print(f"[V150] outer-most ERR: {e!r}", flush=True)
+
+
 if __name__ == "__main__":
     # Boot-time ecosystem contract verification (fail-soft unless STRICT_CONTRACTS=1).
     try:
