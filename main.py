@@ -4100,9 +4100,15 @@ async def send_deals_report(message, scope, name=None, prop=None, period=None, d
             f"💰 {format_money(r.get('price'))}\n"
             f"📐 {format_money(r.get('meter_price'))} за метр\n\n"
         )
-    row = get_stats(scope, name, used_prop, used_period, used_deal_type)
-    if row:
-        html += _build_360_conclusion(row, scope, name, "deals")
+    # v149: removed auto-360° from deals report.
+    # User can press "Резюме" / "Аналитика" to see it explicitly.
+    # Also: warn user about silent sale↔rent fallback so they know filter changed.
+    if deal_type and used_deal_type and deal_type != used_deal_type:
+        try:
+            fallback_label = "аренду" if used_deal_type == "rent" else "продажу"
+            html += f"\n⚠️ <i>По выбранному фильтру не нашлось — показаны данные на {fallback_label}.</i>\n"
+        except Exception:
+            pass
     set_last_report(user_id, title, html, scope)
     await message.answer(html, reply_markup=_final_actions_menu(user_id, scope))
 
