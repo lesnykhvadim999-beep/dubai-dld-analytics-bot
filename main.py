@@ -13653,6 +13653,33 @@ def _v141_split_building_area(name):
     return raw.strip() or None, None
 
 
+# v144: When DLD canonical area name differs from UI label, try synonyms.
+# Example: UI passes "Burj Khalifa" (DLD community code) but pre-aggregated
+# area_stats may be keyed by the sector label "Downtown Dubai". The list is
+# best-effort — empty means no synonym known, downstream handles None.
+_V144_AREA_SYNONYMS = {
+    "burj khalifa": ["Downtown Dubai", "Downtown", "Burj Khalifa Community"],
+    "downtown dubai": ["Burj Khalifa", "Downtown"],
+    "downtown": ["Downtown Dubai", "Burj Khalifa"],
+    "marsa dubai": ["Dubai Marina", "Marina"],
+    "dubai marina": ["Marsa Dubai", "Marina"],
+    "al barsha south fourth": ["JVC", "Jumeirah Village Circle"],
+    "al barsha south fifth": ["JVC", "Jumeirah Village Circle"],
+    "al hebiah first": ["JVC", "Jumeirah Village Circle"],
+    "jvc": ["Jumeirah Village Circle", "Al Barsha South Fourth"],
+    "jumeirah village circle": ["JVC", "Al Barsha South Fourth"],
+    "jlt": ["Jumeirah Lakes Towers"],
+    "jumeirah lakes towers": ["JLT"],
+}
+
+
+def _v144_area_synonyms(area):
+    if not area:
+        return []
+    key = area.strip().lower()
+    return _V144_AREA_SYNONYMS.get(key, [])
+
+
 try:
     _v141_orig_get_stats_smart = get_stats_smart
 except NameError:
@@ -13698,22 +13725,27 @@ def get_stats_smart(scope="dubai", name=None, prop=None, period=None, deal_type=
             except Exception:
                 pass
 
-    # 3) building-scope fallback: query the area for context data
+    # 3) building-scope fallback: query the area for context data.
+    #    Try original area first, then v144 synonyms (Burj Khalifa ↔ Downtown).
     if scope in ("building", "buildings", "project", "tower") and area:
-        try:
-            row3, up3, upe3, udt3 = _v141_orig_get_stats_smart("area", area, prop, period, deal_type)
-            if row3 and (row3.get("deals") or 0) > 0:
+        area_candidates = [area] + _v144_area_synonyms(area)
+        for cand in area_candidates:
+            try:
+                row3, up3, upe3, udt3 = _v141_orig_get_stats_smart("area", cand, prop, period, deal_type)
+                if row3 and (row3.get("deals") or 0) > 0:
+                    try:
+                        _v106_log("v141_area_fallback_hit", "get_stats_smart",
+                                  raw_name=str(name)[:120], area=cand,
+                                  via_synonym=(cand != area))
+                    except Exception:
+                        pass
+                    return row3, up3, upe3, udt3
+            except Exception as e:
                 try:
-                    _v106_log("v141_area_fallback_hit", "get_stats_smart",
-                              raw_name=str(name)[:120], area=area)
+                    _v106_log("v141_get_stats_smart_area_fallback_err", e,
+                              name=str(name)[:120], cand=cand)
                 except Exception:
                     pass
-                return row3, up3, upe3, udt3
-        except Exception as e:
-            try:
-                _v106_log("v141_get_stats_smart_area_fallback_err", e, name=str(name)[:120])
-            except Exception:
-                pass
 
     return None, prop, period, deal_type
 
@@ -13743,12 +13775,13 @@ def get_stats(scope="dubai", name=None, prop=None, period=None, deal_type=None):
             pass
 
     if scope in ("building", "buildings", "project", "tower") and area:
-        try:
-            row3 = _v141_orig_get_stats("area", area, prop, period, deal_type)
-            if row3 and (row3.get("deals") or 0) > 0:
-                return row3
-        except Exception:
-            pass
+        for cand in [area] + _v144_area_synonyms(area):
+            try:
+                row3 = _v141_orig_get_stats("area", cand, prop, period, deal_type)
+                if row3 and (row3.get("deals") or 0) > 0:
+                    return row3
+            except Exception:
+                pass
 
     return None
 
@@ -13793,25 +13826,29 @@ def get_latest_deals_smart(scope, name, prop=None, period=None, deal_type=None, 
             pass
 
     # If still empty and scope=building with area context, try just-area lookup
+    # (also iterate v144 area synonyms for Burj Khalifa ↔ Downtown Dubai).
     if scope in ("building", "buildings", "project", "tower") and area:
-        try:
-            rows3, up3, upe3, udt3 = _v141_orig_get_latest_deals_smart(
-                "area", area, prop, period, deal_type, limit=limit, unit_query=unit_query
-            )
-            if rows3:
-                try:
-                    _v106_log("v141_area_fallback_hit", "latest_deals_smart",
-                              raw_name=str(name)[:120], area=area)
-                except Exception:
-                    pass
-                return rows3, up3, upe3, udt3
-        except Exception:
-            pass
+        for cand in [area] + _v144_area_synonyms(area):
+            try:
+                rows3, up3, upe3, udt3 = _v141_orig_get_latest_deals_smart(
+                    "area", cand, prop, period, deal_type, limit=limit, unit_query=unit_query
+                )
+                if rows3:
+                    try:
+                        _v106_log("v141_area_fallback_hit", "latest_deals_smart",
+                                  raw_name=str(name)[:120], area=cand,
+                                  via_synonym=(cand != area))
+                    except Exception:
+                        pass
+                    return rows3, up3, upe3, udt3
+            except Exception:
+                pass
 
     return [], prop, period, deal_type
 
 
 print("Loaded v143 Grande honest-combo hint: building+area mismatch shows real DLD coverage")
+print("Loaded v144 area-synonyms fallback: Burj Khalifa <-> Downtown Dubai, JVC subdistricts, etc.")
 
 
 if __name__ == "__main__":
