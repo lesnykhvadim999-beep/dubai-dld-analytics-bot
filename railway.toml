@@ -7,5 +7,6 @@ restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
 # Reliability audit 2026-05-30: Railway pings /health (fsst_core.start_health_server, main.py:8864)
 # 503 на упавшую БД → auto-restart. До этого Railway рестартил только на process exit.
-healthcheckPath = "/health"
-healthcheckTimeout = 30
+# 2026-06-02: temporary off — vadim resale conflict with old container, polling lock.
+# Re-enable after stable: healthcheckPath = "/health" + healthcheckTimeout = 30
+overlapSeconds = 0
