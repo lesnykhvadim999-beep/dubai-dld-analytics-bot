@@ -13956,6 +13956,38 @@ def get_stats(scope="dubai", name=None, prop=None, period=None, deal_type=None):
 print("Loaded v146 raw-layer ||| strip: get_latest_deals + get_stats (Grande Burj Khalifa fix)")
 
 
+# ============================================================
+# v147 TRACER — log every call to get_latest_deals + get_stats for Grande.
+# Reveals exact path that returns empty.
+# ============================================================
+_v146_after_get_latest_deals = get_latest_deals
+_v146_after_get_stats = get_stats
+
+
+def get_latest_deals(scope="building", name=None, prop=None, period=None, deal_type=None, limit=7, unit_query=None):  # noqa: F811
+    rows = _v146_after_get_latest_deals(scope, name, prop, period, deal_type, limit=limit, unit_query=unit_query)
+    try:
+        if name and "grande" in str(name).lower():
+            print(f"[V147_TRACE] get_latest_deals scope={scope!r} name={name!r} prop={prop!r} period={period!r} dt={deal_type!r} → rows={len(rows) if rows else 0}", flush=True)
+    except Exception:
+        pass
+    return rows
+
+
+def get_stats(scope="dubai", name=None, prop=None, period=None, deal_type=None):  # noqa: F811
+    r = _v146_after_get_stats(scope, name, prop, period, deal_type)
+    try:
+        if name and "grande" in str(name).lower():
+            deals = (r or {}).get("deals", 0) if isinstance(r, dict) else "non-dict"
+            print(f"[V147_TRACE] get_stats scope={scope!r} name={name!r} prop={prop!r} period={period!r} dt={deal_type!r} → deals={deals}", flush=True)
+    except Exception:
+        pass
+    return r
+
+
+print("Loaded v147 Grande call tracer")
+
+
 if __name__ == "__main__":
     # Boot-time ecosystem contract verification (fail-soft unless STRICT_CONTRACTS=1).
     try:
