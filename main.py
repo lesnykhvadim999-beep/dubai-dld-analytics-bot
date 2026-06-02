@@ -14094,13 +14094,17 @@ except NameError:
 def _run_source_sql_v67(source, table, sql, params):  # noqa: F811
     rows = _v151_orig_run_source(source, table, sql, params) if _v151_orig_run_source else []
     try:
-        sql_lower = (sql or "").lower()
-        if "grande" in sql_lower or any(("grande" in str(p).lower() if p else False) for p in (params or [])):
-            print(f"[V151_SQL] source={source} table={table} → rows={len(rows) if rows else 0}", flush=True)
-            if rows and len(rows) > 0:
-                print(f"[V151_SQL]   first_row={dict(rows[0])}", flush=True)
-    except Exception:
-        pass
+        # v152: log SQL + params + result for Grande to diagnose source merge bug
+        is_grande = any(("grande" in str(p).lower() if p else False) for p in (params or []))
+        if is_grande:
+            print(f"[V152_SQL] source={source} table={table} → rows={len(rows) if rows else 0}", flush=True)
+            print(f"[V152_SQL]   SQL_PREVIEW={(sql or '')[:500]}", flush=True)
+            print(f"[V152_SQL]   PARAMS={params}", flush=True)
+    except Exception as e:
+        try:
+            print(f"[V152_SQL] trace_error: {e}", flush=True)
+        except Exception:
+            pass
     return rows
 
 
