@@ -14091,21 +14091,29 @@ except NameError:
     _v151_orig_run_source = None
 
 
+_V153_COUNTER = [0]
+
+
 def _run_source_sql_v67(source, table, sql, params):  # noqa: F811
     rows = _v151_orig_run_source(source, table, sql, params) if _v151_orig_run_source else []
+    # v153: UNCONDITIONAL log first 50 calls + grande-specific
+    _V153_COUNTER[0] += 1
     try:
-        # v152: log SQL + params + result for Grande to diagnose source merge bug
-        is_grande = any(("grande" in str(p).lower() if p else False) for p in (params or []))
-        if is_grande:
-            print(f"[V152_SQL] source={source} table={table} → rows={len(rows) if rows else 0}", flush=True)
-            print(f"[V152_SQL]   SQL_PREVIEW={(sql or '')[:500]}", flush=True)
-            print(f"[V152_SQL]   PARAMS={params}", flush=True)
+        params_str = repr(params)[:300] if params else "[]"
+        is_grande = "grande" in params_str.lower() or "grande" in (sql or "").lower()
+        if _V153_COUNTER[0] <= 50 or is_grande:
+            print(f"[V153_SQL #{_V153_COUNTER[0]}] grande={is_grande} src={source} tbl={table} → rows={len(rows) if rows else 0} params={params_str}", flush=True)
+            if is_grande:
+                print(f"[V153_SQL]   SQL={(sql or '')[:600]}", flush=True)
     except Exception as e:
         try:
-            print(f"[V152_SQL] trace_error: {e}", flush=True)
+            print(f"[V153_SQL] trace_error: {e!r}", flush=True)
         except Exception:
             pass
     return rows
+
+
+print("Loaded v153 unconditional SQL trace")
 
 
 # ============================================================
