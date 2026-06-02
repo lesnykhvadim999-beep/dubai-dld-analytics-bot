@@ -13852,64 +13852,108 @@ print("Loaded v144 area-synonyms fallback: Burj Khalifa <-> Downtown Dubai, JVC 
 
 
 # ============================================================
-# V145 BOOT-TIME DIAGNOSTIC — Grande real numbers from BOTH DLD DBs.
-# Will be REMOVED after collecting data.
+# v146: wrap RAW get_latest_deals so v106 fallback in get_latest_deals_smart
+# also strips '|||' from name. Root cause of remaining Grande "no data":
+# v106 (line 12316) tries direct get_latest_deals(name=...) bypassing v141
+# smart wrap → raw v67 SQL sees 'Grande|||Burj Khalifa' → 0 rows.
+# ARCHIVE has 5476 Grande / 1629 in Burj Khalifa / 213 3BR / 615 1BR.
 # ============================================================
-def _v145_grande_diag(label, src_func=None):
-    """Run real SQL probes against current data source. Print [V145_REAL] lines."""
-    qs = [
-        ("01_grande_total",
-         "SELECT COUNT(*) FROM public.dld_transactions_full WHERE LOWER(building_name_en) LIKE '%grande%'"),
-        ("02_grande_areas",
-         "SELECT area_name_en, COUNT(*) FROM public.dld_transactions_full WHERE LOWER(building_name_en) LIKE '%grande%' GROUP BY 1 ORDER BY 2 DESC LIMIT 10"),
-        ("03_grande_rooms_burj",
-         "SELECT rooms_en, COUNT(*) FROM public.dld_transactions_full WHERE LOWER(building_name_en) LIKE '%grande%' AND LOWER(area_name_en) LIKE '%burj%' GROUP BY 1 ORDER BY 2 DESC LIMIT 15"),
-        ("04_grande_1br_burj_12m",
-         "SELECT COUNT(*) FROM public.dld_transactions_full WHERE LOWER(building_name_en) LIKE '%grande%' AND LOWER(area_name_en) LIKE '%burj%' AND (LOWER(rooms_en) LIKE '%1 b/r%' OR LOWER(rooms_en) LIKE '%1 br%') AND instance_date >= CURRENT_DATE - INTERVAL '12 months'"),
-        ("05_grande_3br_burj_12m",
-         "SELECT COUNT(*) FROM public.dld_transactions_full WHERE LOWER(building_name_en) LIKE '%grande%' AND LOWER(area_name_en) LIKE '%burj%' AND (LOWER(rooms_en) LIKE '%3 b/r%' OR LOWER(rooms_en) LIKE '%3 br%') AND instance_date >= CURRENT_DATE - INTERVAL '12 months'"),
-        ("06_grande_3br_burj_all",
-         "SELECT COUNT(*) FROM public.dld_transactions_full WHERE LOWER(building_name_en) LIKE '%grande%' AND LOWER(area_name_en) LIKE '%burj%' AND (LOWER(rooms_en) LIKE '%3 b/r%' OR LOWER(rooms_en) LIKE '%3 br%')"),
-        ("07_grande_date_range",
-         "SELECT MIN(instance_date)::text, MAX(instance_date)::text, COUNT(*) FROM public.dld_transactions_full WHERE LOWER(building_name_en) LIKE '%grande%' AND LOWER(area_name_en) LIKE '%burj%'"),
-        ("08_grande_downtown",
-         "SELECT COUNT(*) FROM public.dld_transactions_full WHERE LOWER(building_name_en) LIKE '%grande%' AND LOWER(area_name_en) LIKE '%downtown%'"),
-        ("09_grande_3br_downtown_12m",
-         "SELECT COUNT(*) FROM public.dld_transactions_full WHERE LOWER(building_name_en) LIKE '%grande%' AND LOWER(area_name_en) LIKE '%downtown%' AND (LOWER(rooms_en) LIKE '%3 b/r%' OR LOWER(rooms_en) LIKE '%3 br%') AND instance_date >= CURRENT_DATE - INTERVAL '12 months'"),
-    ]
-    try:
-        with db() as conn:
-            with conn.cursor() as cur:
-                for name, sql in qs:
-                    try:
-                        cur.execute(sql)
-                        rows = cur.fetchall()
-                        print(f"[V145_REAL_{label}] {name}: {rows[:10]}", flush=True)
-                    except Exception as e:
-                        print(f"[V145_REAL_{label}] {name} ERR: {str(e)[:200]}", flush=True)
-    except Exception as e:
-        print(f"[V145_REAL_{label}] outer ERR: {str(e)[:200]}", flush=True)
-
-
 try:
-    _v145_orig_src = globals().get("_ACTIVE_SOURCE", "live")
+    _v146_orig_get_latest_deals = get_latest_deals
+except NameError:
+    _v146_orig_get_latest_deals = None
+
+
+def get_latest_deals(scope="building", name=None, prop=None, period=None, deal_type=None, limit=7, unit_query=None):  # noqa: F811
+    """v146: split '|||' before raw v67 query so name='Grande' (not 'Grande|||Burj Khalifa')."""
+    if _v146_orig_get_latest_deals is None:
+        return []
+    # 1) try as-is (cheap when state already clean)
     try:
-        _set_data_source("live")
-        _v145_grande_diag("LIVE")
-    except Exception as _v145e:
-        print(f"[V145_REAL_LIVE] setup ERR: {_v145e!r}", flush=True)
-    try:
-        _set_data_source("archive")
-        _v145_grande_diag("ARCHIVE")
-    except Exception as _v145e:
-        print(f"[V145_REAL_ARCHIVE] setup ERR: {_v145e!r}", flush=True)
-    try:
-        _set_data_source(_v145_orig_src)
+        rows = _v146_orig_get_latest_deals(scope, name, prop, period, deal_type, limit=limit, unit_query=unit_query)
+        if rows:
+            return rows
     except Exception:
         pass
-    print("[V145_REAL] diagnostic complete", flush=True)
-except Exception as _v145_outer:
-    print(f"[V145_REAL] outer-most ERR: {_v145_outer!r}", flush=True)
+
+    # 2) strip '|||area' suffix and retry
+    try:
+        bld, area = _v141_split_building_area(name)
+    except Exception:
+        bld, area = (str(name).split("|||", 1)[0].strip() if name and "|||" in str(name) else (name, None))
+    if bld and bld != (name or ""):
+        try:
+            rows2 = _v146_orig_get_latest_deals(scope, bld, prop, period, deal_type, limit=limit, unit_query=unit_query)
+            if rows2:
+                try:
+                    _v106_log("v146_pipe_strip_hit", "raw_latest_deals",
+                              raw_name=str(name)[:120], clean=bld, scope=scope)
+                except Exception:
+                    pass
+                return rows2
+        except Exception:
+            pass
+
+    # 3) area-only fallback for building scope
+    if scope in ("building", "buildings", "project", "tower") and area:
+        try:
+            rows3 = _v146_orig_get_latest_deals("area", area, prop, period, deal_type, limit=limit, unit_query=unit_query)
+            if rows3:
+                try:
+                    _v106_log("v146_area_fallback_hit", "raw_latest_deals",
+                              raw_name=str(name)[:120], area=area)
+                except Exception:
+                    pass
+                return rows3
+        except Exception:
+            pass
+
+    return []
+
+
+# Same wrap for raw get_stats so direct fallbacks also strip '|||'
+try:
+    _v146_orig_get_stats_raw = get_stats
+except NameError:
+    _v146_orig_get_stats_raw = None
+
+
+def get_stats(scope="dubai", name=None, prop=None, period=None, deal_type=None):  # noqa: F811
+    """v146: strip '|||' before raw v67 SQL query."""
+    if _v146_orig_get_stats_raw is None:
+        return None
+    try:
+        r = _v146_orig_get_stats_raw(scope, name, prop, period, deal_type)
+        if r and (r.get("deals") or 0) > 0:
+            return r
+    except Exception:
+        pass
+
+    try:
+        bld, area = _v141_split_building_area(name)
+    except Exception:
+        bld, area = (str(name).split("|||", 1)[0].strip() if name and "|||" in str(name) else (name, None))
+
+    if bld and bld != (name or ""):
+        try:
+            r2 = _v146_orig_get_stats_raw(scope, bld, prop, period, deal_type)
+            if r2 and (r2.get("deals") or 0) > 0:
+                return r2
+        except Exception:
+            pass
+
+    if scope in ("building", "buildings", "project", "tower") and area:
+        try:
+            r3 = _v146_orig_get_stats_raw("area", area, prop, period, deal_type)
+            if r3 and (r3.get("deals") or 0) > 0:
+                return r3
+        except Exception:
+            pass
+
+    return None
+
+
+print("Loaded v146 raw-layer ||| strip: get_latest_deals + get_stats (Grande Burj Khalifa fix)")
 
 
 if __name__ == "__main__":
