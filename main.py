@@ -13988,6 +13988,94 @@ def get_stats(scope="dubai", name=None, prop=None, period=None, deal_type=None):
 print("Loaded v147 Grande call tracer")
 
 
+# ============================================================
+# v148: Expand BUILDING_ALIASES in get_latest_deals + get_stats.
+# Root cause discovered via v147 trace:
+#   Bot stores building name as 'grande signature residences' (full marketing
+#   name), but DLD ARCHIVE stores building_name_en = 'Grande' (short DLD
+#   registry name). SQL exact-match + ILIKE both fail.
+#   BUILDING_ALIASES dict at line 1103 maps:
+#       'grande signature residences' -> ['grande']
+#   but _query_aliases_v66 (line 7571) only checks AREA aliases, not building.
+# Fix: v148 calls the underlying function with each alias and aggregates rows.
+# ============================================================
+_v148_orig_get_latest_deals = get_latest_deals
+_v148_orig_get_stats = get_stats
+
+
+def _v148_expand_building(name):
+    """Return list of names to try for building scope, using BUILDING_ALIASES."""
+    if not name:
+        return [None]
+    raw = str(name).strip()
+    out = [raw]
+    try:
+        low = raw.lower().strip()
+        for k, vals in BUILDING_ALIASES.items():
+            if low == k.lower():
+                for v in vals:
+                    if v and v not in out:
+                        out.append(v)
+                break
+            if low in [v.lower() for v in vals]:
+                for v in vals:
+                    if v and v not in out:
+                        out.append(v)
+                if k not in out:
+                    out.append(k)
+                break
+    except Exception:
+        pass
+    return out
+
+
+def get_latest_deals(scope="building", name=None, prop=None, period=None, deal_type=None, limit=7, unit_query=None):  # noqa: F811
+    """v148: try each BUILDING_ALIASES variant; return first non-empty result."""
+    if _v148_orig_get_latest_deals is None:
+        return []
+    candidates = _v148_expand_building(name) if scope in ("building", "buildings", "project", "tower") else [name]
+    last = []
+    for cand in candidates:
+        try:
+            rows = _v148_orig_get_latest_deals(scope, cand, prop, period, deal_type, limit=limit, unit_query=unit_query)
+            if rows:
+                if cand != (name or ""):
+                    try:
+                        print(f"[V148_HIT] get_latest_deals alias={cand!r} (was {name!r}) → rows={len(rows)}", flush=True)
+                    except Exception:
+                        pass
+                return rows
+            last = rows
+        except Exception:
+            continue
+    return last
+
+
+def get_stats(scope="dubai", name=None, prop=None, period=None, deal_type=None):  # noqa: F811
+    """v148: try each BUILDING_ALIASES variant; return first non-empty result."""
+    if _v148_orig_get_stats is None:
+        return None
+    candidates = _v148_expand_building(name) if scope in ("building", "buildings", "project", "tower") else [name]
+    last = None
+    for cand in candidates:
+        try:
+            r = _v148_orig_get_stats(scope, cand, prop, period, deal_type)
+            if r and isinstance(r, dict) and (r.get("deals") or 0) > 0:
+                if cand != (name or ""):
+                    try:
+                        print(f"[V148_HIT] get_stats alias={cand!r} (was {name!r}) → deals={r.get('deals')}", flush=True)
+                    except Exception:
+                        pass
+                return r
+            last = r
+        except Exception:
+            continue
+    return last
+
+
+print("Loaded v148 BUILDING_ALIASES expansion: grande signature residences -> Grande, etc.")
+
+
 if __name__ == "__main__":
     # Boot-time ecosystem contract verification (fail-soft unless STRICT_CONTRACTS=1).
     try:
