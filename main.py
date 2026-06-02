@@ -14117,6 +14117,136 @@ print("Loaded v153 unconditional SQL trace")
 
 
 # ============================================================
+# v154 ARCHIVE FORCE-MERGE: latest get_latest_deals (v91, line 9912)
+# uses single DB (LIVE only). Result: Grande shows 1 deal instead of 25.
+# v154 queries ARCHIVE directly via psycopg2 and merges with existing rows.
+# ============================================================
+import psycopg2 as _v154_psycopg2
+import psycopg2.extras as _v154_extras
+
+_v154_after_get_latest_deals = get_latest_deals
+
+
+def _v154_query_archive(scope, name, prop, period, deal_type, limit=7):
+    """Direct ARCHIVE query bypassing v91 fastpath."""
+    try:
+        if not name or scope != "building":
+            return []
+        if not ARCHIVE_DATABASE_URL or ARCHIVE_DATABASE_URL == LIVE_DATABASE_URL:
+            return []
+        is_sale = is_sale_deal(deal_type) if 'is_sale_deal' in globals() else True
+        is_rent = is_rent_deal(deal_type) if 'is_rent_deal' in globals() else False
+        if not is_sale and not is_rent:
+            is_sale = True
+        table = "public.dld_sale_archive" if is_sale else "public.dld_rent_archive"
+        price_col = "actual_worth" if is_sale else "annual_amount"
+        # rooms filter
+        import re as _re
+        prop_low = (str(prop or "")).lower().strip()
+        m = _re.search(r"(\d+)\s*br", prop_low)
+        rooms_clause = ""
+        rooms_params = []
+        if "studio" in prop_low:
+            rooms_clause = "AND LOWER(rooms_en) LIKE %s"
+            rooms_params = ["%studio%"]
+        elif m:
+            n = m.group(1)
+            rooms_clause = "AND (LOWER(rooms_en) LIKE %s OR LOWER(rooms_en) LIKE %s)"
+            rooms_params = [f"%{n} b/r%", f"%{n} br%"]
+        # period filter
+        months = period_months(period) if 'period_months' in globals() else None
+        period_clause = ""
+        if months:
+            period_clause = f"""AND (
+                CASE
+                  WHEN instance_date::text ~ '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}' THEN (instance_date::text)::date
+                  WHEN instance_date::text ~ '^[0-9]{{2}}-[0-9]{{2}}-[0-9]{{4}}' THEN to_date(instance_date::text, 'DD-MM-YYYY')
+                  ELSE NULL
+                END) >= CURRENT_DATE - INTERVAL '{int(months)} months'"""
+        # building aliases (BUILDING_ALIASES + name)
+        candidates = _v148_expand_building(name)
+        building_or = []
+        building_params = []
+        for c in candidates:
+            building_or.append("LOWER(building_name_en) ILIKE %s")
+            building_params.append(f"%{c.lower()}%")
+        building_where = "AND (" + " OR ".join(building_or) + ")"
+        sql = f"""
+            SELECT
+                CASE
+                  WHEN instance_date::text ~ '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}' THEN (instance_date::text)::date
+                  WHEN instance_date::text ~ '^[0-9]{{2}}-[0-9]{{2}}-[0-9]{{4}}' THEN to_date(instance_date::text, 'DD-MM-YYYY')
+                  ELSE NULL
+                END AS safe_date,
+                building_name_en,
+                area_name_en,
+                rooms_en,
+                property_type_en,
+                property_sub_type_en,
+                NULLIF({price_col}::text, '')::numeric AS price,
+                NULLIF(actual_area::text, '')::numeric AS area_size,
+                NULL::numeric AS meter_price
+            FROM {table}
+            WHERE {price_col} IS NOT NULL AND {price_col}::text != ''
+              {building_where}
+              {rooms_clause}
+              {period_clause}
+            ORDER BY safe_date DESC NULLS LAST
+            LIMIT %s
+        """
+        params = building_params + rooms_params + [limit]
+        conn = _v154_psycopg2.connect(ARCHIVE_DATABASE_URL, connect_timeout=10)
+        try:
+            with conn.cursor(cursor_factory=_v154_extras.RealDictCursor) as cur:
+                cur.execute(sql, params)
+                return list(cur.fetchall())
+        finally:
+            conn.close()
+    except Exception as e:
+        try:
+            print(f"[V154_ARCHIVE_ERR] {e!r}", flush=True)
+        except Exception:
+            pass
+        return []
+
+
+def get_latest_deals(scope="building", name=None, prop=None, period=None, deal_type=None, limit=7, unit_query=None):  # noqa: F811
+    """v154: merge LIVE (via existing path) + ARCHIVE (direct query)."""
+    live_rows = []
+    try:
+        live_rows = _v154_after_get_latest_deals(scope, name, prop, period, deal_type, limit=limit, unit_query=unit_query) or []
+    except Exception:
+        pass
+    archive_rows = _v154_query_archive(scope, name, prop, period, deal_type, limit=max(limit, 10))
+    try:
+        if name and "grande" in str(name).lower():
+            print(f"[V154_MERGE] name={name!r} live={len(live_rows)} archive={len(archive_rows)}", flush=True)
+    except Exception:
+        pass
+    # Merge + dedup
+    seen = set()
+    merged = []
+    for r in list(live_rows) + list(archive_rows):
+        try:
+            key = (str(r.get("safe_date")), str(r.get("building_name_en")), str(r.get("price")))
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(r)
+        except Exception:
+            merged.append(r)
+    try:
+        merged.sort(key=lambda r: str(r.get("safe_date") or ""), reverse=True)
+    except Exception:
+        pass
+    return merged[:limit]
+
+
+print("Loaded v154 ARCHIVE force-merge: direct psycopg2 + dedupe")
+
+
+
+# ============================================================
 # v150 BOOT — count Grande+Burj 3BR last 12m in BOTH LIVE and ARCHIVE.
 # Will be REMOVED after data collected.
 # ============================================================
