@@ -15571,28 +15571,32 @@ def _b063_dubai_breakdowns(scope, name):
                     """)
                     out["format_breakdown"] = [dict(r) for r in cur.fetchall()]
 
-                # 3) Top 3 areas by sale deals (Dubai-wide only)
+                # 3) Top 5 areas by sale deals (Dubai-wide only). Fetch 5 чтобы
+                # после брендирования и dedup можно было взять 3 уникальных.
                 if scope != 'area':
                     cur.execute("""
                         SELECT area_key, deals, avg_price
                         FROM mv_area_12m_summary
                         WHERE deal_type='sale' AND property_type='all' AND rooms='all'
                           AND area_key NOT IN ('all', 'dubai')
+                          AND deals >= 100
                         ORDER BY deals DESC
-                        LIMIT 3
+                        LIMIT 10
                     """)
                     out["top_deals"] = [dict(r) for r in cur.fetchall()]
 
-                    # 4) Top 3 areas by apt yield (Dubai-wide)
+                    # 4) Top areas by apt yield. B065: deals >= 1000 (был 200)
+                    # чтобы фильтровать малые выборки где yield нестабилен.
+                    # 10 рядов чтобы было из чего выбирать после дедупа.
                     cur.execute("""
-                        SELECT area_key, avg_rental_yield_pct, avg_price
+                        SELECT area_key, avg_rental_yield_pct, avg_price, deals
                         FROM mv_area_12m_summary
                         WHERE deal_type='sale' AND property_type='apartment' AND rooms='all'
                           AND area_key NOT IN ('all', 'dubai')
-                          AND deals >= 200
-                          AND avg_rental_yield_pct BETWEEN 3 AND 12
-                        ORDER BY avg_rental_yield_pct DESC NULLS LAST
-                        LIMIT 3
+                          AND deals >= 1000
+                          AND avg_rental_yield_pct BETWEEN 3 AND 11
+                        ORDER BY avg_rental_yield_pct DESC NULLS LAST, deals DESC
+                        LIMIT 10
                     """)
                     out["top_yield"] = [dict(r) for r in cur.fetchall()]
 
@@ -15644,6 +15648,55 @@ def _b063_rooms_ru(rms):
     }.get((rms or '').lower(), rms)
 
 
+# B065: маппинг raw DLD sector names → брендированные имена районов.
+# DLD группирует кварталы под административные секторы, бренды строит маркетинг.
+_B065_RAW_TO_BRAND = {
+    "al barsha south fourth": "JVC",
+    "al barsha south fifth": "JVC",
+    "al hebiah first": "JVC",
+    "al barsha south third": "Jumeirah Village Triangle",
+    "al barsha south second": "Arjan",
+    "al hebiah fourth": "Dubai Sports City",
+    "al hebiah third": "DAMAC Hills",
+    "marsa dubai": "Dubai Marina",
+    "burj khalifa": "Downtown Dubai",
+    "jumeirah lakes towers": "JLT",
+    "hadaeq sheikh mohammed bin rashid": "Dubai Hills / MBR City",
+    "madinat al mataar": "Dubai South",
+    "zaabeel second": "DIFC",
+    "me'aisem first": "Dubai Production City",
+    "me`aisem first": "Dubai Production City",
+    "jabal ali first": "Discovery Gardens",
+    "jabal ali second": "Discovery Gardens",
+    "dubai investment park first": "Dubai Investment Park",
+    "dubai investment park second": "Dubai Investment Park",
+    "wadi al safa 5": "Liwan / Wadi Al Safa 5",
+    "wadi al safa 3": "Wadi Al Safa",
+    "warsan fourth": "International City",
+    "warsan first": "International City",
+    "al barshaa south third": "Al Barsha",
+    "al barsha 1": "Al Barsha",
+    "al barsha first": "Al Barsha",
+    "palm deira": "Palm Deira",
+    "palm jumeirah": "Palm Jumeirah",
+    "nadd hessa": "Sobha Hartland",
+    "business bay": "Business Bay",
+    "jumeirah village circle": "JVC",
+    "jumeirah": "Jumeirah",
+    "mirdif": "Mirdif",
+}
+
+
+def _b065_brand_area(raw):
+    if not raw:
+        return raw
+    s = str(raw).strip().lower()
+    if s in _B065_RAW_TO_BRAND:
+        return _B065_RAW_TO_BRAND[s]
+    # Title-case fallback
+    return str(raw).title()
+
+
 # Override the function used by send_full_report / send_period_report / etc.
 def _build_360_conclusion(row, scope=None, name=None, report_kind=None):  # noqa: F811
     try:
@@ -15656,23 +15709,26 @@ def _build_360_conclusion(row, scope=None, name=None, report_kind=None):  # noqa
 
         extra = []
 
-        # Format breakdown (Dubai-wide)
+        # Format breakdown (Dubai-wide). B065: пропускаем категории с <500
+        # сделок (data quality — townhouses часто misclassified в DLD).
         if br.get("format_breakdown") and scope != 'area':
-            extra.append("\n🏠 <b>По типам недвижимости:</b>")
-            for r in br["format_breakdown"]:
-                _fmt = _b063_format_ru(r.get("property_type"))
-                _d = int(r.get("total_deals") or 0)
-                _p = _b061_money(r.get("wavg_price"))
-                _line = f"   • <b>{_fmt}:</b> {format_int(_d)} сделок"
-                if _p:
-                    _line += f" · в среднем {_p}"
-                try:
-                    _y = float(r.get("wavg_yield") or 0)
-                    if 3 <= _y <= 12:
-                        _line += f" · доходность {_y:.1f}%"
-                except Exception:
-                    pass
-                extra.append(_line)
+            _fmt_rows = [r for r in br["format_breakdown"] if int(r.get("total_deals") or 0) >= 500]
+            if _fmt_rows:
+                extra.append("\n🏠 <b>По типам недвижимости:</b>")
+                for r in _fmt_rows:
+                    _fmt = _b063_format_ru(r.get("property_type"))
+                    _d = int(r.get("total_deals") or 0)
+                    _p = _b061_money(r.get("wavg_price"))
+                    _line = f"   • <b>{_fmt}:</b> {format_int(_d)} сделок"
+                    if _p:
+                        _line += f" · в среднем {_p}"
+                    try:
+                        _y = float(r.get("wavg_yield") or 0)
+                        if 3 <= _y <= 12:
+                            _line += f" · доходность {_y:.1f}%"
+                    except Exception:
+                        pass
+                    extra.append(_line)
 
         # Rooms breakdown
         if br.get("rooms"):
@@ -15686,23 +15742,39 @@ def _build_360_conclusion(row, scope=None, name=None, report_kind=None):  # noqa
                     _line += f" · в среднем {_p}"
                 extra.append(_line)
 
-        # Top 3 areas (Dubai-wide)
+        # B065: брендирование raw DLD-имён + dedup до 3 уникальных брендов.
+        def _b065_pick_top(rows, limit=3):
+            _seen = set()
+            _picked = []
+            for r in rows or []:
+                _brand = _b065_brand_area(r.get("area_key"))
+                if _brand in _seen:
+                    continue
+                _seen.add(_brand)
+                _picked.append((_brand, r))
+                if len(_picked) >= limit:
+                    break
+            return _picked
+
+        # Top 3 areas (Dubai-wide) с брендированными именами
         if br.get("top_deals") and scope != 'area':
-            extra.append("\n🏆 <b>Топ районов по объёму:</b>")
-            for i, r in enumerate(br["top_deals"], 1):
-                _n = (r.get("area_key") or "—").title()
-                _d = int(r.get("deals") or 0)
-                extra.append(f"   {i}. {_n} — {format_int(_d)} сделок")
+            _top_d = _b065_pick_top(br["top_deals"], limit=3)
+            if _top_d:
+                extra.append("\n🏆 <b>Топ районов по объёму сделок:</b>")
+                for i, (_brand, r) in enumerate(_top_d, 1):
+                    _d = int(r.get("deals") or 0)
+                    extra.append(f"   {i}. <b>{_brand}</b> — {format_int(_d)} сделок")
 
         if br.get("top_yield") and scope != 'area':
-            extra.append("\n💎 <b>Топ районов по доходности:</b>")
-            for i, r in enumerate(br["top_yield"], 1):
-                _n = (r.get("area_key") or "—").title()
-                try:
-                    _y = float(r.get("avg_rental_yield_pct") or 0)
-                    extra.append(f"   {i}. {_n} — {_y:.1f}%")
-                except Exception:
-                    pass
+            _top_y = _b065_pick_top(br["top_yield"], limit=3)
+            if _top_y:
+                extra.append("\n💎 <b>Топ районов по доходности:</b>")
+                for i, (_brand, r) in enumerate(_top_y, 1):
+                    try:
+                        _y = float(r.get("avg_rental_yield_pct") or 0)
+                        extra.append(f"   {i}. <b>{_brand}</b> — {_y:.1f}%")
+                    except Exception:
+                        pass
 
         # Rent market summary
         if br.get("rent_sum"):
