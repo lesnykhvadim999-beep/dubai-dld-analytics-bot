@@ -1049,6 +1049,7 @@ def period_menu(user_id):
 
 def smart_goal_menu(user_id):
     return kb([
+        ["⚡ Быстрый подбор"],
         ["💰 Инвестиция / ROI"],
         ["🏡 Для жизни", "📈 Перепродажа"],
         ["🔑 Аренда"],
@@ -2189,12 +2190,67 @@ def recommended_property_types(goal, budget_text):
     return ["1 BR", "2 BR", "Townhouse", "Villa"]
 
 
-def smart_area_universe(goal):
+_LEGACY_AREA_UNIVERSE = {
+    "🏡 Для жизни": [
+        ("Downtown Dubai", ["Burj Khalifa"]),
+        ("Dubai Marina", ["Marsa Dubai"]),
+        ("JVC", ["Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"]),
+        ("Business Bay", ["Business Bay"]),
+        ("Palm Jumeirah", ["Palm Jumeirah"]),
+    ],
+    "🔑 Аренда": [
+        ("Dubai Marina", ["Marsa Dubai"]),
+        ("JVC", ["Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"]),
+        ("Business Bay", ["Business Bay"]),
+        ("Downtown Dubai", ["Burj Khalifa"]),
+        ("JLT", ["Jumeirah Lakes Towers"]),
+    ],
+    "_default": [
+        ("JVC", ["Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"]),
+        ("Business Bay", ["Business Bay"]),
+        ("Dubai Marina", ["Marsa Dubai"]),
+        ("Downtown Dubai", ["Burj Khalifa"]),
+        ("Sobha Hartland", ["Sobha Hartland"]),
+        ("JLT", ["Jumeirah Lakes Towers"]),
+    ],
+}
+
+
+def _goal_to_ranking_key(goal: str) -> str:
+    """Map UI goal label to area_rankings.goal key."""
     if goal == "🏡 Для жизни":
-        return [("Downtown Dubai", ["Burj Khalifa"]), ("Dubai Marina", ["Marsa Dubai"]), ("JVC", ["Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"]), ("Business Bay", ["Business Bay"]), ("Palm Jumeirah", ["Palm Jumeirah"])]
+        return "living"
     if goal == "🔑 Аренда":
-        return [("Dubai Marina", ["Marsa Dubai"]), ("JVC", ["Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"]), ("Business Bay", ["Business Bay"]), ("Downtown Dubai", ["Burj Khalifa"]), ("JLT", ["Jumeirah Lakes Towers"])]
-    return [("JVC", ["Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"]), ("Business Bay", ["Business Bay"]), ("Dubai Marina", ["Marsa Dubai"]), ("Downtown Dubai", ["Burj Khalifa"]), ("Sobha Hartland", ["Sobha Hartland"]), ("JLT", ["Jumeirah Lakes Towers"])]
+        return "rental"
+    return "resale"
+
+
+def smart_area_universe(goal, limit: int = 6):
+    """DLD-data-driven area picker.
+
+    First tries shared.area_rankings (refreshed weekly by area_rankings cron).
+    Falls back to legacy hardcoded list if the table is empty / unreachable
+    so wizards never break while #126 builders run.
+    """
+    try:
+        from shared.area_rankings.query import query_area_rankings_top  # noqa: WPS433
+        rkey = _goal_to_ranking_key(goal)
+        rows = query_area_rankings_top(rkey, limit=limit)
+        if rows:
+            out = []
+            for r in rows:
+                name = r.get("area_name")
+                syns = r.get("area_synonyms") or [name]
+                if name:
+                    out.append((name, syns))
+            if out:
+                return out
+    except Exception as e:
+        try:
+            logger.warning("smart_area_universe: area_rankings read failed, fallback (%s)", e)
+        except Exception:
+            pass
+    return _LEGACY_AREA_UNIVERSE.get(goal, _LEGACY_AREA_UNIVERSE["_default"])
 
 
 
@@ -5168,11 +5224,29 @@ async def main_handler(message: Message):
 
         # Smart investment flow — оставлен, но после результата только PDF/Заявка/Изменить.
         if state.get("step") == "smart_goal":
-            new_state = dict(state)
-            new_state.update({"goal": text, "step": "smart_budget"})
-            push_state(user_id, new_state)
-            await message.answer(tr(user_id, "smart_budget_header"), reply_markup=smart_budget_menu(user_id))
-            return
+            # ⚡ Quick mode: skip remaining steps using smart defaults
+            # (deal=sale + investment + 1-2M + sбалансировано + до 12 мес).
+            # Result uses DLD-driven area_rankings via smart_area_universe().
+            if text in ("⚡ Быстрый подбор", "⚡ Quick pick", "⚡ اختيار سريع"):
+                new_state = dict(state)
+                new_state.update({
+                    "goal": "💰 Инвестиция / ROI",
+                    "budget": "1–2M AED",
+                    "timing": "до 12 месяцев",
+                    "risk": "сбалансировано",
+                    "step": "smart_risk",  # will fall through to result pipeline below
+                    "_quick_mode": True,
+                })
+                user_states[user_id] = new_state
+                state = new_state
+                text = "сбалансировано"
+                # fall through into smart_risk handler below
+            else:
+                new_state = dict(state)
+                new_state.update({"goal": text, "step": "smart_budget"})
+                push_state(user_id, new_state)
+                await message.answer(tr(user_id, "smart_budget_header"), reply_markup=smart_budget_menu(user_id))
+                return
         if state.get("step") == "smart_budget":
             new_state = dict(state)
             new_state.update({"budget": text, "step": "smart_timing"})
@@ -11530,6 +11604,10 @@ def show_smart_recommendation(goal, budget, timing, risk, rows):
         text += "\n\n📋 <b>Альтернативы</b>\n\n"
         for i, r in enumerate(rows[1:], 2):
             text += f"{i}. <b>{r.get('area')}</b> · {r.get('property')}\n   💰 {format_money(r.get('avg_price'))} · 📊 {format_int(r.get('deals'))} сделок\n\n"
+
+    # DLD-data driven footer (area_rankings refreshed weekly).
+    text += "\n<i>📡 Источник: DLD-аналитика (area_rankings), обновляется еженедельно.</i>"
+    text += "\n<i>Vadim Realty · RERA BRN 65011</i>"
 
     return text
 
