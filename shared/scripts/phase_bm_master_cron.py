@@ -251,6 +251,12 @@ JOBS.extend([
      "argv": [PYTHON, "-m", "shared.optimizer.dep_scan"]},
 ])
 
+# ── area_rankings: weekly DLD-driven rebuild for analytics-bot universe ───
+JOBS.append(
+    {"name": "area_rankings_weekly", "cron": "0 3 * * 0",
+     "argv": [PYTHON, "-m", "shared.area_rankings.refresh"]}
+)
+
 # ── PHASE BO O2: Unified Observability — hourly system pulse digest ───────
 JOBS.append(
     {"name": "obs_system_pulse_hourly", "cron": "0 * * * *",

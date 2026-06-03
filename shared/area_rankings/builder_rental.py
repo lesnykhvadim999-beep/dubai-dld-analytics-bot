@@ -24,20 +24,21 @@ log = logging.getLogger("area_rankings.rental")
 
 SQL_RENT = """
 WITH r AS (
-  SELECT annual_amount::numeric AS rent,
-         actual_area::numeric   AS sqft,
-         registration_date      AS d
-  FROM public.dld_rents_full
-  WHERE area_en = ANY(%s)
-    AND annual_amount IS NOT NULL
-    AND annual_amount > 0
+  SELECT NULLIF(annual_amount,'')::numeric AS rent,
+         NULLIF(actual_area,'')::numeric   AS sqft,
+         TO_DATE(NULLIF(contract_start_date,''),'YYYY-MM-DD') AS d
+  FROM public.dld_rent_archive
+  WHERE area_name_en = ANY(%s)
+    AND NULLIF(annual_amount,'') IS NOT NULL
+    AND NULLIF(contract_start_date,'') IS NOT NULL
 )
 SELECT
-  AVG(rent) FILTER (WHERE d >= NOW() - INTERVAL '12 months')                                    AS rent_now,
-  AVG(rent) FILTER (WHERE d >= NOW() - INTERVAL '24 months' AND d < NOW() - INTERVAL '12 months') AS rent_then,
-  COUNT(*)  FILTER (WHERE d >= NOW() - INTERVAL '12 months')                                    AS vol_12,
-  COUNT(*)  FILTER (WHERE d >= NOW() - INTERVAL '3 months')                                     AS vol_3
+  AVG(rent) FILTER (WHERE d >= CURRENT_DATE - INTERVAL '12 months')                                    AS rent_now,
+  AVG(rent) FILTER (WHERE d >= CURRENT_DATE - INTERVAL '24 months' AND d < CURRENT_DATE - INTERVAL '12 months') AS rent_then,
+  COUNT(*)  FILTER (WHERE d >= CURRENT_DATE - INTERVAL '12 months')                                    AS vol_12,
+  COUNT(*)  FILTER (WHERE d >= CURRENT_DATE - INTERVAL '3 months')                                     AS vol_3
 FROM r
+WHERE rent > 0
 """
 
 SQL_PRICE = """
