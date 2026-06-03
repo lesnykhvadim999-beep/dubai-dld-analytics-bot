@@ -12759,7 +12759,7 @@ async def send_multi_area_report(message, area_names):
         lines.append(
             f"• <b>{a}</b>: {t.get('deals_30d') or 0} сд.  •  "
             f"медиана {_fmt_aed(t.get('median_price_30d'))}  •  "
-            f"YoY {_fmt_pct(dyn.get('median_change_pct'))}"
+            f"за год {_fmt_pct(dyn.get('median_change_pct'))}"
         )
 
     await message.answer("\n".join(lines), reply_markup=main_menu(user_id))
@@ -13726,7 +13726,7 @@ def show_stats(title, row, prop=None, period=None, deal_type=None):  # noqa: F81
         proof_lines.append(f"💰 {psf_label} до <b>{format_money(top_psf)}/sqft</b> ({top_psf_src})")
     if growth is not None and not rent:
         sign = "+" if growth > 0 else ""
-        proof_lines.append(f"📈 Рост до <b>{sign}{growth:.1f}% YoY</b> ({growth_src})")
+        proof_lines.append(f"📈 Рост до <b>{sign}{growth:.1f}% за год</b> ({growth_src})")
     if yld is not None and rent:
         proof_lines.append(f"💎 Доходность до <b>{yld:.1f}% годовых</b> ({yld_src})")
 
@@ -13793,7 +13793,7 @@ def show_comparison(title, current, previous, period=None, deal_type=None):  # n
     elif growth is not None:
         sign = "+" if growth > 0 else ""
         hook = (
-            f"📈 <b>Рост до {sign}{growth:.1f}% YoY ({growth_src})</b>\n\n"
+            f"📈 <b>Рост до {sign}{growth:.1f}% за год ({growth_src})</b>\n\n"
         )
     else:
         hook = "📊 <b>Сравнение периодов</b>\n\n"
@@ -13852,7 +13852,7 @@ def v108_format_top_building(name, area, row):
         lines.append(f"   ⚡ Активность: <b>{format_int(deals)}</b> сделок за период")
     if growth is not None and growth != 0:
         sign = "+" if growth > 0 else ""
-        lines.append(f"   📈 Тренд: до <b>{sign}{growth:.1f}% YoY</b>")
+        lines.append(f"   📈 Тренд: до <b>{sign}{growth:.1f}% за год</b>")
     return "\n".join(lines) + "\n"
 
 
@@ -15447,7 +15447,7 @@ def _build_360_conclusion_compact(row, scope=None, name=None, report_kind=None):
         parts.append(f"📐 За м²: <b>~{_b061_money(avg_meter) or '—'}</b>")
     if yoy:
         sign = "+" if yoy > 0 else ""
-        parts.append(f"📈 Динамика: <b>{sign}{yoy:.1f}%</b> YoY")
+        parts.append(f"📈 Динамика: <b>{sign}{yoy:.1f}%</b> за год")
     parts.append(f"⚡ Ликвидность: <b>{liquidity}</b>")
 
     if best_format:
@@ -15782,7 +15782,7 @@ def _build_360_conclusion(row, scope=None, name=None, report_kind=None):  # noqa
             _rt = int(_rs.get("total_rent") or 0)
             _rp = _b061_money(_rs.get("wavg_rent"))
             if _rt and _rp:
-                extra.append(f"\n🏘 <b>Рынок аренды:</b> {format_int(_rt)} контрактов · avg <b>{_rp}/год</b>")
+                extra.append(f"\n🏘 <b>Рынок аренды:</b> {format_int(_rt)} контрактов · в среднем <b>{_rp}/год</b>")
 
         if extra:
             # Вставляем breakdowns ПЕРЕД футером Vadim Realty
