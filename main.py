@@ -2809,10 +2809,43 @@ def rent_meta():
     property_sub_type = text_expr(cols, ["property_sub_type_en", "property_sub_type", "property_subtype", "unit_type", "property_category"])
     unit = text_expr(cols, ["unit_number", "unit_no", "unit", "property_number", "property_no"], "NULL")
 
-    rent_price = numeric_expr_from_cols(cols, [
-        "rent_value", "annual_rent", "annual_amount", "annual_rent_amount", "contract_amount",
-        "contract_value", "ejari_contract_amount", "rent_amount", "amount", "actual_worth"
-    ])
+    # FIX (RENT_ANNUALIZE B057): приоритет — annual_*-поля. Если их нет, делим
+    # contract_amount на длительность (years) если есть start/end даты. Иначе
+    # contract_amount as-is. Это решает баг 800K за JVC 1BR (multi-year totals).
+    _annual_candidates = ["annual_amount", "annual_rent", "annual_rent_amount", "rent_value"]
+    _contract_candidates = ["contract_amount", "contract_value", "ejari_contract_amount",
+                            "rent_amount", "amount", "actual_worth"]
+    _annual_col = first_existing(cols, _annual_candidates)
+    _contract_col = first_existing(cols, _contract_candidates)
+    _start_col = first_existing(cols, ["contract_start_date", "start_date", "from_date", "lease_start"])
+    _end_col = first_existing(cols, ["contract_end_date", "end_date", "to_date", "lease_end"])
+
+    def _num(c):
+        return f"NULLIF(regexp_replace({qcol(c)}::text, '[^0-9.]', '', 'g'), '')::numeric"
+
+    if _annual_col and _contract_col and _start_col and _end_col:
+        # COALESCE(annual, contract / max(1, years))
+        _years_expr = (
+            f"GREATEST(1.0, EXTRACT(EPOCH FROM ("
+            f"NULLIF({qcol(_end_col)}::text, '')::timestamp - "
+            f"NULLIF({qcol(_start_col)}::text, '')::timestamp"
+            f"))/31557600.0)"
+        )
+        rent_price = f"COALESCE({_num(_annual_col)}, {_num(_contract_col)} / {_years_expr})"
+    elif _annual_col:
+        rent_price = _num(_annual_col)
+    elif _contract_col and _start_col and _end_col:
+        _years_expr = (
+            f"GREATEST(1.0, EXTRACT(EPOCH FROM ("
+            f"NULLIF({qcol(_end_col)}::text, '')::timestamp - "
+            f"NULLIF({qcol(_start_col)}::text, '')::timestamp"
+            f"))/31557600.0)"
+        )
+        rent_price = f"({_num(_contract_col)} / {_years_expr})"
+    elif _contract_col:
+        rent_price = _num(_contract_col)
+    else:
+        rent_price = "NULL::numeric"
     size = numeric_expr_from_cols(cols, [
         "area_size_sqft", "property_size_sqft", "property_size", "actual_area", "size_sqft", "size", "area_sqft"
     ])
