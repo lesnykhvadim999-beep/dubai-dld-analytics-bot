@@ -5007,13 +5007,30 @@ async def main_handler(message: Message):
         # Меню действий по зданию/району/Дубаю.
         if state.get("step") in ["building_action", "area_action", "dubai_action"]:
             if text in ["📊 Обзор 360", "📊 Обзор рынка"]:
-                await _start_filters_for_report_v72(message, state, "full")
+                # B062: Обзор 360 — сразу отчёт с дефолтами (sale + all rooms + 12mo),
+                # без 3-step wizard. Юзер: "оптимизировать чтобы было всё просто".
+                _quick_state = {
+                    **state,
+                    "report_kind": "full",
+                    "deal_type": state.get("deal_type") or "sale",
+                    "property": state.get("property") or None,  # None = all
+                    "period": state.get("period") or "12",
+                }
+                await _execute_selected_report_v72(message, _quick_state)
                 return
             if text == "🧾 Сделки":
                 await _start_filters_for_report_v72(message, state, "deals")
                 return
             if text == "📈 Динамика":
-                await _start_filters_for_report_v72(message, state, "period")
+                # B062: Динамика — сразу с дефолтами 12mo sale.
+                _quick_state = {
+                    **state,
+                    "report_kind": "period",
+                    "deal_type": state.get("deal_type") or "sale",
+                    "property": state.get("property") or None,
+                    "period": state.get("period") or "12",
+                }
+                await _execute_selected_report_v72(message, _quick_state)
                 return
             if text == "💰 Цены":
                 await _start_filters_for_report_v72(message, state, "price")
