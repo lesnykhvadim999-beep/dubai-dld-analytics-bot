@@ -2331,6 +2331,11 @@ def smart_pick_candidates(goal, budget_text, risk, timing):
 
                     for prop, prop_sql, prop_args, low_price, high_price in search_attempts:
                         try:
+                            # FIX (SMART_PICK_HUMAN): meter_sale_price in DLD archive is ALREADY per m^2
+                            # (verified directly: p50 ~ 11.7K AED/m^2, raw_meter for JVC studios ~16.5K).
+                            # Multiplying by SQFT_TO_M2 (10.7639) inflated to 178K/m^2 in legacy reports.
+                            # Use raw meter_sale_price here. Period: 12 months (was 36 -> 192K deals).
+                            raw_meter_expr = num_sql('meter_sale_price')
                             cur.execute(f"""
                                 SELECT
                                     COUNT(*) AS deals,
@@ -2338,7 +2343,7 @@ def smart_pick_candidates(goal, budget_text, risk, timing):
                                     AVG({PRICE}) AS avg_price,
                                     MIN({PRICE}) AS min_price,
                                     MAX({PRICE}) AS max_price,
-                                    AVG({METER_PRICE}) AS avg_meter,
+                                    AVG({raw_meter_expr}) AS avg_meter,
                                     MIN(safe_date) AS first_deal,
                                     MAX(safe_date) AS last_deal
                                 {base_from()}
@@ -2347,7 +2352,7 @@ def smart_pick_candidates(goal, budget_text, risk, timing):
                                   AND {PRICE} IS NOT NULL
                                   AND {PRICE} >= %s
                                   AND {PRICE} <= %s
-                                  AND safe_date >= CURRENT_DATE - INTERVAL '36 months'
+                                  AND safe_date >= CURRENT_DATE - INTERVAL '12 months'
                             """, area_params + prop_args + [low_price, high_price])
                             row = cur.fetchone()
                         except Exception as sql_error:
@@ -11538,31 +11543,106 @@ def _v90_collect_format_comparison(scope='dubai', area=None, budget=None, goal=N
     return rows, notes
 
 
+def _smart_human_compact_money(value):
+    """Compact AED format: 1.4 млн, 850 тыс, 12.5 млн."""
+    try:
+        v = float(value or 0)
+    except Exception:
+        return "—"
+    if v <= 0:
+        return "—"
+    if v >= 1_000_000:
+        return f"{v/1_000_000:.1f} млн AED"
+    if v >= 1_000:
+        return f"{int(round(v/1_000))} тыс AED"
+    return f"{int(round(v))} AED"
+
+
+def _smart_human_liquidity(deals):
+    try:
+        d = int(deals or 0)
+    except Exception:
+        return ""
+    if d >= 5000:
+        return "очень высокая"
+    if d >= 1500:
+        return "высокая"
+    if d >= 500:
+        return "средняя"
+    if d >= 100:
+        return "ограниченная"
+    return "низкая"
+
+
+def _smart_human_why(area, prop, deals, avg_price, yield_top):
+    """Short, human, actionable explanation."""
+    a = (area or "").lower()
+    p = (prop or "").lower()
+    base_areas = {
+        "jvc": "JVC — один из самых ликвидных районов для входа с бюджетом 1–2М. Studio и 1BR здесь продаются быстрее всего: молодая аудитория, экспаты, низкий ценник, реальная арендная отдача.",
+        "business bay": "Business Bay — премиальная локация рядом с Даунтауном. Платишь премию +20-30% за статус и lifestyle, но получаешь ликвидность и сильный спрос на аренду.",
+        "dubai marina": "Marina — туристический магнит, короткие аренды, yield 6-7%. Service charge выше среднего, но и спрос постоянный.",
+        "palm jumeirah": "Palm Jumeirah — премиум-сегмент с видом на море. Меньше сделок, выше чек, но статус и капитализация ощутимо растут.",
+        "downtown dubai": "Downtown — Burj Khalifa, Dubai Mall, премиум-класс. Высокие цены, но и максимальная узнаваемость для аренды.",
+        "jvt": "JVT — соседствует с JVC, тише и зеленее. Хорошо для life-style покупателя, ликвидность чуть ниже.",
+        "jlt": "JLT — рабочая зона рядом с Marina, цены ниже Marina на 15-20%, такая же транспортная доступность.",
+    }
+    for k, v in base_areas.items():
+        if k in a:
+            return v
+    return f"{area} — устойчивый район по DLD-выборке за последний год: {format_int(deals)} сделок, средний чек {_smart_human_compact_money(avg_price)}."
+
+
 def show_smart_recommendation(goal, budget, timing, risk, rows):
-    """v101 override: clean entry range and pass budget-consistent comparisons to economic engine."""
+    """SMART_PICK_HUMAN: humanized 'Лучший сценарий' report.
+    Сохраняет все ключевые цифры (deals, yield, comfort range), но переформулирует
+    их в actionable советы, не в академическую сводку.
+    """
     if not rows:
-        return "❌ По этим параметрам не найдено достаточно сильных вариантов.\n\nПопробуйте расширить бюджет или выбрать другой риск-профиль."
+        return "❌ По этим параметрам пока не нашёл сильных вариантов.\n\nПопробуй расширить бюджет или выбрать другой риск-профиль."
 
     best = dict(rows[0])
     area = best.get('area') or '—'
     prop = best.get('property') or best.get('format') or '—'
     good_low, good_high = _v101_entry_range(best, budget)
 
+    deals = best.get('deals') or 0
+    avg_price = best.get('avg_price') or 0
+    avg_meter = best.get('avg_meter') or 0
+    yield_top = best.get('top_rental_yield_pct') or best.get('avg_rental_yield_pct') or 0
+    avg_rent = best.get('avg_rent') or 0
+    if not avg_rent and avg_price and yield_top:
+        avg_rent = avg_price * float(yield_top) / 100.0
+
     text = (
-        "🧠 <b>Инвестиционный подбор</b>\n\n"
-        "🏆 <b>Лучший сценарий</b>\n"
-        f"📍 <b>Район:</b> {area}\n"
-        f"🏠 <b>Формат:</b> {prop}\n"
-        f"📊 <b>Сделки:</b> {format_int(best.get('deals'))}\n"
-        f"💰 <b>Средняя цена:</b> {format_money(best.get('avg_price'))}\n"
-        f"✅ <b>Комфортная цена входа:</b> {format_money(good_low)} — {format_money(good_high)}\n"
-        f"📐 <b>Средняя цена за м²:</b> {format_money(best.get('avg_meter'))}\n"
+        f"🏆 <b>Лучший вариант под твой бюджет</b>\n\n"
+        f"📍 <b>{area}</b> · {prop}\n"
+        f"💰 Средняя цена: <b>{_smart_human_compact_money(avg_price)}</b>\n"
+        f"📐 За квадратный метр: <b>~{_smart_human_compact_money(avg_meter)}</b>\n"
+        f"📊 Активность рынка: <b>{format_int(deals)} сделок за год</b> ({_smart_human_liquidity(deals)})\n\n"
+        f"💡 <b>Почему это интересно:</b>\n"
+        f"{_smart_human_why(area, prop, deals, avg_price, yield_top)}\n\n"
+        f"✅ <b>Комфортная зона входа:</b> {_smart_human_compact_money(good_low)} — {_smart_human_compact_money(good_high)}\n"
+        f"   (всё что выше — нужно обосновать видом, этажом или ремонтом)\n"
+    )
+
+    if avg_rent and yield_top:
+        text += (
+            f"\n🏠 <b>Аренда:</b> ~{_smart_human_compact_money(avg_rent)}/год → доходность <b>~{float(yield_top):.1f}%</b>\n"
+            f"   (типичный yield для района)\n"
+        )
+
+    text += (
+        f"\n⚠️ <b>На что обратить внимание:</b>\n"
+        f"• Конкуренция в одном здании — проверь последние 5 сделок в твоём building\n"
+        f"• Service charge: смотри 16–20 AED/sqft (выше = плохо)\n"
+        f"• Желательно ready unit или handover в текущем году\n"
     )
 
     try:
-        compare_rows, compare_notes = _v90_collect_format_comparison(scope='area', area=area, budget=budget, goal=goal, period='36')
+        compare_rows, compare_notes = _v90_collect_format_comparison(scope='area', area=area, budget=budget, goal=goal, period='12')
         if not compare_rows:
-            compare_rows, compare_notes = _v90_collect_format_comparison(scope='dubai', area=None, budget=budget, goal=goal, period='36')
+            compare_rows, compare_notes = _v90_collect_format_comparison(scope='dubai', area=None, budget=budget, goal=goal, period='12')
     except Exception as e:
         print('SMART_RECOMMENDATION_V101_COMPARE_ERROR:', repr(e))
         compare_rows, compare_notes = [], []
@@ -11597,31 +11677,41 @@ def show_smart_recommendation(goal, budget, timing, risk, rows):
     else:
         compare_for_engine = compare_rows[:]
 
+    # SMART_PICK_HUMAN: Keep adaptive filter notes but in a friendly tone
     if compare_notes:
-        text += "\n📌 <b>Адаптивный фильтр</b>\n"
-        for n in compare_notes[:3]:
-            text += f"• {n}\n"
+        text += "\n📌 <b>Что мы убрали из выборки:</b>\n"
+        text += "У некоторых форматов мало DLD-данных под твой бюджет — показываем только те, где есть устойчивая выборка.\n"
 
-    if _EXT_BUILD_ECONOMIC_REPORT:
-        text += _EXT_BUILD_ECONOMIC_REPORT(
-            selected=selected_for_engine,
-            comparisons=compare_for_engine,
-            goal=goal,
-            budget=budget,
-            period=timing,
-            area=area,
-            deal_type='sale',
-        )
-    else:
-        text += _v91_generic_deep_article(best, scope='area', name=area, prop=prop, period='36', deal_type='sale')
+    # SMART_PICK_HUMAN: Skip the academic 360° economic report.
+    # All key numbers (price, yield, comfort range, deals) are already shown above
+    # in actionable form. Long economic_engine output adds noise, not value.
 
     if len(rows) > 1:
-        text += "\n\n📋 <b>Альтернативы</b>\n\n"
-        for i, r in enumerate(rows[1:], 2):
-            text += f"{i}. <b>{r.get('area')}</b> · {r.get('property')}\n   💰 {format_money(r.get('avg_price'))} · 📊 {format_int(r.get('deals'))} сделок\n\n"
+        text += "\n\n🥈 <b>Альтернативы:</b>\n"
+        for i, r in enumerate(rows[1:4], 2):  # max 3 alternatives
+            r_avg = r.get('avg_price') or 0
+            r_yield = r.get('top_rental_yield_pct') or r.get('avg_rental_yield_pct') or 0
+            extra = ""
+            try:
+                if avg_price and r_avg and r_avg > avg_price * 1.05:
+                    extra = f", премия за локацию +{int((r_avg/avg_price-1)*100)}%"
+                elif avg_price and r_avg and r_avg < avg_price * 0.95:
+                    extra = f", дешевле на ~{int((1-r_avg/avg_price)*100)}%"
+                if r_yield and float(r_yield) >= 6.5:
+                    extra += f", yield ~{float(r_yield):.1f}%"
+            except Exception:
+                pass
+            text += f"{i}. <b>{r.get('area')}</b> — {_smart_human_compact_money(r_avg)}{extra}\n"
 
-    # DLD-data driven footer (area_rankings refreshed weekly).
-    text += "\n<i>📡 Источник: DLD-аналитика (area_rankings), обновляется еженедельно.</i>"
+    # SMART_PICK_HUMAN: Compact footer.
+    try:
+        from datetime import datetime as _dt
+        _today = _dt.utcnow().strftime("%d.%m.%Y")
+    except Exception:
+        _today = ""
+    text += f"\n📡 <i>Источник: DLD-аналитика (последние 12 мес)</i>"
+    if _today:
+        text += f" <i>· обновлено {_today}</i>"
     text += "\n<i>Vadim Realty · RERA BRN 65011</i>"
 
     return text
@@ -13822,14 +13912,30 @@ def smart_pick_candidates(goal, budget_text, risk, timing):  # noqa: F811
     goal_text = str(goal or "").lower()
 
     # v111: batch fetch — 1 SQL вместо N round-trip
-    batch_agg = _v111_batch_area_aggregates(areas, months=24, deal_type=deal_type)
+    # FIX (SMART_PICK_HUMAN): было months=24 -> ~192K сделок для JVC (нереалистично много).
+    # 12 месяцев = honest year. Также batch_agg возвращает avg_meter в AED/sqft
+    # (колонка mv.avg_price_psf), нужно конвертировать -> AED/m^2.
+    batch_agg = _v111_batch_area_aggregates(areas, months=12, deal_type=deal_type)
+    try:
+        for _disp, _row in (batch_agg or {}).items():
+            if _row and _row.get("avg_meter"):
+                _row["avg_meter"] = float(_row["avg_meter"]) * SQFT_TO_M2
+            if _row and _row.get("top_quartile_psf"):
+                _row["top_quartile_psf"] = float(_row["top_quartile_psf"]) * SQFT_TO_M2
+    except Exception:
+        pass
 
     results = []
     for display_area, real_areas in areas:
         row = batch_agg.get(display_area)
         if not row:
-            # graceful fallback на старый путь, если batch промахнулся
-            row = _v109_fetch_area_aggregate(real_areas, months=24, deal_type=deal_type)
+            # graceful fallback на старый путь, если batch промахнулся (12mo per SMART_PICK_HUMAN)
+            row = _v109_fetch_area_aggregate(real_areas, months=12, deal_type=deal_type)
+            if row and row.get("avg_meter"):
+                try:
+                    row["avg_meter"] = float(row["avg_meter"]) * SQFT_TO_M2
+                except Exception:
+                    pass
         if not row or not row.get("deals"):
             continue
 
