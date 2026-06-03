@@ -1008,14 +1008,9 @@ def language_menu():
 
 
 def _main_menu_v64_legacy(user_id):
-    """v64 legacy (orphan — переопределяется v72 ниже). Оставлено для истории."""
-    return kb([
-        ["🧠 Подбор", "🏢 Здание"],
-        ["🏆 Лучший объект"],
-        ["🏙 Район", "📊 Рейтинги"],
-        ["⚖️ Сравнение форматов"],
-        ["🧾 Сделки", "🌆 Дубай"],
-    ])
+    """B072 DEPRECATED — orphan, никем не вызывается. Заменён на main_menu() ниже.
+    Оставлено в виде stub чтобы не сломать гипотетические импорты."""
+    return main_menu(user_id)
 
 def back_menu(user_id):
     return kb([[tr(user_id, "back"), tr(user_id, "main")]])
@@ -1611,8 +1606,8 @@ def is_navigation_text(user_id, text):
         tr(user_id, "full_report"), "💼 Экономическое резюме", tr(user_id, "period_compare"),
         tr(user_id, "last_deals"), tr(user_id, "undervalued"), tr(user_id, "sale"), tr(user_id, "rent"),
         tr(user_id, "both"), tr(user_id, "skip"), tr(user_id, "all_time"), tr(user_id, "p3"),
-        tr(user_id, "p6"), tr(user_id, "p12"), tr(user_id, "p36"), "📉 Проверить сделку", "🧠 Подбор", "📄 PDF", "💼 Консультация", "👑 Админ", "💼 Резюме",
-        "🧠 Инвестиционный подбор", "📊 Рейтинги", "🏆 Лучший объект", "📊 Аналитика", "📈 Периоды", "📄 PDF", "💼 Заявка", "🔁 Изменить", "🏢 Здания", "🏙 Районы", "💰 По цене", "📊 По сделкам", "📈 По росту", "💧 Ликвидность",
+        tr(user_id, "p6"), tr(user_id, "p12"), tr(user_id, "p36"), "🧠 Подбор", "💼 Консультация",
+        "🧠 Инвестиционный подбор", "📊 Рейтинги", "📊 Аналитика", "📈 Периоды", "💼 Заявка", "🔁 Изменить", "🏢 Здания", "🏙 Районы", "💰 По цене", "📊 По сделкам", "📈 По росту", "💧 Ликвидность",
     }
     return text in items or text in PROPERTY_OPTIONS
 def base_from():
@@ -4322,7 +4317,9 @@ async def send_processing(message, text=None):
 
 
 def _is_main_button(user_id, text):
-    return text in ["🧠 Подбор", "🏢 Здание", "🏆 Лучший объект", "🏙 Район", "📊 Рейтинги", "⚖️ Сравнение", "⚖️ Сравнение форматов", "🧾 Сделки", "🌆 Дубай", "📑 Полный отчёт"]
+    # B072: убрана 'Лучший объект' (B070), '📑 Полный отчёт' (dead button, не в меню),
+    # '⚖️ Сравнение' (дубль 'Сравнение форматов').
+    return text in ["🧠 Подбор", "🏢 Здание", "🏙 Район", "📊 Рейтинги", "⚖️ Сравнение форматов", "🧾 Сделки", "🌆 Дубай"]
 
 
 def _normalize_period_from_text(user_id, text):
