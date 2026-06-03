@@ -15459,7 +15459,7 @@ def _build_360_conclusion_compact(row, scope=None, name=None, report_kind=None):
             _details = []
             _details.append(f"{format_int(_bf_deals)} сделок")
             if _bf_price:
-                _details.append(f"avg {_bf_price}")
+                _details.append(f"средняя цена {_bf_price}")
             try:
                 _y = float(_bf_yield or 0)
                 if 3 <= _y <= 12:
@@ -15477,17 +15477,23 @@ def _build_360_conclusion_compact(row, scope=None, name=None, report_kind=None):
             _v_deals = int(villa.get('deals') or 0)
             _v_price = _b061_money(villa.get('avg_price'))
             if _v_deals and _v_price:
-                parts.append(f"🏡 Виллы: {format_int(_v_deals)} сделок · avg {_v_price}")
+                parts.append(f"🏡 Виллы: {format_int(_v_deals)} сделок · средняя цена {_v_price}")
         except Exception:
             pass
 
-    # Цена входа
+    # B064: «Цена входа» имеет смысл только для района/здания.
+    # Для всего Дубая показываем подсказку.
     try:
-        if avg_price:
+        if scope == 'dubai' or not scope:
+            parts.append(
+                "\n💡 <i>Хочешь узнать комфортную цену входа? "
+                "Выбери конкретный район или здание — покажем диапазон.</i>"
+            )
+        elif avg_price:
             _low = avg_price * 0.90
             _high = avg_price * 0.95
             parts.append(
-                f"\n✅ <b>Цена входа:</b> {_b061_money(_low)} — {_b061_money(_high)}"
+                f"\n✅ <b>Комфортная цена покупки:</b> {_b061_money(_low)} — {_b061_money(_high)}"
                 f"\n   <i>выше — нужно обоснование (вид, этаж, ремонт)</i>"
             )
     except Exception:
@@ -15659,11 +15665,11 @@ def _build_360_conclusion(row, scope=None, name=None, report_kind=None):  # noqa
                 _p = _b061_money(r.get("wavg_price"))
                 _line = f"   • <b>{_fmt}:</b> {format_int(_d)} сделок"
                 if _p:
-                    _line += f" · avg {_p}"
+                    _line += f" · в среднем {_p}"
                 try:
                     _y = float(r.get("wavg_yield") or 0)
                     if 3 <= _y <= 12:
-                        _line += f" · yield {_y:.1f}%"
+                        _line += f" · доходность {_y:.1f}%"
                 except Exception:
                     pass
                 extra.append(_line)
@@ -15677,7 +15683,7 @@ def _build_360_conclusion(row, scope=None, name=None, report_kind=None):  # noqa
                 _p = _b061_money(r.get("wavg_price"))
                 _line = f"   • <b>{_rm}:</b> {format_int(_d)} сделок"
                 if _p:
-                    _line += f" · avg {_p}"
+                    _line += f" · в среднем {_p}"
                 extra.append(_line)
 
         # Top 3 areas (Dubai-wide)
