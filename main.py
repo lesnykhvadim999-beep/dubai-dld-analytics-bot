@@ -14081,7 +14081,11 @@ def smart_pick_candidates(goal, budget_text, risk, timing):  # noqa: F811
     except Exception:
         bmin, bmax = (0, 0)
 
-    deal_type = "rent" if (goal and ("Аренд" in goal or "аренд" in str(goal).lower())) else "sale"
+    # B059 FIX: goal=Аренда означает "купить под сдачу", а не "арендовать".
+    # Юзеру нужна цена ПОКУПКИ + ожидаемая аренда + yield. Раньше при rent goal
+    # avg_price был annual rent (~264K) что бессмысленно. Теперь всегда sale.
+    deal_type = "sale"
+    _is_rent_goal = bool(goal and ("Аренд" in goal or "аренд" in str(goal).lower()))
     areas = _v109_area_universe_safe(goal)
 
     risk_text = str(risk or "").lower()
@@ -14151,8 +14155,13 @@ def smart_pick_candidates(goal, budget_text, risk, timing):  # noqa: F811
         elif "агр" in risk_text:
             score += 8
 
-        if any(x in goal_text for x in ["roi", "аренд", "инвест"]):
-            # для ROI важна доходность
+        # B059 FIX: для rental-goal ВЕС yield доминирующий. Раньше +12 (если ≥7%)
+        # был слишком слаб — Downtown с большим liquidity побеждал JVC с реально
+        # высоким yield. Теперь yield_avg * 5 (clamp 0-40) делает yield главным.
+        if _is_rent_goal:
+            yield_for_score = yield_avg if (yield_avg and 3 <= yield_avg <= 12) else min(yield_top or 0, 10)
+            score += min(40, yield_for_score * 5)
+        elif any(x in goal_text for x in ["roi", "инвест"]):
             if yield_top and yield_top >= 7:
                 score += 12
         if "жизн" in goal_text and avg_price and bmax and abs(avg_price - bmax) / max(bmax, 1) < 0.4:
