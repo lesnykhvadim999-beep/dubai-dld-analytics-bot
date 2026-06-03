@@ -11565,6 +11565,63 @@ def _smart_human_compact_money(value):
     return f"{int(round(v))} AED"
 
 
+def _smart_fetch_area_rent_12m(area_display):
+    """FIX (RENT_YIELD): fetch realistic 12-month rent + apartment-segment sale price
+    for the same area, so yield = rent / price reflects ACTUAL apartments (not all-property mix).
+    Returns dict {avg_rent, sale_avg_price_apt, deals_rent} or None.
+    Uses mv_area_12m_summary directly via READ_MODEL connection.
+    """
+    if not (_READ_MODEL_OK and _read_model):
+        return None
+    try:
+        # Find area_keys for this display label via existing area_universe helper.
+        try:
+            au = _v109_area_universe_safe(area_display) or []
+        except Exception:
+            au = []
+        keys = []
+        for disp, reals in au:
+            if str(disp).strip().lower() == str(area_display).strip().lower():
+                for r in (reals or []):
+                    k = str(r).strip().lower()
+                    if k:
+                        keys.append(k)
+                break
+        # Fallback: try area_display itself as key
+        if not keys:
+            keys = [str(area_display).strip().lower()]
+        import psycopg2.extras as _pe
+        with _read_model._conn().cursor(cursor_factory=_pe.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT
+                  SUM(CASE WHEN deal_type='rent' AND property_type='apartment' AND rooms='all'
+                           THEN avg_price * deals ELSE 0 END)::numeric
+                    / NULLIF(SUM(CASE WHEN deal_type='rent' AND property_type='apartment' AND rooms='all' THEN deals ELSE 0 END), 0) AS avg_rent_apt,
+                  SUM(CASE WHEN deal_type='rent' AND property_type='apartment' AND rooms='all' THEN deals ELSE 0 END) AS deals_rent_apt,
+                  SUM(CASE WHEN deal_type='sale' AND property_type='apartment' AND rooms='all'
+                           THEN avg_price * deals ELSE 0 END)::numeric
+                    / NULLIF(SUM(CASE WHEN deal_type='sale' AND property_type='apartment' AND rooms='all' THEN deals ELSE 0 END), 0) AS sale_avg_price_apt,
+                  SUM(CASE WHEN deal_type='sale' AND property_type='apartment' AND rooms='all' THEN deals ELSE 0 END) AS deals_sale_apt
+                FROM mv_area_12m_summary
+                WHERE area_key = ANY(%s)
+                """,
+                (keys,),
+            )
+            row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "avg_rent": float(row.get("avg_rent_apt") or 0) or None,
+            "deals_rent": int(row.get("deals_rent_apt") or 0),
+            "sale_avg_price_apt": float(row.get("sale_avg_price_apt") or 0) or None,
+            "deals_sale_apt": int(row.get("deals_sale_apt") or 0),
+        }
+    except Exception as _e:
+        print("SMART_FETCH_AREA_RENT_12M_ERROR:", repr(_e))
+        return None
+
+
 def _smart_human_liquidity(deals):
     try:
         d = int(deals or 0)
@@ -11617,8 +11674,24 @@ def show_smart_recommendation(goal, budget, timing, risk, rows):
     avg_price = best.get('avg_price') or 0
     avg_meter = best.get('avg_meter') or 0
     yield_top = best.get('top_rental_yield_pct') or best.get('avg_rental_yield_pct') or 0
-    avg_rent = best.get('avg_rent') or 0
-    if not avg_rent and avg_price and yield_top:
+
+    # FIX (RENT_YIELD): avg_rent теперь читается напрямую из mv_area_12m_summary
+    # (apartment rent 12mo), а не как avg_price × yield_top (что давало завышенную
+    # цифру 121K из-за yield от смешанного all-property сегмента).
+    # yield_pct = real_rent / avg_price → реалистичный для apartments.
+    avg_rent = 0
+    try:
+        _rent_info = _smart_fetch_area_rent_12m(area)
+    except Exception:
+        _rent_info = None
+    if _rent_info and _rent_info.get('avg_rent'):
+        avg_rent = float(_rent_info['avg_rent'])
+        # Пересчитываем yield от реальной аренды и средней цены apartment-сегмента.
+        _apt_price = _rent_info.get('sale_avg_price_apt') or avg_price
+        if _apt_price:
+            yield_top = round(avg_rent / float(_apt_price) * 100.0, 1)
+    elif not avg_rent and avg_price and yield_top:
+        # Legacy fallback only when MV rent data unavailable.
         avg_rent = avg_price * float(yield_top) / 100.0
 
     text = (
@@ -13806,25 +13879,11 @@ def _v111_batch_area_aggregates(area_universe, months=24, deal_type="sale"):
             all_keys.append(k)
     if not all_keys:
         return {}
-    sql = """
-        SELECT area_key,
-               deals_count                  AS deals,
-               avg_price                    AS avg_price,
-               avg_price_psf                AS avg_meter,
-               top_quartile_price           AS top_quartile_price,
-               top_quartile_psf             AS top_quartile_psf,
-               yoy_growth_pct               AS yoy_growth_pct,
-               yoy_growth_top_pct           AS yoy_growth_top_pct,
-               avg_rental_yield_pct         AS avg_rental_yield_pct,
-               top_rental_yield_pct         AS top_rental_yield_pct
-        FROM mv_area_24m_summary
-        WHERE area_key = ANY(%s)
-          AND property_type = 'all'
-          AND rooms = 'all'
-          AND deal_type = %s
-    """
-    # rename columns: mv has 'deals', so aliasing simplifies. Build directly:
-    sql = """
+    # FIX (DEALS_12M): months=12 should read mv_area_12m_summary, NOT 24m.
+    # Old code hard-coded mv_area_24m_summary and ignored months parameter,
+    # causing JVC to show 192K deals "за год" (actually 24mo sum).
+    _mv_name = "mv_area_12m_summary" if int(months or 12) <= 12 else "mv_area_24m_summary"
+    sql = f"""
         SELECT area_key,
                deals,
                avg_price,
@@ -13835,7 +13894,7 @@ def _v111_batch_area_aggregates(area_universe, months=24, deal_type="sale"):
                yoy_growth_top_pct,
                avg_rental_yield_pct,
                top_rental_yield_pct
-        FROM mv_area_24m_summary
+        FROM {_mv_name}
         WHERE area_key = ANY(%s)
           AND property_type='all' AND rooms='all' AND deal_type=%s
     """
