@@ -247,11 +247,17 @@ try:
                 elif isinstance(event, _Cb):
                     u = event.from_user; action = "callback"
                 if u and u.id:
+                    # LANG_FIX: prefer the user's IN-APP language (set via the
+                    # 🇷🇺/🇬🇧/🇦🇪 buttons) over Telegram client locale. Otherwise
+                    # every message overwrites the persisted pick with the
+                    # TG-client locale (often 'en'), defeating hydration.
+                    _picked = user_languages.get(u.id)
+                    _lang_for_track = _picked if _picked else u.language_code
                     _bot_user_tracker.track_user_async(
                         telegram_id=u.id,
                         username=u.username,
                         first_name=u.first_name,
-                        language=u.language_code,
+                        language=_lang_for_track,
                         action=action,
                     )
             except Exception:
@@ -886,7 +892,22 @@ def virtual_area_name(query):
 
 def lang(user_id):
     # Default language for new users is English; they pick from welcome screen.
-    return user_languages.get(user_id, "en")
+    # LANG_FIX: user_languages is a process-local dict that resets on every
+    # restart. Without hydration from bot_users.language, restarts silently
+    # downgrade every existing user to EN until they hit /start again. On a
+    # cache miss, pull the persisted language and back-fill the in-memory map.
+    cached = user_languages.get(user_id)
+    if cached:
+        return cached
+    try:
+        from bot_user_tracker import get_persisted_lang
+        persisted = get_persisted_lang(user_id)
+        if persisted and persisted in TEXTS:
+            user_languages[user_id] = persisted
+            return persisted
+    except Exception:
+        pass
+    return "en"
 
 
 def tr(user_id, key):
@@ -3848,6 +3869,21 @@ async def language_handler(message: Message):
         user_languages[message.from_user.id] = "en"
     else:
         user_languages[message.from_user.id] = "ar"
+
+    # LANG_FIX: persist the picked language to bot_users so future restarts
+    # can hydrate it back. Without this the next process restart silently
+    # downgrades the user to EN. Fire-and-forget; failure is non-fatal.
+    try:
+        from bot_user_tracker import track_user_async
+        track_user_async(
+            telegram_id=message.from_user.id,
+            username=message.from_user.username,
+            first_name=message.from_user.first_name,
+            language=user_languages[message.from_user.id],
+            action="message",
+        )
+    except Exception:
+        pass
 
     user_states[message.from_user.id] = {}
     await message.answer(tr(message.from_user.id, "lang_selected"), reply_markup=main_menu(message.from_user.id))

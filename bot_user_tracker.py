@@ -97,6 +97,36 @@ def track_user(telegram_id: int,
         except Exception: pass
 
 
+def get_persisted_lang(telegram_id: int, bot_name: str = None) -> str:
+    """LANG_FIX: read this user's last persisted language for `bot_name` from
+    bot_users.language. Returns None on miss/error so caller can fall back to
+    a default. Synchronous (caller is expected to cache the result).
+    If bot_name is None, uses BOT_NAME env (same default as track_user)."""
+    url = _get_db_url()
+    if not url:
+        return None
+    if not bot_name:
+        bot_name = _get_bot_name()
+    try:
+        import psycopg2
+        conn = psycopg2.connect(url, connect_timeout=5)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT language FROM bot_users WHERE telegram_id=%s AND bot_name=%s",
+                    (telegram_id, bot_name),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return None
+                return row[0]
+        finally:
+            try: conn.close()
+            except Exception: pass
+    except Exception:
+        return None
+
+
 def track_user_async(telegram_id: int,
                      username: str = None,
                      first_name: str = None,
