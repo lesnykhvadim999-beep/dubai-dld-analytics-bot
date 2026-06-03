@@ -4,7 +4,7 @@
 
 $pythonExe = (Get-Command python).Source
 $projDir = "C:\Projects"
-$env:RESALE_DATABASE_URL = "postgresql://postgres:zixtQCodkMoSpjrHicqkYcutfGUXiQCM@tramway.proxy.rlwy.net:23228/railway"
+if (-not $env:RESALE_DATABASE_URL) { Write-Error "RESALE_DATABASE_URL env var required — set it before running this installer"; exit 1 }
 
 function Register-CronTask {
     param([string]$Name, [string]$Cmd, [TimeSpan]$Interval, [string]$AtTime)

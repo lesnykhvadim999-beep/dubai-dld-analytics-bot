@@ -7,7 +7,7 @@ $ts = Get-Date -Format "yyyyMMdd_HHmmss"
 $log = Join-Path $logDir "consolidate_$ts.log"
 
 $env:PYTHONPATH = "C:\Projects"
-$env:RESALE_DATABASE_URL = "postgresql://postgres:zixtQCodkMoSpjrHicqkYcutfGUXiQCM@tramway.proxy.rlwy.net:23228/railway"
+if (-not $env:RESALE_DATABASE_URL) { Write-Error "RESALE_DATABASE_URL env var required"; exit 1 }
 
 "=== START $(Get-Date -Format o) ===" | Out-File -FilePath $log -Encoding utf8 -Append
 & py -m shared.user_memory.consolidator *>> $log

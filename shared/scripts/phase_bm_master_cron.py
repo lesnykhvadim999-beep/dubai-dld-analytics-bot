@@ -190,6 +190,81 @@ JOBS.append(
               "--agent", "admin-notifier", "--once", "--batch", "50"]}
 )
 
+# ── PHASE BO O1: Disaster Recovery jobs ───────────────────────────────────
+JOBS.extend([
+    {"name": "dr_backup_daily",   "cron": "0 1 * * *",
+     "argv": [PYTHON, "-m", "shared.disaster_recovery.backup",
+              "--db", "intelligence"]},
+    {"name": "dr_verify_weekly",  "cron": "30 2 * * 0",
+     "argv": [PYTHON, "-m", "shared.disaster_recovery.verify",
+              "--db", "intelligence", "--bucket", "daily"]},
+    {"name": "dr_retention_prune","cron": "0 4 * * *",
+     "argv": [PYTHON, "-m", "shared.disaster_recovery.retention", "--apply"]},
+])
+
+# ── PHASE BO O3: UX metrics + auto-rollback ───────────────────────────────
+JOBS.extend([
+    # daily 06:00 UTC — compute funnels (logs results, used for heatmap reports)
+    {"name": "ux_metrics_daily_funnels", "cron": "0 6 * * *",
+     "argv": [PYTHON, "-m", "shared.ux_metrics.analyzer",
+              "funnel", "resale", "default", "1d"]},
+    # daily 07:00 UTC — auto-rollback check (2-day worse streak → disable flag)
+    {"name": "ux_rollback_check",        "cron": "0 7 * * *",
+     "argv": [PYTHON, "-m", "shared.ux_metrics.rollback"]},
+])
+
+
+# ── PHASE BN N2: Immune System ────────────────────────────────────────────
+JOBS.extend([
+    {"name": "immune_diagnose_hourly", "cron": "0 * * * *",
+     "argv": [PYTHON, "-m", "shared.immune_system.diagnosis", "--limit", "10"]},
+    {"name": "immune_immunize_daily",  "cron": "0 2 * * *",
+     "argv": [PYTHON, "-m", "shared.immune_system.immunizer", "--limit", "5"]},
+    {"name": "immune_verify_weekly",   "cron": "0 3 * * 0",
+     "argv": [PYTHON, "-m", "shared.immune_system.registry"]},
+])
+
+# ── PHASE BN N4: Autonomous Audit Loop ────────────────────────────────────
+JOBS.extend([
+    {"name": "hourly_audit",       "cron": "0 * * * *",
+     "argv": [PYTHON, "-m", "shared.autonomous_audit.runner",
+              "--type", "hourly"]},
+    {"name": "daily_audit",        "cron": "0 3 * * *",
+     "argv": [PYTHON, "-m", "shared.autonomous_audit.runner",
+              "--type", "daily"]},
+    {"name": "weekly_audit",       "cron": "0 4 * * 0",
+     "argv": [PYTHON, "-m", "shared.autonomous_audit.runner",
+              "--type", "weekly"]},
+    {"name": "audit_daily_digest", "cron": "30 8 * * *",
+     "argv": [PYTHON, "-m", "shared.autonomous_audit.reporter"]},
+])
+
+# ── PHASE BN N5: Continuous Performance Optimizer ─────────────────────────
+JOBS.extend([
+    {"name": "optimizer_query_perf",  "cron": "0 2 * * *",
+     "argv": [PYTHON, "-m", "shared.optimizer.query_perf"]},
+    {"name": "optimizer_dead_code",   "cron": "0 5 * * 0",
+     "argv": [PYTHON, "-m", "shared.optimizer.dead_code"]},
+    {"name": "optimizer_dep_scan",    "cron": "0 6 * * 0",
+     "argv": [PYTHON, "-m", "shared.optimizer.dep_scan"]},
+])
+
+# ── PHASE BO O2: Unified Observability — hourly system pulse digest ───────
+JOBS.append(
+    {"name": "obs_system_pulse_hourly", "cron": "0 * * * *",
+     "argv": [PYTHON, "-m", "shared.observability.digest", "send"]}
+)
+
+# ── PHASE BO O4: auto_docs_v2 — /help + runbook + quickstart ──────────────
+JOBS.extend([
+    {"name": "auto_docs_help_daily",       "cron": "0 7 * * *",
+     "argv": [PYTHON, "-m", "shared.auto_docs_v2.help_generator"]},
+    {"name": "auto_docs_runbook_weekly",   "cron": "0 8 * * 0",
+     "argv": [PYTHON, "-m", "shared.auto_docs_v2.runbook_generator"]},
+    {"name": "auto_docs_quickstart_weekly","cron": "5 8 * * 0",
+     "argv": [PYTHON, "-m", "shared.auto_docs_v2.quickstart"]},
+])
+
 
 # ── tiny cron matcher (no external dep) ───────────────────────────────────
 def _expand_field(expr: str, lo: int, hi: int) -> set[int]:

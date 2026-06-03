@@ -7,22 +7,19 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-# ── DSNs (env first, then explicit fallback constants) ──────────────────────
-# These are read-only references; do not commit them anywhere except encrypted
-# Railway env. Plain DSN in source = OK because this file lives outside backups.
-_FALLBACK_DSN = {
-    "resale":       os.environ.get("LIVE_DATABASE_URL") or os.environ.get("DATABASE_URL") or os.environ.get("INTELLIGENCE_DATABASE_URL") or "",
-    "live":         "postgresql://postgres:yZpUXJkXbHnDPpKbHQRXIaRgyRNDCjPa@yamanote.proxy.rlwy.net:43494/railway",
-    "archive":      "postgresql://postgres:VUgxGizYpffEPDszSDHMRMPbBFvFOONz@switchback.proxy.rlwy.net:23244/railway",
-    "intelligence": "postgresql://postgres:fbcwyUUBpQAzafMfMvjiyyFzDynKcKsz@autorack.proxy.rlwy.net:25004/railway",
-}
+# ── DSNs (env-only — no hardcoded credentials, audit B5) ────────────────────
+# Pre-commit hook blocks plain passwords; all DSNs must come from env vars.
+_DB_NAMES = ("resale", "live", "archive", "intelligence")
 
 def get_dsn(name: str) -> str:
-    return (os.environ.get(f"{name.upper()}_DATABASE_URL_PUBLIC")
-            or os.environ.get(f"{name.upper()}_DATABASE_URL")
-            or _FALLBACK_DSN.get(name, ""))
+    upper = name.upper()
+    return (os.environ.get(f"{upper}_DATABASE_URL_PUBLIC")
+            or os.environ.get(f"{upper}_DATABASE_URL")
+            or (os.environ.get("LIVE_DATABASE_URL") if name == "resale" else "")
+            or (os.environ.get("DATABASE_URL") if name == "resale" else "")
+            or "")
 
-ALL_DBS = list(_FALLBACK_DSN.keys())
+ALL_DBS = list(_DB_NAMES)
 
 # Intelligence DB = where bookkeeping tables live (backup_runs, restore_verifications)
 META_DB = "intelligence"

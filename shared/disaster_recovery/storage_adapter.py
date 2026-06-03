@@ -98,11 +98,32 @@ class GitHubReleasesBackend(_Base):
         return r
 
     def _ensure_repo(self) -> None:
-        r = self._run(["repo", "view", self.repo, "--json", "name"], timeout=60)
+        r = self._run(["repo", "view", self.repo, "--json", "defaultBranchRef"], timeout=60)
+        needs_init = False
         if r.returncode != 0:
             log.info("[dr.storage.github] creating repo %s", self.repo)
             self._run(["repo", "create", self.repo, "--private",
-                       "--description", "DR backups (Vadim Realty + RERA BRN 65011) — encrypted"],
+                       "--description", "DR backups (Vadim Realty + RERA BRN 65011)"],
+                      timeout=60)
+            needs_init = True
+        else:
+            # repo exists but may be empty (no default branch)
+            try:
+                import json as _json
+                info = _json.loads(r.stdout or "{}")
+                if not info.get("defaultBranchRef"):
+                    needs_init = True
+            except Exception:
+                pass
+        if needs_init:
+            # init via Contents API so default branch is created
+            import base64 as _b64
+            readme = ("# DR backups\n\nVadim Realty + RERA BRN 65011.\n"
+                      "Database dumps (custom format, gzipped).\n").encode("utf-8")
+            content_b64 = _b64.b64encode(readme).decode("ascii")
+            self._run(["api", "-X", "PUT",
+                       f"/repos/{self.repo}/contents/README.md",
+                       "-f", "message=init", "-f", f"content={content_b64}"],
                       timeout=60)
 
     def _release_tag(self, key: str) -> str:
@@ -112,20 +133,21 @@ class GitHubReleasesBackend(_Base):
 
     def upload(self, src: Path, key: str) -> str:
         tag = self._release_tag(key)
-        # Make sure release exists
+        # Ensure release exists
         r = self._run(["release", "view", tag, "--repo", self.repo], timeout=60)
         if r.returncode != 0:
-            self._run(["release", "create", tag,
-                       "--repo", self.repo,
-                       "--title", f"{tag} backups",
-                       "--notes", f"DR {tag} bucket (encrypted GPG, Vadim Realty)"],
-                      timeout=60)
-        asset_name = key.split("/", 1)[-1]
+            cr = self._run(["release", "create", tag,
+                            "--repo", self.repo,
+                            "--title", f"{tag} backups",
+                            "--notes",
+                            f"DR {tag} bucket (Vadim Realty + RERA BRN 65011)"],
+                           timeout=60)
+            if cr.returncode != 0 and "already exists" not in (cr.stderr or ""):
+                raise RuntimeError(f"gh release create failed: {cr.stderr[:400]}")
+        # `gh release upload <tag> <file>` берёт basename файла как имя asset.
         r = self._run(["release", "upload", tag, str(src),
-                       "--repo", self.repo, "--clobber",
-                       f"--name={asset_name}" if False else str(src)],
+                       "--repo", self.repo, "--clobber"],
                       timeout=cfg.UPLOAD_TIMEOUT_SEC)
-        # gh release upload <tag> file -- file uploaded with its basename
         if r.returncode != 0:
             raise RuntimeError(f"gh upload failed: {r.stderr[:400]}")
         return f"https://github.com/{self.repo}/releases/download/{tag}/{Path(src).name}"

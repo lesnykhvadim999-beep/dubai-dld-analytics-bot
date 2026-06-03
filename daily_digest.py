@@ -344,6 +344,8 @@ def _build_message(stats: Dict[str, Any]) -> str:
 
     lines.append("")
     lines.append("\U0001F4C8 Полная аналитика - @dubai_analitik_sys")
+    lines.append("")
+    lines.append("— Vadim Realty · RERA BRN 65011")
     return "\n".join(lines)
 
 
