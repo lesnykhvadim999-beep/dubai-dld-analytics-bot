@@ -1726,6 +1726,7 @@ def find_buildings(query, limit=10):
 
 
 def find_areas(query, limit=10):
+    # FIX 2026-06-03 (DLD_SQL_SWEEP): default 12mo date filter for find_areas legacy path.
     query = clean_query(query)
     if not query:
         return []
@@ -1743,6 +1744,7 @@ def find_areas(query, limit=10):
                     {base_from()}
                       {where}
                       AND COALESCE(area_name_en::text, '') <> ''
+                      AND safe_date >= CURRENT_DATE - INTERVAL '12 months'
                     GROUP BY COALESCE(area_name_en::text, '')
                     ORDER BY deals DESC
                     LIMIT %s
@@ -6891,6 +6893,7 @@ def find_buildings(query, limit=10):
 
 
 def find_areas(query, limit=10):
+    # FIX 2026-06-03 (DLD_SQL_SWEEP): default 12mo date filter for find_areas v44 path.
     query = clean_query(query)
     if not query:
         return []
@@ -6907,6 +6910,7 @@ def find_areas(query, limit=10):
                     {base_from()}
                       {where}
                       AND COALESCE(area_name_en::text, '') <> ''
+                      AND safe_date >= CURRENT_DATE - INTERVAL '12 months'
                     GROUP BY COALESCE(area_name_en::text, '')
                     ORDER BY deals DESC
                     LIMIT %s
@@ -8102,6 +8106,8 @@ def _query_aliases_v66(q):
 
 
 def _source_find_buildings_v66(query, limit=10):
+    # FIX 2026-06-03 (DLD_SQL_SWEEP): default 12mo date filter on deals counter.
+    # Was showing all-history (566k for JVC); user expects 12mo (~24k).
     rows = []
     aliases = _query_aliases_v66(query)
     if not aliases:
@@ -8115,6 +8121,8 @@ def _source_find_buildings_v66(query, limit=10):
             "master_project_en", "master_project", "property_name_en", "property_name", "nearest_landmark_en", "nearest_landmark"
         ])
         area = _txt_expr_v66(cols, ["area_name_en", "area_en", "area_name", "area", "procedure_area"])
+        date_expr = _date_expr_v67(cols) if '_date_expr_v67' in globals() else "NULL::date"
+        date_filter = f"AND ({date_expr}) >= CURRENT_DATE - INTERVAL '12 months'" if date_expr != "NULL::date" else ""
         search = " || ' ' || ".join([building, area])
         where = " OR ".join([f"({search}) ILIKE %s" for _ in aliases])
         params = [f"%{a}%" for a in aliases]
@@ -8129,6 +8137,7 @@ def _source_find_buildings_v66(query, limit=10):
                         FROM {table}
                         WHERE ({where})
                           AND NULLIF({building}, '') IS NOT NULL
+                          {date_filter}
                         GROUP BY NULLIF({building}, ''), NULLIF({area}, '')
                         ORDER BY deals DESC
                         LIMIT %s
@@ -8140,6 +8149,9 @@ def _source_find_buildings_v66(query, limit=10):
 
 
 def _source_find_areas_v66(query, limit=10):
+    # FIX 2026-06-03 (DLD_SQL_SWEEP): default 12mo date filter on deals counter.
+    # Was returning sum of full-history sub-area counts (e.g., JVC 566,386).
+    # Real 12mo: ~20k sales + ~4k rents = ~24k.
     rows = []
     aliases = _query_aliases_v66(query)
     if not aliases:
@@ -8150,6 +8162,8 @@ def _source_find_areas_v66(query, limit=10):
             continue
         area = _txt_expr_v66(cols, ["area_name_en", "area_en", "area_name", "area", "procedure_area"])
         building = _txt_expr_v66(cols, ["building_name_en", "building_name", "project_name_en", "project_name", "master_project_en", "master_project"])
+        date_expr = _date_expr_v67(cols) if '_date_expr_v67' in globals() else "NULL::date"
+        date_filter = f"AND ({date_expr}) >= CURRENT_DATE - INTERVAL '12 months'" if date_expr != "NULL::date" else ""
         search = f"{area} || ' ' || {building}"
         where = " OR ".join([f"({search}) ILIKE %s" for _ in aliases])
         params = [f"%{a}%" for a in aliases]
@@ -8164,6 +8178,7 @@ def _source_find_areas_v66(query, limit=10):
                         FROM {table}
                         WHERE ({where})
                           AND NULLIF({area}, '') IS NOT NULL
+                          {date_filter}
                         GROUP BY NULLIF({area}, '')
                         ORDER BY deals DESC
                         LIMIT %s
