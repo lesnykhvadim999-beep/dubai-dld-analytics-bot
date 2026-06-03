@@ -13247,9 +13247,19 @@ try:
                     if uid is not None and text in _V106_DEAL_TYPE_BUTTONS:
                         st = user_states.get(uid, {}) or {}
                         step = st.get("step")
+                        # B058 FIX: в smart_goal/format_compare_goal "🔑 Аренда" это GOAL
+                        # (rental yield), НЕ deal_type. Middleware ломал invest wizard,
+                        # принудительно отправляя в "Последние сделки".
+                        _allowed_deal_steps = (
+                            "choose_deal_type", "best_object_deal_type",
+                            "smart_goal", "smart_budget", "smart_timing", "smart_risk",
+                            "format_compare_goal", "format_compare_scope",
+                            "format_compare_area_query", "format_compare_choose_area",
+                            "format_compare_budget", "format_compare_period",
+                        )
                         # Если step не expects deal type выбор, но user всё равно
                         # тыкает в кнопку из этого набора — восстанавливаем wizard.
-                        if step not in ("choose_deal_type", "best_object_deal_type"):
+                        if step not in _allowed_deal_steps:
                             # v106.1: НЕ перезаписываем state целиком — это уничтожало
                             # report_kind / scope / name выбранные пользователем раньше.
                             # Только in-place обновляем step и доустанавливаем недостающие
