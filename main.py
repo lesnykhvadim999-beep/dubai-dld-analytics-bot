@@ -382,12 +382,22 @@ def db():
     return conn
 
 
+# FIX 2026-06-03 (DLD_ANALYTICS_FIX):
+# DLD legacy column `meter_sale_price` stores price-per-SQFT (not per-m²).
+# Verified vs Rent-sale-arhiv DB: JVC 12mo avg_meter ~16k AED/m² (after ×10.7639)
+# whereas raw column shows ~1.5k AED/sqft. UI everywhere advertises "AED за m²",
+# so we convert at the source — all AVG/MIN/MAX/percentile_cont(METER_PRICE)
+# downstream automatically get correct AED/m² without per-query patches.
+SQFT_TO_M2 = 10.7639
+
+
 def num_sql(column):
     return f"NULLIF(regexp_replace(COALESCE({column}::text, ''), '[^0-9.]', '', 'g'), '')::numeric"
 
 
 PRICE = num_sql("actual_worth")
-METER_PRICE = num_sql("meter_sale_price")
+# Multiply at expression level so MIN/MAX/AVG/percentile all scale uniformly.
+METER_PRICE = f"({num_sql('meter_sale_price')} * {SQFT_TO_M2})"
 AREA_SIZE = num_sql("actual_area")
 RENT_VALUE = num_sql("rent_value")
 
@@ -859,26 +869,60 @@ PROPERTY_OPTIONS = [
 
 
 AREA_ALIASES = {
-    "jvc": ["Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"],
-    "jumeirah village circle": ["Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"],
+    # FIX 2026-06-03 (DLD_ANALYTICS_FIX): verified vs Rent-sale-arhiv (dld_sales_unified).
+    # JVC official DLD names include "Jumeirah Village Circle" (modern label) and
+    # legacy sub-community codes ("Al Yufrah 1", "Al Barsha South Fourth"). ILIKE
+    # '%jumeirah%' was catching JBR/JLT/JVT — switched to ANY-equality match below.
+    "jvc": ["Jumeirah Village Circle", "Al Yufrah 1", "Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"],
+    "jumeirah village circle": ["Jumeirah Village Circle", "Al Yufrah 1", "Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"],
+    "jvt": ["Jumeirah Village Triangle"],
+    "jumeirah village triangle": ["Jumeirah Village Triangle"],
+    "jbr": ["Jumeirah Beach Residence"],
+    "jumeirah beach residence": ["Jumeirah Beach Residence"],
 
-    "downtown": ["Burj Khalifa"],
-    "downtown dubai": ["Burj Khalifa"],
-    "dubai downtown": ["Burj Khalifa"],
+    "downtown": ["Downtown Dubai", "Burj Khalifa"],
+    "downtown dubai": ["Downtown Dubai", "Burj Khalifa"],
+    "dubai downtown": ["Downtown Dubai", "Burj Khalifa"],
 
-    "dubai marina": ["Marsa Dubai"],
-    "marina": ["Marsa Dubai"],
-    "marsa dubai": ["Marsa Dubai"],
+    "dubai marina": ["Dubai Marina", "Marsa Dubai"],
+    "marina": ["Dubai Marina", "Marsa Dubai"],
+    "marsa dubai": ["Dubai Marina", "Marsa Dubai"],
 
     "business bay": ["Business Bay"],
     "palm": ["Palm Jumeirah"],
     "palm jumeirah": ["Palm Jumeirah"],
-    "jlt": ["Jumeirah Lakes Towers"],
-    "jumeirah lakes towers": ["Jumeirah Lakes Towers"],
+    "jlt": ["Jumeirah Lakes Towers", "Jumeirah Lake Towers"],
+    "jumeirah lakes towers": ["Jumeirah Lakes Towers", "Jumeirah Lake Towers"],
     "creek": ["Dubai Creek Harbour", "Creek"],
     "dubai creek": ["Dubai Creek Harbour", "Creek"],
     "sobha": ["Sobha Hartland"],
     "sobha hartland": ["Sobha Hartland"],
+    "damac hills": ["Damac Hills", "Damac Hills 2", "Hadaeq Sheikh Mohammed Bin Rashid"],
+    "dubailand": ["Dubai Land", "Wadi Al Safa 5", "Wadi Al Safa 7"],
+    "dso": ["Dubai Silicon Oasis", "Silicon Oasis", "Nadd Hessa"],
+    "silicon oasis": ["Dubai Silicon Oasis", "Silicon Oasis", "Nadd Hessa"],
+    "sports city": ["Dubai Sports City", "Al Hebiah Fourth"],
+    "dubai sports city": ["Dubai Sports City", "Al Hebiah Fourth"],
+    "jumeirah golf estates": ["Jumeirah Golf Estates", "Me'Aisem First"],
+    "arabian ranches": ["Arabian Ranches", "Wadi Al Safa 6", "Wadi Al Safa 7"],
+    "mbr city": ["Mohammed Bin Rashid City", "Hadaeq Sheikh Mohammed Bin Rashid"],
+    "mohammed bin rashid city": ["Mohammed Bin Rashid City", "Hadaeq Sheikh Mohammed Bin Rashid"],
+    "dubai hills": ["Dubai Hills Estate", "Hadaeq Sheikh Mohammed Bin Rashid"],
+    "dubai hills estate": ["Dubai Hills Estate", "Hadaeq Sheikh Mohammed Bin Rashid"],
+    "difc": ["DIFC", "Zaabeel Second"],
+}
+
+# FIX 2026-06-03 (DLD_ANALYTICS_FIX): aliases that must be matched EXACTLY
+# (no ILIKE %x% — that catches false positives like JBR ⊂ "jumeirah" partial).
+# Multi-word DLD area names go here; short tokens with no risk of collision
+# (e.g. "creek") stay on legacy ILIKE path.
+_AREA_EXACT_KEYS = {
+    "jvc", "jumeirah village circle", "jvt", "jumeirah village triangle",
+    "jbr", "jumeirah beach residence", "downtown", "downtown dubai", "dubai downtown",
+    "dubai marina", "marina", "marsa dubai", "business bay", "palm", "palm jumeirah",
+    "jlt", "jumeirah lakes towers", "damac hills", "dubailand", "dso", "silicon oasis",
+    "sports city", "dubai sports city", "jumeirah golf estates", "arabian ranches",
+    "mbr city", "mohammed bin rashid city", "dubai hills", "dubai hills estate", "difc",
 }
 
 VIRTUAL_AREA_DISPLAY = {
@@ -1233,10 +1277,20 @@ def area_alias_values(query):
 
 
 def make_area_exact_condition(query):
+    # FIX 2026-06-03 (DLD_ANALYTICS_FIX): for known multi-word areas (JVC, JBR,
+    # JLT, etc.) use EXACT equality via ANY(%s::text[]) instead of ILIKE '%x%'.
+    # Old code matched JBR/JLT/JVT when user typed "jumeirah" — wrong dataset.
     values = [v for v in area_alias_values(query) if v]
 
     if not values:
         return "AND 1=0", []
+
+    q_key = clean_query(query).lower()
+    if q_key in _AREA_EXACT_KEYS:
+        return (
+            "AND COALESCE(area_name_en::text, '') = ANY(%s::text[])",
+            [values],
+        )
 
     params = []
     parts = []
@@ -1435,21 +1489,32 @@ def property_condition(prop):
 
 
 def period_condition(period):
+    # FIX 2026-06-03 (DLD_ANALYTICS_FIX): default to 12 months when not specified.
+    # Previously averaging 23 years of DLD archive (2002→2025) produced meaningless
+    # numbers (JVC showed 192k deals × 1.5 inflation vs reality).
+    # Explicit opt-in for full archive: pass period="all".
     if not period:
-        return ""
+        return "AND safe_date >= CURRENT_DATE - INTERVAL '12 months'"
 
     p = str(period).strip().lower()
 
+    if p in ["all", "all time", "all_time", "всё время", "все время"]:
+        return ""
     if p in ["3", "3m", "3 мес", "3 месяца", "3 months"]:
         return "AND safe_date >= CURRENT_DATE - INTERVAL '3 months'"
     if p in ["6", "6m", "6 мес", "6 месяцев", "6 months"]:
         return "AND safe_date >= CURRENT_DATE - INTERVAL '6 months'"
     if p in ["12", "1", "1y", "1 год", "год", "12 months", "1 year"]:
         return "AND safe_date >= CURRENT_DATE - INTERVAL '12 months'"
+    if p in ["24", "2y", "2 года", "24 months", "2 years"]:
+        return "AND safe_date >= CURRENT_DATE - INTERVAL '24 months'"
     if p in ["36", "3y", "3 года", "36 months", "3 years"]:
         return "AND safe_date >= CURRENT_DATE - INTERVAL '36 months'"
+    if p in ["60", "5y", "5 лет", "60 months", "5 years"]:
+        return "AND safe_date >= CURRENT_DATE - INTERVAL '60 months'"
 
-    return ""
+    # Unknown period token → default to 12mo rather than all-time.
+    return "AND safe_date >= CURRENT_DATE - INTERVAL '12 months'"
 
 
 def period_previous_condition(period):
@@ -1473,15 +1538,22 @@ def period_previous_condition(period):
 
 def period_months(period):
     p = str(period or "").strip().lower()
+    if p in ["all", "all time", "all_time", "всё время", "все время"]:
+        return None  # explicit all-time
     if p in ["3", "3m", "3 мес", "3 месяца", "3 months"]:
         return 3
     if p in ["6", "6m", "6 мес", "6 месяцев", "6 months"]:
         return 6
     if p in ["12", "1", "1y", "1 год", "год", "12 months", "1 year"]:
         return 12
+    if p in ["24", "2y", "2 года", "24 months", "2 years"]:
+        return 24
     if p in ["36", "3y", "3 года", "36 months", "3 years"]:
         return 36
-    return None
+    if p in ["60", "5y", "5 лет", "60 months", "5 years"]:
+        return 60
+    # FIX 2026-06-03: default 12mo aligned with period_condition.
+    return 12
 
 
 def period_window_sql(period, previous=False):
@@ -2041,7 +2113,7 @@ def show_unit_summary(title, row, prop=None, period=None):
         "<b>2. Рыночные ориентиры</b>\n\n"
         f"💰 Средняя цена сделки: <b>{format_money(avg_price)}</b>\n"
         f"📌 Медианная цена: <b>{format_money(median)}</b>\n"
-        f"📐 Средняя цена за метр: <b>{format_money(avg_meter)}</b>\n\n"
+        f"📐 Средняя цена за м²: <b>{format_money(avg_meter)}</b>\n\n"
         "<b>3. Диапазоны цены входа</b>\n\n"
         f"🟢 <b>Выгодная зона:</b>\nот <b>{format_money(min_price)}</b> до <b>{format_money(p25)}</b>\n\n"
         f"🟡 <b>Рыночная зона:</b>\nот <b>{format_money(p25)}</b> до <b>{format_money(median)}</b>\n\n"
@@ -2061,7 +2133,7 @@ def quick_area_report(display_name, row, comparison=None, top_buildings=None, de
         f"📊 Сделок: <b>{format_int(row.get('deals'))}</b>\n"
         f"🏢 Зданий: <b>{row.get('buildings') or 0:,}</b>\n"
         f"💰 {'Средняя аренда' if is_rent_deal_type(deal_type) else 'Средняя цена'}: <b>{format_money(row['avg_price'])}</b>\n"
-        f"📐 Средняя цена за метр: <b>{format_money(row['avg_meter'])}</b>\n"
+        f"📐 Средняя цена за м²: <b>{format_money(row['avg_meter'])}</b>\n"
         f"🗓 Первая сделка: <b>{row['first_deal']}</b>\n"
         f"🗓 Последняя сделка: <b>{row['last_deal']}</b>\n"
     )
@@ -2076,7 +2148,7 @@ def quick_area_report(display_name, row, comparison=None, top_buildings=None, de
             f"\n📈 <b>Динамика за 12 месяцев к предыдущим 12:</b>\n"
             f"📊 Сделки: <b>{format_pct(deals_change)}</b>\n"
             f"💰 Средняя цена: <b>{format_pct(price_change)}</b>\n"
-            f"📐 Цена за метр: <b>{format_pct(meter_change)}</b>\n"
+            f"📐 Цена за м²: <b>{format_pct(meter_change)}</b>\n"
         )
 
     if top_buildings:
@@ -2305,7 +2377,7 @@ def show_smart_recommendation(goal, budget, timing, risk, rows):
         f"🏠 Формат: <b>{best['property']}</b>\n"
         f"💰 Средняя цена: <b>{format_money(best['avg_price'])}</b>\n"
         f"✅ Хорошая покупка: <b>{format_money(good_low)}</b> — <b>{format_money(good_high)}</b>\n"
-        f"📐 Средняя цена за метр: <b>{format_money(best['avg_meter'])}</b>\n"
+        f"📐 Средняя цена за м²: <b>{format_money(best['avg_meter'])}</b>\n"
         f"📊 Сделок за 24 мес.: <b>{format_int(best['deals'])}</b>\n\n"
         f"🧠 <b>Вывод:</b>\n"
     )
@@ -2432,7 +2504,7 @@ def economic_takeaway(row, prop=None, period=None, deal_type=None, comparison=No
             if price_change is not None or meter_change is not None:
                 base += (
                     f"\n📌 Динамика периода: средний чек {format_pct(price_change)}, "
-                    f"цена за метр {format_pct(meter_change)}. "
+                    f"цена за м² {format_pct(meter_change)}. "
                 )
                 if (price_change or 0) > 0 and (meter_change or 0) > 0:
                     base += "Рынок растёт — вход лучше искать через торг или ниже среднего."
@@ -2463,7 +2535,7 @@ def show_stats(title, row, prop=None, period=None, deal_type=None):
         f"💰 {'Средняя аренда' if is_rent_deal_type(deal_type) else 'Средняя цена'}: <b>{format_money(row['avg_price'])}</b>\n"
         f"🔻 {'Минимальная аренда' if is_rent_deal_type(deal_type) else 'Минимальная цена'}: <b>{format_money(row['min_price'])}</b>\n"
         f"🔺 {'Максимальная аренда' if is_rent_deal_type(deal_type) else 'Максимальная цена'}: <b>{format_money(row['max_price'])}</b>\n"
-        f"📐 Средняя цена за метр: <b>{format_money(row['avg_meter'])}</b>\n"
+        f"📐 Средняя цена за м²: <b>{format_money(row['avg_meter'])}</b>\n"
         f"🗓 Первая сделка: <b>{row['first_deal']}</b>\n"
         f"🗓 Последняя сделка: <b>{row['last_deal']}</b>\n\n"
         f"🛏 Комнаты: {row.get('rooms_list') or 'нет данных'}\n"
@@ -2495,11 +2567,11 @@ def show_comparison(title, current, previous, period=None, deal_type=None):
     conclusion = ""
     if price_change is not None and meter_change is not None:
         if price_change > 0 and meter_change > 0:
-            conclusion = "Рынок по выбранному фильтру показывает рост: средний чек и цена за метр выше предыдущего аналогичного периода."
+            conclusion = "Рынок по выбранному фильтру показывает рост: средний чек и цена за м² выше предыдущего аналогичного периода."
         elif price_change < 0 and meter_change < 0:
-            conclusion = "Рынок по выбранному фильтру просел: средний чек и цена за метр ниже предыдущего аналогичного периода. Это может давать окно для переговоров."
+            conclusion = "Рынок по выбранному фильтру просел: средний чек и цена за м² ниже предыдущего аналогичного периода. Это может давать окно для переговоров."
         elif price_change > 0 and meter_change < 0:
-            conclusion = "Средний чек вырос, но цена за метр снизилась. Вероятно, в текущем периоде было больше крупных или нестандартных сделок."
+            conclusion = "Средний чек вырос, но цена за м² снизилась. Вероятно, в текущем периоде было больше крупных или нестандартных сделок."
         else:
             conclusion = "Картина смешанная: часть показателей растёт, часть снижается. Для решения лучше смотреть последние сделки и экономическое резюме."
     else:
@@ -2513,15 +2585,15 @@ def show_comparison(title, current, previous, period=None, deal_type=None):
         f"<b>Текущий период</b>\n"
         f"📊 Сделок: <b>{format_int(current.get('deals'))}</b>\n"
         f"💰 {value_name}: <b>{format_money(current['avg_price'])}</b>\n"
-        f"📐 Цена за метр: <b>{format_money(current['avg_meter'])}</b>\n\n"
+        f"📐 Цена за м²: <b>{format_money(current['avg_meter'])}</b>\n\n"
         f"<b>Предыдущий аналогичный период</b>\n"
         f"📊 Сделок: <b>{format_int(previous.get('deals'))}</b>\n"
         f"💰 {value_name}: <b>{format_money(previous['avg_price'])}</b>\n"
-        f"📐 Цена за метр: <b>{format_money(previous['avg_meter'])}</b>\n\n"
+        f"📐 Цена за м²: <b>{format_money(previous['avg_meter'])}</b>\n\n"
         f"<b>Динамика</b>\n"
         f"{arrow(deals_change)} Сделки: <b>{format_pct(deals_change)}</b>\n"
         f"{arrow(price_change)} {value_name}: <b>{format_pct(price_change)}</b>\n"
-        f"{arrow(meter_change)} Цена за метр: <b>{format_pct(meter_change)}</b>\n\n"
+        f"{arrow(meter_change)} Цена за м²: <b>{format_pct(meter_change)}</b>\n\n"
         f"🧠 <b>Вывод:</b> {conclusion}"
     )
 
@@ -2990,7 +3062,7 @@ def show_stats(title, row, prop=None, period=None, deal_type=None):
     price_label = "Средняя аренда" if rent else "Средняя цена"
     min_label = "Минимальная аренда" if rent else "Минимальная цена"
     max_label = "Максимальная аренда" if rent else "Максимальная цена"
-    meter_label = "Аренда за sqft" if rent else "Цена за метр"
+    meter_label = "Аренда за sqft" if rent else "Цена за м²"
 
     conclusion = economic_conclusion(row=row, deal_type=deal_type)
 
@@ -3025,7 +3097,7 @@ def show_comparison(title, current, previous, period=None, deal_type=None):
     meter_change = pct_change(current["avg_meter"], previous["avg_meter"])
     rent = is_rent_deal(deal_type)
     price_label = "Средняя аренда" if rent else "Средняя цена"
-    meter_label = "Аренда за sqft" if rent else "Цена за метр"
+    meter_label = "Аренда за sqft" if rent else "Цена за м²"
 
     if price_change is not None:
         if price_change > 5:
@@ -4264,7 +4336,7 @@ def _build_360_conclusion(row, scope=None, name=None, report_kind=None):
         "\n\n🧠 <b>Экономическое заключение 360°</b>\n\n"
         f"Ликвидность по DLD-сделкам: <b>{liquidity}</b>.\n"
         f"Рыночный ориентир: средняя цена <b>{format_money(avg_price)}</b>, "
-        f"средняя цена за метр <b>{format_money(avg_meter)}</b>.\n\n"
+        f"средняя цена за м² <b>{format_money(avg_meter)}</b>.\n\n"
         f"Инвестиционный вывод: <b>{risk}</b>. "
         "Перед покупкой стоит сравнить конкретный юнит с последними сделками, этажом, видом, состоянием, сервисными сборами и реальной арендной ставкой."
     )
@@ -4381,7 +4453,7 @@ async def send_deals_report(message, scope, name=None, prop=None, period=None, d
             f"🏠 {rooms_label} / {r.get('property_sub_type_en') or r.get('property_type_en') or '-'}\n"
             f"📏 Площадь: {format_area_dual(r.get('area_size'))}\n"
             f"💰 {format_money(r.get('price'))}\n"
-            f"📐 {format_money(r.get('meter_price'))} за метр\n\n"
+            f"📐 {format_money(r.get('meter_price'))} за м²\n\n"
         )
     # v149: removed auto-360° from deals report.
     # User can press "Резюме" / "Аналитика" to see it explicitly.
@@ -4417,7 +4489,7 @@ async def send_ranking_report(message, ranking_type="active"):
             f"📍 {r.get('area_name_en') or '-'}\n"
             f"📊 Сделки: <b>{format_int(r.get('deals'))}</b>\n"
             f"💰 Средняя цена: <b>{format_money(r.get('avg_price'))}</b>\n"
-            f"📐 Цена за метр: <b>{format_money(r.get('avg_meter'))}</b>\n\n"
+            f"📐 Цена за м²: <b>{format_money(r.get('avg_meter'))}</b>\n\n"
         )
     html += _build_360_conclusion(rows[0], "dubai", None, "rating")
     set_last_report(user_id, title, html, "dubai")
@@ -5148,7 +5220,7 @@ async def main_handler(message: Message):
                         f"🏠 Формат: <b>{_best.get('property') or _best.get('unit_segment') or '1 BR'}</b>\n"
                         f"📊 Сделки: <b>{format_int(_best.get('deals'))}</b>\n"
                         f"💰 Средняя цена: <b>{format_money(_best.get('avg_price'))}</b>\n"
-                        f"📐 Средняя цена за метр: <b>{format_money(_best.get('avg_meter'))}</b>\n\n"
+                        f"📐 Средняя цена за м²: <b>{format_money(_best.get('avg_meter'))}</b>\n\n"
                         "🧠 <b>Экономическое заключение 360°</b>\n\n"
                         "Недостаточно данных для полного экономического отчёта. Расширьте период или фильтр."
                     )
@@ -5182,7 +5254,7 @@ async def main_handler(message: Message):
                     f"📍 <b>Район:</b> {best.get('area') or 'JVC'}\n"
                     f"🏠 <b>Формат:</b> {best.get('property') or '1 BR'}\n"
                     f"💰 <b>Ориентир цены:</b> {format_money(best.get('avg_price'))}\n"
-                    f"📐 <b>Цена за метр:</b> {format_money(best.get('avg_meter'))}\n\n"
+                    f"📐 <b>Цена за м²:</b> {format_money(best.get('avg_meter'))}\n\n"
                     "🧠 <b>Экономическое заключение 360°</b>\n\n"
                     "Расчёт выполнен по профильной модели бюджет × риск × горизонт. "
                     "Полный DLD-отчёт по этому сценарию можно перезапустить через минуту, когда архив разгрузится."
@@ -6561,11 +6633,14 @@ def _v44_sale_meta():
 
 def base_from():
     m = _v44_sale_meta()
+    # FIX 2026-06-03 (DLD_ANALYTICS_FIX): convert AED/sqft → AED/m² (×10.7639).
+    # Both branches: legacy meter_sale_price column is per-sqft; price/size
+    # uses actual_area which DLD also stores in sqft. Multiply both by SQFT_TO_M2.
     meter_expr = f"""
         COALESCE(
-            {m['meter']},
+            ({m['meter']}) * {SQFT_TO_M2},
             CASE WHEN ({m['size']}) IS NOT NULL AND ({m['size']}) > 0 AND ({m['price']}) IS NOT NULL
-                 THEN ({m['price']}) / NULLIF(({m['size']}), 0)
+                 THEN (({m['price']}) / NULLIF(({m['size']}), 0)) * {SQFT_TO_M2}
                  ELSE NULL::numeric END
         )
     """
@@ -7807,7 +7882,7 @@ def show_smart_recommendation(goal, budget, timing, risk, rows):
         f"🏠 <b>Формат:</b> {prop}\n"
         f"💰 <b>Средняя цена покупки:</b> {format_money(best.get('avg_price'))}\n"
         f"✅ <b>Комфортная цена входа:</b> {format_money(good_low)} — {format_money(good_high)}\n"
-        f"📐 <b>Средняя цена за метр:</b> {format_money(best.get('avg_meter'))}\n"
+        f"📐 <b>Средняя цена за м²:</b> {format_money(best.get('avg_meter'))}\n"
         f"📊 <b>Количество сделок в выборке:</b> {format_int(best.get('deals'))}\n\n"
         "🧠 <b>Экономическое заключение 360°</b>\n\n"
     )
@@ -7860,7 +7935,7 @@ def show_unit_summary(title, row, prop=None, period=None):
         "💼 <b>Экономическое резюме 360°</b>\n\n"
         f"📊 <b>Количество сделок в DLD:</b> {format_int(deals)}\n\n"
         f"💰 <b>Средняя цена покупки:</b> {format_money(avg_price)}\n"
-        f"📐 <b>Средняя цена за метр:</b> {format_money(avg_meter)}\n"
+        f"📐 <b>Средняя цена за м²:</b> {format_money(avg_meter)}\n"
         f"🏦 <b>Ориентир годовой аренды:</b> {format_money(rent)}\n"
         f"📈 <b>Ориентировочная доходность:</b> {format_pct(roi)}\n\n"
         "🧠 <b>Вывод аналитика</b>\n\n"
@@ -8824,7 +8899,7 @@ async def send_ranking_report(message, ranking_type="building_deals"):
         if r.get('avg_price') is not None:
             html += f"💰 Средняя цена: <b>{format_money(r.get('avg_price'))}</b>\n"
         if r.get('avg_meter') is not None:
-            html += f"📐 Средняя цена за метр: <b>{format_money(r.get('avg_meter'))}</b>\n"
+            html += f"📐 Средняя цена за м²: <b>{format_money(r.get('avg_meter'))}</b>\n"
         if r.get('growth_pct') is not None:
             html += f"📈 Рост цены: <b>{float(r.get('growth_pct')):.1f}%</b>\n"
         html += "\n"
@@ -9527,7 +9602,7 @@ def _build_360_conclusion(row, scope=None, name=None, report_kind=None):
     lines.append(f"• Количество DLD-сделок в выборке: <b>{format_int(deals) if 'format_int' in globals() else deals}</b>.")
     lines.append(f"• Ликвидность: <b>{liquidity}</b> — {liquidity_note}.")
     lines.append(f"• Средняя цена покупки: <b>{_econ_money_v78(avg_price)}</b>.")
-    lines.append(f"• Средняя цена за метр: <b>{_econ_money_v78(avg_meter)}</b>.")
+    lines.append(f"• Средняя цена за м²: <b>{_econ_money_v78(avg_meter)}</b>.")
     if min_price or max_price:
         lines.append(f"• Диапазон сделок: <b>{_econ_money_v78(min_price)}</b> — <b>{_econ_money_v78(max_price)}</b>.")
 
@@ -9600,7 +9675,7 @@ def show_smart_recommendation(goal, budget, timing, risk, rows):
         f"📊 <b>DLD-сделок в выборке:</b> {format_int(deals) if 'format_int' in globals() else deals}\n"
         f"💰 <b>Средняя цена покупки:</b> {_econ_money_v78(avg_price)}\n"
         f"✅ <b>Целевая цена входа:</b> {_econ_money_v78(min_price)} — {_econ_money_v78(avg_price * 0.95 if avg_price else None)}\n"
-        f"📐 <b>Средняя цена за метр:</b> {_econ_money_v78(avg_meter)}\n\n"
+        f"📐 <b>Средняя цена за м²:</b> {_econ_money_v78(avg_meter)}\n\n"
         "🧠 <b>Экономическое заключение 360°</b>\n\n"
     )
 
@@ -10205,7 +10280,7 @@ def show_smart_recommendation(goal, budget, timing, risk, rows):
         f"📊 <b>Сделки:</b> {format_int(best.get('deals'))}\n"
         f"💰 <b>Средняя цена:</b> {format_money(best.get('avg_price'))}\n"
         f"✅ <b>Комфортная цена входа:</b> {format_money(good_low)} — {format_money(good_high)}\n"
-        f"📐 <b>Средняя цена за метр:</b> {format_money(best.get('avg_meter'))}\n\n"
+        f"📐 <b>Средняя цена за м²:</b> {format_money(best.get('avg_meter'))}\n\n"
     )
 
     if compare_notes:
@@ -10548,7 +10623,7 @@ def _build_360_conclusion(row, scope=None, name=None, report_kind=None):
         return (
             "\n\n🧠 <b>Экономическое заключение 360°</b>\n\n"
             f"Выборка: <b>{format_int(deals)}</b> сделок. "
-            f"Средняя цена: <b>{format_money(avg_price)}</b>, средняя цена за метр: <b>{format_money(avg_meter)}</b>. "
+            f"Средняя цена: <b>{format_money(avg_price)}</b>, средняя цена за м²: <b>{format_money(avg_meter)}</b>. "
             "Для точного решения нужно сравнить конкретный объект с последними DLD-сделками, площадью, этажом, видом, состоянием, сервисными сборами и реальной арендной ставкой."
         )
 
@@ -10572,7 +10647,7 @@ def show_smart_recommendation(goal, budget, timing, risk, rows):
         f"📊 <b>Сделки:</b> {format_int(best.get('deals'))}\n"
         f"💰 <b>Средняя цена:</b> {format_money(best.get('avg_price'))}\n"
         f"✅ <b>Комфортная цена входа:</b> {format_money(good_low)} — {format_money(good_high)}\n"
-        f"📐 <b>Средняя цена за метр:</b> {format_money(best.get('avg_meter'))}\n\n"
+        f"📐 <b>Средняя цена за м²:</b> {format_money(best.get('avg_meter'))}\n\n"
     )
 
     try:
@@ -10717,7 +10792,7 @@ def show_smart_recommendation(goal, budget, timing, risk, rows):
         f"📊 <b>Сделки:</b> {format_int(best.get('deals'))}\n"
         f"💰 <b>Средняя цена:</b> {format_money(best.get('avg_price'))}\n"
         f"✅ <b>Комфортная цена входа:</b> {format_money(good_low)} — {format_money(good_high)}\n"
-        f"📐 <b>Средняя цена за метр:</b> {format_money(best.get('avg_meter'))}\n"
+        f"📐 <b>Средняя цена за м²:</b> {format_money(best.get('avg_meter'))}\n"
     )
 
     try:
@@ -11392,7 +11467,7 @@ def show_smart_recommendation(goal, budget, timing, risk, rows):
         f"📊 <b>Сделки:</b> {format_int(best.get('deals'))}\n"
         f"💰 <b>Средняя цена:</b> {format_money(best.get('avg_price'))}\n"
         f"✅ <b>Комфортная цена входа:</b> {format_money(good_low)} — {format_money(good_high)}\n"
-        f"📐 <b>Средняя цена за метр:</b> {format_money(best.get('avg_meter'))}\n"
+        f"📐 <b>Средняя цена за м²:</b> {format_money(best.get('avg_meter'))}\n"
     )
 
     try:
