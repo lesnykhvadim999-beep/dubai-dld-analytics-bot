@@ -16007,6 +16007,192 @@ def _build_360_conclusion(row, scope=None, name=None, report_kind=None):  # noqa
 print("Loaded B061+B063 compact 360-summary with breakdowns")
 
 
+# =========================================================================
+# B069: COMPACT BEST-OBJECT REPORT
+# =========================================================================
+# Юзер: "оптимизируй алгоритм этой кнопки, чтобы он был четкий и понятный
+# и главное брал нужную информацию с нужных мест".
+# Заменяет длинный legacy v95-отчёт на компактный 8-10 строчный summary
+# с реальным apt yield (_smart_fetch_area_rent_12m), бренд-именами (B065)
+# и практическими bullets.
+try:
+    _B069_ORIG_BEST_OBJECT = build_best_object_report_v95
+except NameError:
+    _B069_ORIG_BEST_OBJECT = None
+
+
+def _b069_strategy_text(goal):
+    g = (goal or '').lower()
+    if 'перепрод' in g:
+        return ("Для перепродажи главное — <b>ликвидность</b> района и цена входа "
+                "<b>ниже DLD-средней</b>. Чем больше сделок, тем легче выйти без дисконта.")
+    if 'аренд' in g or 'roi' in g:
+        return ("Для аренды важна реальная <b>доходность</b> (rent/sale). "
+                "Бери район с yield 6-8% и устойчивым rent-объёмом.")
+    if 'жизн' in g:
+        return ("Для жизни приоритет: <b>стабильность цен</b>, инфраструктура, "
+                "школы. Доходность вторична, фокус на качество района.")
+    return ("Сбалансированная стратегия: ликвидный район + понятный формат + "
+            "цена входа около DLD-средней.")
+
+
+def build_best_object_report_v95(state, *, user_id=None):  # noqa: F811
+    """B069: компактный best-object report.
+    Fallback на legacy v95 если новая версия падает.
+    """
+    try:
+        if _B069_ORIG_BEST_OBJECT is None:
+            return ""
+        # Получаем data из существующей логики v104
+        normalized = _v104_clean_best_object_state(state or {})
+        areas, buildings, notes = _v104_top_areas_and_buildings(normalized)
+        if not areas and not buildings:
+            return _v104_best_object_limited_report(normalized)
+
+        best_area = areas[0] if areas else None
+        best_building = buildings[0] if buildings else None
+        chosen = best_building or best_area or {}
+
+        deal_type = normalized.get('deal_type') or '🏠 Продажа'
+        obj_format = normalized.get('object_format') or 'любой'
+        budget = normalized.get('budget') or '—'
+        rooms = normalized.get('rooms') or 'неважно'
+        goal = normalized.get('goal') or 'Сбалансированная стратегия'
+
+        avg_price = _v95_num(chosen.get('avg_price'), None)
+        entry_low, entry_high = _v101_entry_range(chosen, budget)
+        # Сильная точка входа: ниже avg на 10% (B069 — простой и прозрачный критерий)
+        try:
+            strong_entry = float(avg_price) * 0.88 if avg_price else None
+        except Exception:
+            strong_entry = None
+
+        # Реальная аренда + yield через apt MV
+        avg_rent = None
+        real_yield = None
+        try:
+            _area_name = (best_area or {}).get('name') or (best_building or {}).get('area_name_en')
+            if _area_name:
+                _ri = _smart_fetch_area_rent_12m(_area_name)
+                if _ri and _ri.get('avg_rent'):
+                    avg_rent = float(_ri['avg_rent'])
+                    _apt_p = _ri.get('sale_avg_price_apt') or avg_price
+                    if _apt_p:
+                        real_yield = round(avg_rent / float(_apt_p) * 100.0, 1)
+        except Exception:
+            pass
+
+        html = "🏆 <b>Лучший объект под твой запрос</b>\n\n"
+
+        # Краткая сводка запроса (1 строка)
+        html += (
+            f"📊 {deal_type} · {obj_format} · {budget} · {rooms} · <i>{goal}</i>\n\n"
+        )
+
+        # Лучший район/здание
+        if best_area:
+            _brand_area = _b065_brand_area(best_area.get('name'))
+            html += f"🥇 <b>Лучший район:</b> {_brand_area}\n"
+        if best_building:
+            _b_name = best_building.get('name') or '—'
+            _b_area = _b065_brand_area(best_building.get('area_name_en')) if best_building.get('area_name_en') else None
+            html += f"🥈 <b>Лучшее здание:</b> {_b_name}"
+            if _b_area:
+                html += f" — {_b_area}"
+            html += "\n"
+        html += "\n"
+
+        # Цена / Что покупаешь
+        html += "💰 <b>Что покупаешь:</b>\n"
+        if avg_price:
+            html += f"   • Средняя цена: <b>{_b061_money(avg_price)}</b>\n"
+        if entry_low and entry_high:
+            html += f"   • Комфортный диапазон: {_b061_money(entry_low)} — {_b061_money(entry_high)}\n"
+        if strong_entry:
+            html += f"   • Сильная точка входа: <b>ниже {_b061_money(strong_entry)}</b>\n"
+        html += "\n"
+
+        # Сегмент: сделки + yield + rent
+        html += "📈 <b>Сегмент:</b>\n"
+        try:
+            _deals = int(chosen.get('deals') or 0)
+            if _deals:
+                _liq = "очень высокая" if _deals >= 5000 else ("высокая" if _deals >= 1000 else "средняя")
+                html += f"   • DLD-сделок за год: <b>{format_int(_deals)}</b> ({_liq} ликвидность)\n"
+        except Exception:
+            pass
+        if real_yield and 3 <= real_yield <= 12:
+            html += f"   • Доходность: <b>{real_yield:.1f}%</b>\n"
+        if avg_rent:
+            html += f"   • Аренда (если сдавать): <b>~{_b061_money(avg_rent)}/год</b>\n"
+        html += "\n"
+
+        # Стратегия под цель
+        html += f"🎯 <b>Под твою цель «{goal}»:</b>\n   {_b069_strategy_text(goal)}\n\n"
+
+        # Топ-3 района
+        if areas:
+            html += "🏙 <b>Топ-3 района под цель:</b>\n"
+            for i, r in enumerate(areas[:3], 1):
+                _n = _b065_brand_area(r.get('name'))
+                _d = int(r.get('deals') or 0)
+                _p = _b061_money(r.get('avg_price'))
+                _line = f"   {i}. <b>{_n}</b>"
+                if _p:
+                    _line += f" — {_p}"
+                if _d:
+                    _line += f" · {format_int(_d)} сделок"
+                html += _line + "\n"
+            html += "\n"
+
+        # Топ-3 здания
+        if buildings:
+            html += "🏢 <b>Топ-3 здания под цель:</b>\n"
+            for i, r in enumerate(buildings[:3], 1):
+                _n = r.get('name') or '—'
+                _a = _b065_brand_area(r.get('area_name_en')) if r.get('area_name_en') else None
+                _p = _b061_money(r.get('avg_price'))
+                _line = f"   {i}. <b>{_n}</b>"
+                if _a:
+                    _line += f" ({_a})"
+                if _p:
+                    _line += f" — {_p}"
+                html += _line + "\n"
+            html += "\n"
+
+        # Что проверить
+        html += (
+            "✅ <b>Что проверить перед сделкой:</b>\n"
+            "   • Этаж, вид, состояние, ремонт\n"
+            "   • Service charge: 16-20 AED/sqft (выше = плохо)\n"
+            "   • Последние 5 сделок в твоём здании на DLD\n"
+            "   • Ready unit или handover в текущем году\n\n"
+            "<i>Vadim Realty · RERA BRN 65011</i>"
+        )
+
+        # Notes от _v104 (адаптивная логика) — компактно в конце если есть
+        if notes:
+            _short_notes = " · ".join([str(n)[:80] for n in notes[:2]])
+            if _short_notes:
+                html = html.replace(
+                    "<i>Vadim Realty · RERA BRN 65011</i>",
+                    f"<i>📌 {_short_notes}</i>\n<i>Vadim Realty · RERA BRN 65011</i>"
+                )
+
+        return html
+    except Exception as _e:
+        print("BEST_OBJECT_B069_ERROR:", repr(_e))
+        if _B069_ORIG_BEST_OBJECT:
+            try:
+                return _B069_ORIG_BEST_OBJECT(state, user_id=user_id)
+            except Exception:
+                pass
+        return "❌ Не удалось собрать рекомендацию. Попробуй другой бюджет или формат."
+
+
+print("Loaded B069 compact best-object report")
+
+
 if __name__ == "__main__":
     # Boot-time ecosystem contract verification (fail-soft unless STRICT_CONTRACTS=1).
     try:
