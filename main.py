@@ -4119,11 +4119,12 @@ def legacy_main_menu_keyboard(user_id):
 
 def main_menu(user_id):
     """PHASE BN N1: упрощённое главное меню = только core функции.
-    Advanced (forecast, causal, compare-format, ratings) — под ⚡ Pro кнопкой.
-    Старые названия (m_compare, m_ratings) остались как handlers в pro_menu,
-    callback patterns не сломаны."""
+    B070: убрана кнопка 'Лучший объект' — дублировала 'Инвестиционный
+    подбор'. Smart pick теперь возвращает топ-район, топ-формат, альтернативы
+    и max-yield callout — этого достаточно для рекомендации.
+    Хендлер m_best_obj оставлен на случай старых ссылок."""
     return kb([
-        [tr(user_id, "m_smart_pick"), tr(user_id, "m_best_obj")],
+        [tr(user_id, "m_smart_pick")],
         [tr(user_id, "m_area"), tr(user_id, "m_building")],
         [tr(user_id, "m_dubai"), tr(user_id, "m_deals")],
         ["⚡ Pro / 🌟 Супер-фишки"],
