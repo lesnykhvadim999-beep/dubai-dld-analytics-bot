@@ -1,0 +1,23 @@
+UptimeRobot — Quick Add (8 monitors)
+=====================================
+Скопируй каждую строку как новый HTTP(s) monitor.
+Settings: Interval=5min, Timeout=30s, Alert after 1 failure.
+
+Resale Bot           — https://resale-bot-production.up.railway.app/health
+Analytics Bot        — https://dubai-dld-analytics-bot-production.up.railway.app/health
+Hub Bot              — https://hub-bot-production.up.railway.app/health
+Lead Bot             — https://telegram-bot-production-a608.up.railway.app/health
+ROI Bot              — https://dubai-roi-bot-production.up.railway.app/health
+Channel Bot          — https://channel-bot-new-production-9184.up.railway.app/health
+Currency Bot         — https://currency-bot-production-38d9.up.railway.app/health
+Cloud Watchdog       — https://cloud-watchdog-production.up.railway.app/health
+
+Verify (2026-06-03): все 8 URL вернули HTTP 200.
+
+Telegram alert setup:
+1. UptimeRobot → My Settings → Alert Contacts → Add → Telegram
+2. Найди @UptimeRobotBot в Telegram, /start
+3. Скопируй chat_id из бота → вставь в UptimeRobot
+4. Применить новый Alert Contact ко всем 8 monitor-ам (bulk select)
+
+Время на регистрацию + setup: ~5 мин.

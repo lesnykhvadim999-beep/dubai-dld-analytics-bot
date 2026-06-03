@@ -1,0 +1,30 @@
+# PHASE BM Agent L — Railway scheduler hints
+# Импорт в Railway: Settings -> Cron Schedule per service.
+# Все таймы в UTC.
+
+# channel-bot-new (или dedicated worker):
+[[crons]]
+name = "content_daily_market"
+command = "python -m shared.scripts.cron_phase_bm_l daily_content"
+schedule = "0 8 * * *"          # 08:00 UTC daily
+
+[[crons]]
+name = "content_weekly_top"
+command = "python -m shared.scripts.cron_phase_bm_l weekly_top"
+schedule = "0 9 * * 1"          # пн 09:00 UTC
+
+[[crons]]
+name = "content_monthly_report"
+command = "python -m shared.scripts.cron_phase_bm_l monthly_report"
+schedule = "0 10 1 * *"         # 1-го 10:00 UTC
+
+# shared-worker:
+[[crons]]
+name = "self_modify_daily_scan"
+command = "python -m shared.scripts.cron_phase_bm_l self_modify_scan"
+schedule = "0 2 * * *"          # 02:00 UTC daily
+
+[[crons]]
+name = "continuous_followups"
+command = "python -m shared.scripts.cron_phase_bm_l followups"
+schedule = "*/5 * * * *"        # каждые 5 минут

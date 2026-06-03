@@ -1,0 +1,24 @@
+# PHASE BM Agent J — Railway scheduler entries (Layer 15 + Layer 16)
+#
+# Copy into the relevant Railway project's railway.toml under [[cron]],
+# or wire as Windows Task Scheduler tasks. Times in UTC.
+
+[[cron]]
+name    = "phase_bm_j_rss_poll"
+command = "python -m shared.scripts.cron_phase_bm_j rss_poll"
+schedule = "0 */3 * * *"   # every 3 hours
+
+[[cron]]
+name    = "phase_bm_j_telegram_scrape"
+command = "python -m shared.scripts.cron_phase_bm_j telegram_scrape"
+schedule = "0 */2 * * *"   # every 2 hours
+
+[[cron]]
+name    = "phase_bm_j_meta_optimize"
+command = "python -m shared.scripts.cron_phase_bm_j meta_optimize 14"
+schedule = "0 3 * * 0"     # Sunday 03:00 UTC
+
+[[cron]]
+name    = "phase_bm_j_daily_digest"
+command = "python -m shared.scripts.cron_phase_bm_j daily_digest"
+schedule = "0 8 * * *"     # 08:00 UTC daily

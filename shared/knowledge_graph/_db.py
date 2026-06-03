@@ -1,0 +1,49 @@
+"""DB helper for knowledge_graph (mirrors parser_self_improve style)."""
+from __future__ import annotations
+
+import os
+from contextlib import contextmanager
+
+import psycopg2
+import psycopg2.extras
+
+
+def get_dsn() -> str:
+    dsn = (
+        os.environ.get("RESALE_DATABASE_URL")
+        or os.environ.get("DATABASE_URL")
+        or os.environ.get("RESALE_DATABASE_URL_PUBLIC")
+    )
+    if not dsn:
+        raise RuntimeError(
+            "knowledge_graph: no DSN — set RESALE_DATABASE_URL or DATABASE_URL"
+        )
+    return dsn
+
+
+@contextmanager
+def conn_cursor(dict_cursor: bool = False):
+    conn = psycopg2.connect(get_dsn(), connect_timeout=10)
+    try:
+        cur = conn.cursor(
+            cursor_factory=psycopg2.extras.RealDictCursor if dict_cursor else None
+        )
+        yield conn, cur
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        try:
+            cur.close()
+        except Exception:
+            pass
+        conn.close()
+
+
+def ensure_schema() -> None:
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "migrations.sql"), "r", encoding="utf-8") as f:
+        sql = f.read()
+    with conn_cursor() as (_, cur):
+        cur.execute(sql)
