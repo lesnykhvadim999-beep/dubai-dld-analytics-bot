@@ -13305,11 +13305,14 @@ try:
                     if uid is not None and text in _V106_DEAL_TYPE_BUTTONS:
                         st = user_states.get(uid, {}) or {}
                         step = st.get("step")
-                        # B058 FIX: в smart_goal/format_compare_goal "🔑 Аренда" это GOAL
-                        # (rental yield), НЕ deal_type. Middleware ломал invest wizard,
-                        # принудительно отправляя в "Последние сделки".
+                        # B058 + B068 FIX: в любом wizard'е "🔑 Аренда"/"⏭ Пропустить"
+                        # это валидный input текущего шага, не trigger для "Последних
+                        # сделок". Middleware форсил choose_deal_type в любом шаге
+                        # вне whitelist и ломал best_object/smart/format_compare флоу.
                         _allowed_deal_steps = (
-                            "choose_deal_type", "best_object_deal_type",
+                            "choose_deal_type", "choose_property", "choose_period",
+                            "best_object_deal_type", "best_object_format",
+                            "best_object_budget", "best_object_rooms", "best_object_goal",
                             "smart_goal", "smart_budget", "smart_timing", "smart_risk",
                             "format_compare_goal", "format_compare_scope",
                             "format_compare_area_query", "format_compare_choose_area",
