@@ -382,12 +382,16 @@ def db():
     return conn
 
 
-# FIX 2026-06-03 (DLD_ANALYTICS_FIX):
-# DLD legacy column `meter_sale_price` stores price-per-SQFT (not per-m²).
-# Verified vs Rent-sale-arhiv DB: JVC 12mo avg_meter ~16k AED/m² (after ×10.7639)
-# whereas raw column shows ~1.5k AED/sqft. UI everywhere advertises "AED за m²",
-# so we convert at the source — all AVG/MIN/MAX/percentile_cont(METER_PRICE)
-# downstream automatically get correct AED/m² without per-query patches.
+# FIX 2026-06-03 (METER_PRICE_PER_SOURCE — agent rev):
+# Earlier fix #125 assumed legacy `meter_sale_price` is AED/sqft → applied ×10.7639.
+# Direct DB verification on the Rent-sale-arhiv Railway DB shows otherwise:
+#   - dld_sale_archive.meter_sale_price       p50 = 11_726 AED   → AED/m²  (NO multiplier)
+#   - dld_transactions_full.meter_sale_price  p50 = 11_726 AED   → AED/m²  (same data, NO multiplier)
+#   - dld_sales_unified VIEW                  p50 = 11_726 AED   → AED/m²  (NO multiplier)
+#   - mv_area_24m_summary.avg_price_psf       p50 = 1_071  AED   → AED/sqft (×10.7639 needed)
+# Because `base_from()` reads dld_transactions_full directly, METER_PRICE must NOT
+# multiply. The multiplier stays only where avg_price_psf is read (mv_*, see
+# smart_pick_candidates v111 — left untouched).
 SQFT_TO_M2 = 10.7639
 
 
@@ -396,8 +400,8 @@ def num_sql(column):
 
 
 PRICE = num_sql("actual_worth")
-# Multiply at expression level so MIN/MAX/AVG/percentile all scale uniformly.
-METER_PRICE = f"({num_sql('meter_sale_price')} * {SQFT_TO_M2})"
+# dld_transactions_full.meter_sale_price is already AED/m² — no SQFT_TO_M2 multiplier.
+METER_PRICE = f"({num_sql('meter_sale_price')})"
 AREA_SIZE = num_sql("actual_area")
 RENT_VALUE = num_sql("rent_value")
 
@@ -6714,12 +6718,15 @@ def _v44_sale_meta():
 
 def base_from():
     m = _v44_sale_meta()
-    # FIX 2026-06-03 (DLD_ANALYTICS_FIX): convert AED/sqft → AED/m² (×10.7639).
-    # Both branches: legacy meter_sale_price column is per-sqft; price/size
-    # uses actual_area which DLD also stores in sqft. Multiply both by SQFT_TO_M2.
+    # FIX 2026-06-03 (METER_PRICE_PER_SOURCE — agent rev):
+    # Verified directly: dld_transactions_full.meter_sale_price is stored as AED/m²
+    # (p50 = 11_726 AED/m² across 1.69M rows). Multiplying by SQFT_TO_M2 inflated
+    # values 10×. Drop the multiplier on the primary expression.
+    # Fallback path (price / size) keeps SQFT_TO_M2 because actual_area is in sqft
+    # and actual_worth is total AED → (AED / sqft) × 10.7639 = AED/m².
     meter_expr = f"""
         COALESCE(
-            ({m['meter']}) * {SQFT_TO_M2},
+            ({m['meter']}),
             CASE WHEN ({m['size']}) IS NOT NULL AND ({m['size']}) > 0 AND ({m['price']}) IS NOT NULL
                  THEN (({m['price']}) / NULLIF(({m['size']}), 0)) * {SQFT_TO_M2}
                  ELSE NULL::numeric END
