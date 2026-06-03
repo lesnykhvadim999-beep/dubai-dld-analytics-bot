@@ -15506,6 +15506,198 @@ def _build_360_conclusion_compact(row, scope=None, name=None, report_kind=None):
 # =========================================================================
 # B063: DUBAI-WIDE EXTENDED OVERVIEW (rooms + format + top-areas breakdowns)
 # =========================================================================
+def _b066_dynamics_breakdowns(scope, name):
+    """B066: Dynamics-only breakdowns — для отчёта 'Динамика'.
+    Источник: mv_area_12m_summary (yoy_growth_pct уже считает 12m vs prev 12m).
+    Возвращает: топ роста sale/rent, топ падения, объём изменения.
+    """
+    out = {
+        "top_price_growth": [],
+        "top_price_drop": [],
+        "top_rent_growth": [],
+        "top_volume_growth": [],
+        "summary_12m": None,
+    }
+    try:
+        import read_model as _rm
+        import psycopg2.extras as _pgx
+        conn = _rm._conn()
+        with conn.cursor(cursor_factory=_pgx.RealDictCursor) as cur:
+            # 1) Top-5 районов по росту цен sale (apt, 12mo vs prev 12mo)
+            cur.execute("""
+                SELECT area_key, yoy_growth_pct, avg_price, deals
+                FROM mv_area_12m_summary
+                WHERE deal_type='sale' AND property_type='apartment' AND rooms='all'
+                  AND area_key NOT IN ('all', 'dubai')
+                  AND deals >= 500
+                  AND yoy_growth_pct BETWEEN -50 AND 100
+                ORDER BY yoy_growth_pct DESC NULLS LAST, deals DESC
+                LIMIT 15
+            """)
+            out["top_price_growth"] = [dict(r) for r in cur.fetchall()]
+
+            # 2) Top-5 районов с коррекцией цен (apt, отрицательный yoy)
+            cur.execute("""
+                SELECT area_key, yoy_growth_pct, avg_price, deals
+                FROM mv_area_12m_summary
+                WHERE deal_type='sale' AND property_type='apartment' AND rooms='all'
+                  AND area_key NOT IN ('all', 'dubai')
+                  AND deals >= 500
+                  AND yoy_growth_pct < 0 AND yoy_growth_pct >= -50
+                ORDER BY yoy_growth_pct ASC NULLS LAST
+                LIMIT 10
+            """)
+            out["top_price_drop"] = [dict(r) for r in cur.fetchall()]
+
+            # 3) Top-5 районов по росту аренды
+            cur.execute("""
+                SELECT area_key, yoy_growth_pct, avg_price, deals
+                FROM mv_area_12m_summary
+                WHERE deal_type='rent' AND property_type='apartment' AND rooms='all'
+                  AND area_key NOT IN ('all', 'dubai')
+                  AND deals >= 500
+                  AND yoy_growth_pct BETWEEN -50 AND 100
+                ORDER BY yoy_growth_pct DESC NULLS LAST, deals DESC
+                LIMIT 15
+            """)
+            out["top_rent_growth"] = [dict(r) for r in cur.fetchall()]
+
+            # 4) Сводка Dubai-wide 12m: средние, объём, динамика
+            cur.execute("""
+                SELECT
+                  SUM(deals)::bigint AS sale_deals,
+                  CASE WHEN SUM(deals) > 0 THEN ROUND(SUM(avg_price*deals)/NULLIF(SUM(deals),0))
+                       ELSE NULL END AS wavg_sale,
+                  CASE WHEN SUM(deals) > 0 THEN ROUND(SUM(COALESCE(yoy_growth_pct,0)*deals)/NULLIF(SUM(deals),0)::numeric, 1)
+                       ELSE NULL END AS wavg_yoy
+                FROM mv_area_12m_summary
+                WHERE deal_type='sale' AND property_type='all' AND rooms='all'
+                  AND area_key NOT IN ('all','dubai')
+            """)
+            _s = cur.fetchone()
+            if _s and _s.get("sale_deals"):
+                out["summary_12m"] = dict(_s)
+
+            # 5) Rent summary
+            cur.execute("""
+                SELECT
+                  SUM(deals)::bigint AS rent_deals,
+                  CASE WHEN SUM(deals) > 0 THEN ROUND(SUM(avg_price*deals)/NULLIF(SUM(deals),0))
+                       ELSE NULL END AS wavg_rent,
+                  CASE WHEN SUM(deals) > 0 THEN ROUND(SUM(COALESCE(yoy_growth_pct,0)*deals)/NULLIF(SUM(deals),0)::numeric, 1)
+                       ELSE NULL END AS wavg_rent_yoy
+                FROM mv_area_12m_summary
+                WHERE deal_type='rent' AND property_type='apartment' AND rooms='all'
+                  AND area_key NOT IN ('all','dubai')
+            """)
+            _r = cur.fetchone()
+            if _r and _r.get("rent_deals"):
+                if out["summary_12m"]:
+                    out["summary_12m"].update(dict(_r))
+                else:
+                    out["summary_12m"] = dict(_r)
+    except Exception as _e:
+        print("B066_DYNAMICS_ERROR:", repr(_e))
+    return out
+
+
+def _build_dynamics_report(scope, name):
+    """B066: компактный Dynamics-отчёт. Заменяет 360-breakdown в report_kind='period'."""
+    br = _b066_dynamics_breakdowns(scope, name)
+    if not (br.get("top_price_growth") or br.get("top_rent_growth") or br.get("summary_12m")):
+        return ""
+
+    parts = ["\n\n📈 <b>Что изменилось за год</b>\n"]
+
+    # Сводка Dubai
+    _sum = br.get("summary_12m") or {}
+    if _sum:
+        if _sum.get("wavg_sale") and _sum.get("wavg_yoy") is not None:
+            _yoy = float(_sum["wavg_yoy"] or 0)
+            _sign = "+" if _yoy > 0 else ""
+            parts.append(
+                f"💰 <b>Sale рынок:</b> средняя цена <b>{_b061_money(_sum['wavg_sale'])}</b> "
+                f"· изменение <b>{_sign}{_yoy:.1f}%</b> за год"
+            )
+            if _sum.get("sale_deals"):
+                parts.append(f"   {format_int(int(_sum['sale_deals']))} сделок за период")
+        if _sum.get("wavg_rent") and _sum.get("wavg_rent_yoy") is not None:
+            _ryoy = float(_sum["wavg_rent_yoy"] or 0)
+            _rsign = "+" if _ryoy > 0 else ""
+            parts.append(
+                f"\n🏘 <b>Аренда:</b> средняя <b>{_b061_money(_sum['wavg_rent'])}/год</b> "
+                f"· изменение <b>{_rsign}{_ryoy:.1f}%</b> за год"
+            )
+            if _sum.get("rent_deals"):
+                parts.append(f"   {format_int(int(_sum['rent_deals']))} контрактов за период")
+
+    # Топ-5 районов по росту цен (после брендирования + dedup)
+    if br.get("top_price_growth"):
+        _seen = set()
+        _picked = []
+        for r in br["top_price_growth"]:
+            _brand = _b065_brand_area(r.get("area_key"))
+            if _brand in _seen:
+                continue
+            _seen.add(_brand)
+            _picked.append((_brand, r))
+            if len(_picked) >= 5:
+                break
+        if _picked:
+            parts.append("\n🚀 <b>Топ районов по росту цен продажи:</b>")
+            for i, (_brand, r) in enumerate(_picked, 1):
+                _y = float(r.get("yoy_growth_pct") or 0)
+                _p = _b061_money(r.get("avg_price"))
+                _details = f"+{_y:.1f}%" if _y > 0 else f"{_y:.1f}%"
+                if _p:
+                    _details += f" · сейчас {_p}"
+                parts.append(f"   {i}. <b>{_brand}</b> — {_details}")
+
+    # Топ-5 районов с коррекцией
+    if br.get("top_price_drop"):
+        _seen = set()
+        _picked = []
+        for r in br["top_price_drop"]:
+            _brand = _b065_brand_area(r.get("area_key"))
+            if _brand in _seen:
+                continue
+            _seen.add(_brand)
+            _picked.append((_brand, r))
+            if len(_picked) >= 3:
+                break
+        if _picked:
+            parts.append("\n📉 <b>Где цены откатились:</b>")
+            for i, (_brand, r) in enumerate(_picked, 1):
+                _y = float(r.get("yoy_growth_pct") or 0)
+                parts.append(f"   {i}. <b>{_brand}</b> — {_y:.1f}%")
+
+    # Топ-5 районов по росту аренды
+    if br.get("top_rent_growth"):
+        _seen = set()
+        _picked = []
+        for r in br["top_rent_growth"]:
+            _brand = _b065_brand_area(r.get("area_key"))
+            if _brand in _seen:
+                continue
+            _seen.add(_brand)
+            _picked.append((_brand, r))
+            if len(_picked) >= 5:
+                break
+        if _picked:
+            parts.append("\n🏘 <b>Топ районов по росту аренды:</b>")
+            for i, (_brand, r) in enumerate(_picked, 1):
+                _y = float(r.get("yoy_growth_pct") or 0)
+                _p = _b061_money(r.get("avg_price"))
+                _details = f"+{_y:.1f}%" if _y > 0 else f"{_y:.1f}%"
+                if _p:
+                    _details += f" · сейчас {_p}/год"
+                parts.append(f"   {i}. <b>{_brand}</b> — {_details}")
+
+    parts.append("\n💡 <i>Хочешь детальный отчёт по конкретному району — выбери район в меню.</i>")
+    parts.append("\n<i>Vadim Realty · RERA BRN 65011</i>")
+    return "\n".join(parts)
+
+
 def _b063_dubai_breakdowns(scope, name):
     """Return dict with: rooms_breakdown, top_areas_by_deals, top_areas_by_yield, rent_summary.
     Read from mv_area_12m_summary. Defensive: returns {} on any error.
@@ -15699,6 +15891,14 @@ def _b065_brand_area(raw):
 
 # Override the function used by send_full_report / send_period_report / etc.
 def _build_360_conclusion(row, scope=None, name=None, report_kind=None):  # noqa: F811
+    # B066: для отчёта Динамика возвращаем dynamics-only breakdown, не 360.
+    try:
+        if (report_kind or "").lower() == "period":
+            _dyn = _build_dynamics_report(scope, name)
+            if _dyn:
+                return _dyn
+    except Exception as _de:
+        print("BUILD_DYNAMICS_ERROR:", repr(_de))
     try:
         base = _build_360_conclusion_compact(row, scope, name, report_kind)
         # B063: добавляем breakdowns для Dubai-wide и area scope
