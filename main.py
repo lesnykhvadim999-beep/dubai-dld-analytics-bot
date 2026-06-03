@@ -1082,6 +1082,16 @@ def report_menu(user_id):
         [tr(user_id, "back"), tr(user_id, "main")],
     ])
 
+
+def no_data_menu(user_id):
+    """v200: компактное меню для экрана 'нет данных'.
+    Показываем только два релевантных действия — изменить фильтр (Назад) и Главное меню.
+    Прячем Аналитику/PDF/Заявку и т.п., потому что без данных они бесполезны и сбивают пользователя.
+    """
+    return kb([
+        [tr(user_id, "back"), tr(user_id, "main")],
+    ])
+
 def ranking_menu(user_id):
     return kb([
         ["🏢 Здания", "🏙 Районы"],
@@ -4246,7 +4256,7 @@ async def send_full_report(message, scope, name=None, prop=None, period=None, de
                                       "period": period, "deal_type": deal_type},
                         outcome="empty", result_count=0)
         except Exception: pass
-        await message.answer(no_data_message(title_prefix, scope=scope, name=name, prop=prop, period=period, deal_type=deal_type, user_id=user_id), reply_markup=report_menu(user_id) if scope in ["building", "area"] else main_menu(user_id))
+        await message.answer(no_data_message(title_prefix, scope=scope, name=name, prop=prop, period=period, deal_type=deal_type, user_id=user_id), reply_markup=no_data_menu(user_id) if scope in ["building", "area"] else main_menu(user_id))
         return
 
     title = _human_report_title(scope, name, title_prefix)
@@ -4282,7 +4292,7 @@ async def send_period_report(message, scope, name=None, prop=None, period=None, 
         await message.answer(
             no_data_message("Сравнение периодов", scope=scope, name=name,
                              prop=prop, period=period, deal_type=deal_type, user_id=user_id),
-            reply_markup=report_menu(user_id) if scope in ["building", "area"] else main_menu(user_id)
+            reply_markup=no_data_menu(user_id) if scope in ["building", "area"] else main_menu(user_id)
         )
         return
     current, previous = comparison
@@ -4313,14 +4323,14 @@ async def send_deals_report(message, scope, name=None, prop=None, period=None, d
         await message.answer(
             no_data_message("Последние сделки", scope=scope, name=name,
                              prop=prop, period=period, deal_type=deal_type, user_id=user_id),
-            reply_markup=report_menu(user_id) if scope in ["building", "area"] else main_menu(user_id)
+            reply_markup=no_data_menu(user_id) if scope in ["building", "area"] else main_menu(user_id)
         )
         return
     if not rows:
         await message.answer(
             no_data_message("Последние сделки", scope=scope, name=name,
                              prop=prop, period=period, deal_type=deal_type, user_id=user_id),
-            reply_markup=report_menu(user_id) if scope in ["building", "area"] else main_menu(user_id)
+            reply_markup=no_data_menu(user_id) if scope in ["building", "area"] else main_menu(user_id)
         )
         return
     title = _human_report_title(scope, name, "Последние сделки")
@@ -9676,7 +9686,7 @@ async def send_full_report(message, scope, name=None, prop=None, period=None, de
     try:
         row, used_prop, used_period, used_deal_type = get_stats_smart(scope, name, prop, period, deal_type)
         if not row or not _int(row.get("deals")):
-            await message.answer(no_data_message(title_prefix, scope=scope, name=name, prop=prop, period=period, deal_type=deal_type, user_id=user_id), reply_markup=report_menu(user_id) if scope in ["building", "area"] else main_menu(user_id))
+            await message.answer(no_data_message(title_prefix, scope=scope, name=name, prop=prop, period=period, deal_type=deal_type, user_id=user_id), reply_markup=no_data_menu(user_id) if scope in ["building", "area"] else main_menu(user_id))
             return
 
         title = _human_report_title(scope, name, title_prefix)
@@ -9697,7 +9707,7 @@ async def send_full_report(message, scope, name=None, prop=None, period=None, de
         await message.answer(html, reply_markup=_final_actions_menu(user_id, scope))
     except Exception as e:
         print("SEND_FULL_REPORT_V83_ERROR:", repr(e), "scope=", scope, "name=", name, "prop=", prop, "period=", period, "deal_type=", deal_type)
-        await message.answer(no_data_message(title_prefix, scope=scope, name=name, prop=prop, period=period, deal_type=deal_type, user_id=user_id), reply_markup=report_menu(user_id) if scope in ["building", "area"] else main_menu(user_id))
+        await message.answer(no_data_message(title_prefix, scope=scope, name=name, prop=prop, period=period, deal_type=deal_type, user_id=user_id), reply_markup=no_data_menu(user_id) if scope in ["building", "area"] else main_menu(user_id))
 
 print("Loaded v83 report scenario safe fix only")
 
@@ -11763,19 +11773,19 @@ async def send_period_report(message, scope, name=None, prop=None, period=None, 
         await message.answer(
             no_data_message('Сравнение периодов', scope=scope, name=name,
                              prop=prop, period=period, deal_type=deal_type, user_id=user_id),
-            reply_markup=report_menu(user_id) if scope in ['building', 'area'] else main_menu(user_id)
+            reply_markup=no_data_menu(user_id) if scope in ['building', 'area'] else main_menu(user_id)
         )
         return
     if not comparison:
         await message.answer(
             no_data_message('Сравнение периодов', scope=scope, name=name,
                              prop=prop, period=period, deal_type=deal_type, user_id=user_id),
-            reply_markup=report_menu(user_id) if scope in ['building', 'area'] else main_menu(user_id)
+            reply_markup=no_data_menu(user_id) if scope in ['building', 'area'] else main_menu(user_id)
         )
         return
     current, previous = comparison
     if not current or not previous or not _int(current.get('deals')) or not _int(previous.get('deals')):
-        await message.answer(no_data_message('Сравнение периодов', scope=scope, name=name, prop=prop, period=period, deal_type=deal_type, user_id=user_id), reply_markup=report_menu(user_id) if scope in ['building', 'area'] else main_menu(user_id))
+        await message.answer(no_data_message('Сравнение периодов', scope=scope, name=name, prop=prop, period=period, deal_type=deal_type, user_id=user_id), reply_markup=no_data_menu(user_id) if scope in ['building', 'area'] else main_menu(user_id))
         return
     title = _human_report_title(scope, name, 'Сравнение периодов')
     html = show_comparison(f"<b>{title}</b>", current, previous, period, deal_type)
