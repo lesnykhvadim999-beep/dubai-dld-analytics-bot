@@ -3860,15 +3860,45 @@ async def language_handler(message: Message):
 # Главное правило: на каждом экране только те кнопки, которые имеют смысл в текущем шаге.
 # =========================
 
-def main_menu(user_id):
-    """v72 + Layla UX: 4 ряда. Топ-сценарии наверху. Локализованные кнопки (B052).
-    PHASE BM Layer 13: добавлен ряд "🔮 Прогноз рынка"."""
+def legacy_main_menu_keyboard(user_id):
+    """PHASE BN N1 legacy: предыдущее главное меню (5 рядов с Прогнозом рынка).
+    Сохранено для backward compat — некоторые users могли захардкодить эти кнопки
+    в saved keyboards. Все handlers по-прежнему работают, callbacks те же.
+    Текущий main_menu() ниже — компактный (4 ряда core + ⚡ Pro)."""
     return kb([
         [tr(user_id, "m_smart_pick"), tr(user_id, "m_best_obj")],
         [tr(user_id, "m_area"), tr(user_id, "m_building")],
         [tr(user_id, "m_dubai"), tr(user_id, "m_deals")],
         [tr(user_id, "m_ratings"), tr(user_id, "m_compare")],
         ["🔮 Прогноз рынка"],
+    ])
+
+
+def main_menu(user_id):
+    """PHASE BN N1: упрощённое главное меню = только core функции.
+    Advanced (forecast, causal, compare-format, ratings) — под ⚡ Pro кнопкой.
+    Старые названия (m_compare, m_ratings) остались как handlers в pro_menu,
+    callback patterns не сломаны."""
+    return kb([
+        [tr(user_id, "m_smart_pick"), tr(user_id, "m_best_obj")],
+        [tr(user_id, "m_area"), tr(user_id, "m_building")],
+        [tr(user_id, "m_dubai"), tr(user_id, "m_deals")],
+        ["⚡ Pro / 🌟 Супер-фишки"],
+    ])
+
+
+def pro_menu(user_id):
+    """PHASE BN N1: подменю Pro features.
+    Advanced инструменты не в главном меню, но в одном клике.
+    Все кнопки используют существующие text-handlers (m_ratings,
+    m_compare, 🔮 Прогноз рынка, 📊 Причинно-следственный анализ) — никакие
+    handlers не дублируются и не ломаются."""
+    causal_btn = "📊 Causal analysis" if (user_languages.get(user_id, "ru") == "en") else "📊 Причинно-следственный анализ"
+    return kb([
+        [tr(user_id, "m_ratings"), tr(user_id, "m_compare")],
+        ["🔮 Прогноз рынка"],
+        [causal_btn],
+        [tr(user_id, "main")],
     ])
 
 
@@ -4489,6 +4519,19 @@ async def main_handler(message: Message):
             return
         if text in ["💼 Заявка", "💼 Консультация"]:
             await handle_consultation_request(message)
+            return
+        # PHASE BN N1: open Pro submenu
+        if text == "⚡ Pro / 🌟 Супер-фишки":
+            user_states[user_id] = {"step": "pro_menu", "history": []}
+            await message.answer(
+                "⚡ <b>Pro features — продвинутая аналитика и AI-инструменты</b>\n\n"
+                "• 📊 Рейтинги — топ зданий/районов\n"
+                "• ⚖️ Сравнение форматов — apt vs villa и т.п.\n"
+                "• 🔮 Прогноз рынка — Market World Model\n"
+                "• 📊 Causal analysis — причинно-следственный анализ\n\n"
+                "<i>Vadim Realty (RERA BRN 65011)</i>",
+                reply_markup=pro_menu(user_id),
+            )
             return
 
         # После готового отчёта показываем только действия результата.
