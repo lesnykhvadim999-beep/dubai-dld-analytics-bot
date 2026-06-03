@@ -11802,6 +11802,7 @@ def show_smart_recommendation(goal, budget, timing, risk, rows):
 
     if len(rows) > 1:
         text += "\n\n🥈 <b>Альтернативы:</b>\n"
+        _max_yield_pick = None  # B060: "купить дешевле и зарабатывать больше %"
         for i, r in enumerate(rows[1:4], 2):  # max 3 alternatives
             r_avg = r.get('avg_price') or 0
             # FIX (REALISTIC_YIELD): берём AVG yield, не TOP — top это нереалистичный
@@ -11827,6 +11828,46 @@ def show_smart_recommendation(goal, budget, timing, risk, rows):
             except Exception:
                 pass
             text += f"{i}. <b>{r.get('area')}</b> — {_smart_human_compact_money(r_avg)}{extra}\n"
+
+            # B060: запоминаем альтернативу, которая дешевле + yield выше топа.
+            try:
+                if (avg_price and r_avg and float(r_avg) <= float(avg_price) * 0.85
+                        and r_yield and yield_top
+                        and float(r_yield) >= float(yield_top) + 1.0
+                        and 3.0 <= float(r_yield) <= 12.0):
+                    _cur_score = (float(yield_top or 0) - float(r_yield)) * 0
+                    _candidate = {
+                        'area': r.get('area'),
+                        'avg': float(r_avg),
+                        'yield': float(r_yield),
+                        'save_pct': int((1 - float(r_avg) / float(avg_price)) * 100),
+                        'yield_diff': float(r_yield) - float(yield_top),
+                    }
+                    if (not _max_yield_pick) or _candidate['yield'] > _max_yield_pick['yield']:
+                        _max_yield_pick = _candidate
+            except Exception:
+                pass
+
+        # B060: callout — "можно купить дешевле и зарабатывать в % больше".
+        if _max_yield_pick:
+            try:
+                _alt_income = _max_yield_pick['avg'] * _max_yield_pick['yield'] / 100.0
+                _top_income = float(avg_price or 0) * float(yield_top or 0) / 100.0
+                _income_hint = ""
+                if _top_income and _alt_income:
+                    if _alt_income >= _top_income * 0.95:
+                        _income_hint = " — годовой доход примерно тот же, но вложений меньше"
+                    elif _alt_income >= _top_income * 0.80:
+                        _income_hint = " — доход чуть ниже, но % на капитал выше"
+                text += (
+                    f"\n💎 <b>Хочешь максимальный yield?</b> "
+                    f"<b>{_max_yield_pick['area']}</b> дешевле на ~{_max_yield_pick['save_pct']}% "
+                    f"и yield выше на ~{_max_yield_pick['yield_diff']:.1f} п.п. "
+                    f"(~{_max_yield_pick['yield']:.1f}% против ~{float(yield_top):.1f}%)"
+                    f"{_income_hint}.\n"
+                )
+            except Exception:
+                pass
 
     # SMART_PICK_HUMAN: Compact footer.
     try:
