@@ -11673,7 +11673,8 @@ def show_smart_recommendation(goal, budget, timing, risk, rows):
     deals = best.get('deals') or 0
     avg_price = best.get('avg_price') or 0
     avg_meter = best.get('avg_meter') or 0
-    yield_top = best.get('top_rental_yield_pct') or best.get('avg_rental_yield_pct') or 0
+    # FIX (REALISTIC_YIELD): AVG, не TOP — top это аномалии (17-18%) от пиковых сделок.
+    yield_top = best.get('avg_rental_yield_pct') or 0
 
     # FIX (RENT_YIELD): avg_rent теперь читается напрямую из mv_area_12m_summary
     # (apartment rent 12mo), а не как avg_price × yield_top (что давало завышенную
@@ -11770,14 +11771,25 @@ def show_smart_recommendation(goal, budget, timing, risk, rows):
         text += "\n\n🥈 <b>Альтернативы:</b>\n"
         for i, r in enumerate(rows[1:4], 2):  # max 3 alternatives
             r_avg = r.get('avg_price') or 0
-            r_yield = r.get('top_rental_yield_pct') or r.get('avg_rental_yield_pct') or 0
+            # FIX (REALISTIC_YIELD): берём AVG yield, не TOP — top это нереалистичный
+            # пик (17-18%) от выбросов. Если есть apt rent MV — пересчитываем напрямую.
+            r_yield = r.get('avg_rental_yield_pct') or 0
+            try:
+                _r_rent_info = _smart_fetch_area_rent_12m(r.get('area'))
+                if _r_rent_info and _r_rent_info.get('avg_rent'):
+                    _r_apt_price = _r_rent_info.get('sale_avg_price_apt') or r_avg
+                    if _r_apt_price:
+                        r_yield = round(float(_r_rent_info['avg_rent']) / float(_r_apt_price) * 100.0, 1)
+            except Exception:
+                pass
             extra = ""
             try:
                 if avg_price and r_avg and r_avg > avg_price * 1.05:
                     extra = f", премия за локацию +{int((r_avg/avg_price-1)*100)}%"
                 elif avg_price and r_avg and r_avg < avg_price * 0.95:
                     extra = f", дешевле на ~{int((1-r_avg/avg_price)*100)}%"
-                if r_yield and float(r_yield) >= 6.5:
+                # Realistic apartment yield: 4-9% — выше скрываем как недостоверное.
+                if r_yield and 3.0 <= float(r_yield) <= 12.0:
                     extra += f", yield ~{float(r_yield):.1f}%"
             except Exception:
                 pass
