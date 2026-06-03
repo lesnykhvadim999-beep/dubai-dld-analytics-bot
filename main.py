@@ -15324,6 +15324,179 @@ async def _causal_analysis_btn(message):
     await message.answer(text[:4000])
 
 
+# =========================================================================
+# B061: COMPACT HUMAN 360-SUMMARY (override of _build_360_conclusion)
+# =========================================================================
+# Раньше выдавал ~10 абзацев академического текста с "нет данных" в
+# пустых полях. Юзер хочет 6-8 строк: сколько сделок / самая выгодная
+# категория / средняя цена / рост / yield / цена входа.
+try:
+    _B061_ORIG_BUILD_360 = _build_360_conclusion
+except NameError:
+    _B061_ORIG_BUILD_360 = None
+
+
+def _b061_money(v):
+    try:
+        v = float(v or 0)
+    except Exception:
+        return None
+    if not v:
+        return None
+    if v >= 1_000_000:
+        return f"{v/1_000_000:.2f} млн AED".replace('.', ',')
+    if v >= 1_000:
+        return f"{int(round(v/1_000))} тыс AED"
+    return f"{int(round(v))} AED"
+
+
+def _b061_collect_comparison(scope, name):
+    try:
+        rows, _notes = _v90_collect_format_comparison(
+            scope=scope or 'dubai', area=name if scope == 'area' else None,
+            budget=None, goal=None, period='12',
+        )
+        return rows or []
+    except Exception:
+        return []
+
+
+def _build_360_conclusion_compact(row, scope=None, name=None, report_kind=None):
+    """Короткое человечное резюме (5-8 строк) вместо длинного академического."""
+    if not row:
+        return ""
+    try:
+        deals = int(row.get("deals") or 0)
+    except Exception:
+        deals = 0
+    if not deals:
+        return ""
+
+    try:
+        avg_price = float(row.get("avg_price") or 0)
+    except Exception:
+        avg_price = 0
+    try:
+        avg_meter = float(row.get("avg_meter") or 0)
+    except Exception:
+        avg_meter = 0
+    # B061: fallback на top_quartile_psf × SQFT_TO_M2 если avg_meter пустой
+    if not avg_meter:
+        try:
+            psf = float(row.get("top_quartile_psf") or row.get("avg_price_psf") or 0)
+            if psf:
+                avg_meter = psf * float(globals().get("SQFT_TO_M2", 10.7639))
+        except Exception:
+            pass
+
+    try:
+        yoy = float(row.get("yoy_growth_top_pct") or row.get("yoy_growth_pct") or 0)
+    except Exception:
+        yoy = 0
+    try:
+        yld_avg = float(row.get("avg_rental_yield_pct") or 0)
+    except Exception:
+        yld_avg = 0
+
+    # Самая выгодная категория из comparison
+    cmp_rows = _b061_collect_comparison(scope, name)
+    best_format = None
+    villa = None
+    for r in (cmp_rows or []):
+        fmt = (r.get('format') or '').strip()
+        try:
+            _r_deals = int(r.get('deals') or 0)
+        except Exception:
+            _r_deals = 0
+        if _r_deals < 50:
+            continue
+        try:
+            _r_score = float(r.get('score') or 0)
+        except Exception:
+            _r_score = 0
+        if 'апарт' in fmt.lower() or 'apart' in fmt.lower():
+            if not best_format or _r_score > float(best_format.get('score') or 0):
+                best_format = r
+        if 'вилл' in fmt.lower() or 'villa' in fmt.lower():
+            villa = r
+
+    liquidity = "очень высокая" if deals >= 5000 else ("высокая" if deals >= 1000 else ("средняя" if deals >= 200 else "низкая"))
+
+    parts = ["\n\n🧠 <b>Что важно знать</b>\n"]
+    parts.append(f"📊 Сделок за период: <b>{format_int(deals)}</b>")
+    if avg_price:
+        parts.append(f"💰 Средняя цена: <b>{_b061_money(avg_price) or '—'}</b>")
+    if avg_meter:
+        parts.append(f"📐 За м²: <b>~{_b061_money(avg_meter) or '—'}</b>")
+    if yoy:
+        sign = "+" if yoy > 0 else ""
+        parts.append(f"📈 Динамика: <b>{sign}{yoy:.1f}%</b> YoY")
+    parts.append(f"⚡ Ликвидность: <b>{liquidity}</b>")
+
+    if best_format:
+        try:
+            _bf_deals = int(best_format.get('deals') or 0)
+            _bf_price = _b061_money(best_format.get('avg_price'))
+            _bf_yield = best_format.get('yield_pct') or best_format.get('rental_yield_pct') or 0
+            _line = f"\n🥇 <b>Самая выгодная категория:</b> Апартаменты"
+            _details = []
+            _details.append(f"{format_int(_bf_deals)} сделок")
+            if _bf_price:
+                _details.append(f"avg {_bf_price}")
+            try:
+                _y = float(_bf_yield or 0)
+                if 3 <= _y <= 12:
+                    _details.append(f"доходность {_y:.1f}%")
+            except Exception:
+                pass
+            if _details:
+                _line += f"\n   {' · '.join(_details)}"
+            parts.append(_line)
+        except Exception:
+            pass
+
+    if villa:
+        try:
+            _v_deals = int(villa.get('deals') or 0)
+            _v_price = _b061_money(villa.get('avg_price'))
+            if _v_deals and _v_price:
+                parts.append(f"🏡 Виллы: {format_int(_v_deals)} сделок · avg {_v_price}")
+        except Exception:
+            pass
+
+    # Цена входа
+    try:
+        if avg_price:
+            _low = avg_price * 0.90
+            _high = avg_price * 0.95
+            parts.append(
+                f"\n✅ <b>Цена входа:</b> {_b061_money(_low)} — {_b061_money(_high)}"
+                f"\n   <i>выше — нужно обоснование (вид, этаж, ремонт)</i>"
+            )
+    except Exception:
+        pass
+
+    parts.append("\n<i>Vadim Realty · RERA BRN 65011</i>")
+    return "\n".join(parts)
+
+
+# Override the function used by send_full_report / send_period_report / etc.
+def _build_360_conclusion(row, scope=None, name=None, report_kind=None):  # noqa: F811
+    try:
+        return _build_360_conclusion_compact(row, scope, name, report_kind)
+    except Exception as _e:
+        print("BUILD_360_COMPACT_ERROR:", repr(_e))
+        if _B061_ORIG_BUILD_360:
+            try:
+                return _B061_ORIG_BUILD_360(row, scope, name, report_kind)
+            except Exception:
+                pass
+        return ""
+
+
+print("Loaded B061 compact 360-summary override")
+
+
 if __name__ == "__main__":
     # Boot-time ecosystem contract verification (fail-soft unless STRICT_CONTRACTS=1).
     try:
