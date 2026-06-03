@@ -64,6 +64,111 @@ except Exception as _ir_import_error:
 
 load_dotenv()
 
+# ── Phase BL: behavior tracking (best-effort) ────────────────────────────────
+_BT_OK = False
+try:
+    import sys as _bt_sys, os as _bt_os
+    for _bt_p in ("/app/shared", r"C:\Projects\shared", "../shared"):
+        if _bt_os.path.isdir(_bt_p) and _bt_p not in _bt_sys.path:
+            _bt_sys.path.insert(0, _bt_p)
+    from behavior_tracking import (
+        log_interaction as _bt_log,
+        feedback_kb as _bt_feedback_kb,
+        is_enabled as _bt_is_enabled,
+        is_feedback_enabled as _bt_fb_enabled,
+        ensure_schema as _bt_ensure_schema,
+    )
+    from behavior_tracking.feedback import (
+        parse_callback as _bt_parse_cb,
+        record_feedback as _bt_record_fb,
+    )
+    try: _bt_ensure_schema()
+    except Exception: pass
+    _BT_OK = bool(_bt_is_enabled())
+    print(f"[behavior_tracking] analytics init enabled={_BT_OK} fb={_bt_fb_enabled()}", flush=True)
+except Exception as _bt_e:
+    print(f"[behavior_tracking] analytics init failed: {_bt_e}", flush=True)
+    def _bt_log(**kw): return None
+    def _bt_feedback_kb(*a, **kw): return None
+    def _bt_is_enabled(): return False
+    def _bt_fb_enabled(): return False
+    def _bt_parse_cb(*a, **kw): return None
+    def _bt_record_fb(*a, **kw): return None
+
+# Phase BM (Layer 9 + Layer 10) — long-term user memory + proactive agent
+_BM_OK = False
+try:
+    import sys as _bm_sys, os as _bm_os
+    for _bm_p in ("/app", r"C:\Projects", "../"):
+        if _bm_os.path.isdir(_bm_p) and _bm_p not in _bm_sys.path:
+            _bm_sys.path.insert(0, _bm_p)
+    from shared.user_memory.integration import (
+        enrich_context as _bm_enrich_context,
+        record_turn as _bm_record_turn,
+    )
+    from shared.proactive_agent import (
+        register_trigger as _bm_register_trigger,
+        handle_opt_out_callback as _bm_opt_out_cb,
+        OPT_OUT_CALLBACK_PREFIX as _BM_OPT_OUT_PREFIX,
+    )
+    _BM_OK = True
+    print("[phase_bm] analytics init OK", flush=True)
+except Exception as _bm_e:
+    print(f"[phase_bm] analytics init failed: {_bm_e}", flush=True)
+    def _bm_enrich_context(*a, **kw): return ""
+    def _bm_record_turn(*a, **kw): return None
+    def _bm_register_trigger(*a, **kw): return None
+    def _bm_opt_out_cb(*a, **kw): return (False, "")
+    _BM_OPT_OUT_PREFIX = "pa_optout_"
+
+
+# Phase BM master cron — единый scheduler для агентов G/H/I/J/K/L.
+# Запускается только в analytics (numReplicas=1 в railway.toml) чтобы избежать
+# дубликатов. В resale/hub (numReplicas=2) PHASE_BM_CRON_DISABLED=1 в env.
+try:
+    if os.environ.get("PHASE_BM_CRON_DISABLED") != "1":
+        from shared.scripts.phase_bm_master_cron import start_thread as _bm_cron_start
+        _bm_cron_start()
+except Exception as _bm_cron_err:
+    print(f"[phase_bm_cron] master scheduler init failed: {_bm_cron_err}",
+          flush=True)
+
+
+def _bm_safe_record_turn(user_id, language=None, last_user_text=None):
+    if not _BM_OK or not user_id:
+        return
+    try:
+        _bm_record_turn(int(user_id),
+                        bot_name="dubai-dld-analytics-bot",
+                        language=language, last_user_text=last_user_text)
+    except Exception:
+        pass
+
+
+def _bm_safe_enrich(user_id, query, language=None):
+    if not _BM_OK or not user_id:
+        return ""
+    try:
+        return _bm_enrich_context(int(user_id), query or "",
+                                  bot_name="dubai-dld-analytics-bot",
+                                  language=language) or ""
+    except Exception:
+        return ""
+
+
+def _bm_is_opt_out_callback(data):
+    return bool(data and str(data).startswith(_BM_OPT_OUT_PREFIX))
+
+
+def _bm_handle_opt_out(data, user_id):
+    if not _BM_OK:
+        return (False, "")
+    try:
+        return _bm_opt_out_cb(data, int(user_id),
+                              "dubai-dld-analytics-bot")
+    except Exception:
+        return (False, "")
+
 # FSST: callback dedup + stale button middleware + health server
 try:
     from fsst_core import (
@@ -1059,6 +1164,15 @@ def split_words(query):
 
 def area_alias_values(query):
     q = clean_query(query).lower()
+    # Level 5 KG read-through with hardcoded fallback (hot-path safe, cached 5min).
+    try:
+        from shared.knowledge_graph.integration import resolve_aliases as _kg_resolve  # type: ignore
+        kg_hit = _kg_resolve(q, category="area_alias",
+                              legacy_map=AREA_ALIASES, default=None)
+        if kg_hit:
+            return kg_hit
+    except Exception:
+        pass
     return AREA_ALIASES.get(q, [clean_query(query)])
 
 
@@ -1122,6 +1236,16 @@ def normalize_search_text(value):
 
 def smart_query_tokens(query):
     q = normalize_search_text(query)
+    # Level 5 KG read-through (timeout 100ms, falls back to hardcoded BUILDING_ALIASES).
+    # If KG is unavailable or empty, returns the legacy mapping unchanged.
+    try:
+        from shared.knowledge_graph.integration import resolve_aliases as _kg_resolve  # type: ignore
+        kg_hit = _kg_resolve(q, category="building_alias",
+                              legacy_map=BUILDING_ALIASES, default=None)
+        if kg_hit:
+            return kg_hit
+    except Exception:
+        pass
     if q in BUILDING_ALIASES:
         return BUILDING_ALIASES[q]
 
@@ -3582,6 +3706,37 @@ async def cmd_menu_global(message: Message):
     await message.answer(tr(user_id, "main_menu"), reply_markup=main_menu(user_id))
 
 
+# ── Layer 11: Causal Reasoning — /why <area or free text> ─────────────────
+@dp.message(Command("why"))
+async def cmd_why_causal(message: Message):
+    """🧠 Объяснить тренд / почему такая цена / ROI / спрос.
+    Пример: /why Marina rent down  |  /why почему ROI JVC упал"""
+    user_id = message.from_user.id
+    lang = user_languages.get(user_id, "en")
+    text = (message.text or "").split(maxsplit=1)
+    q = text[1] if len(text) > 1 else (
+        "Объясни текущий тренд рынка Dubai" if lang == "ru"
+        else "Explain current Dubai market trend"
+    )
+    try:
+        import sys as _sys
+        if r"C:\Projects" not in _sys.path:
+            _sys.path.insert(0, r"C:\Projects")
+        from shared.causal_engine import explain, format_chain  # type: ignore
+        # crude area detection
+        area = None
+        for a in ["Marina","Downtown","JVC","Business Bay","Palm","Dubailand","Hills"]:
+            if a.lower() in q.lower():
+                area = a; break
+        chain = explain(q, {"area": area or "Dubai"},
+                        user_id=user_id, bot_source="analytics")
+        await message.answer(format_chain(chain, lang=lang), parse_mode=ParseMode.MARKDOWN)
+    except Exception as e:
+        print(f"[analytics][why] failed: {e}", flush=True)
+        await message.answer("🧠 Анализ временно недоступен." if lang == "ru"
+                             else "🧠 Analysis temporarily unavailable.")
+
+
 @dp.message(Command("cancel"))
 async def cmd_cancel_global(message: Message):
     """v134 UX: /cancel — отмена текущего wizard/сценария + главное меню."""
@@ -3706,12 +3861,14 @@ async def language_handler(message: Message):
 # =========================
 
 def main_menu(user_id):
-    """v72 + Layla UX: 4 ряда. Топ-сценарии наверху. Локализованные кнопки (B052)."""
+    """v72 + Layla UX: 4 ряда. Топ-сценарии наверху. Локализованные кнопки (B052).
+    PHASE BM Layer 13: добавлен ряд "🔮 Прогноз рынка"."""
     return kb([
         [tr(user_id, "m_smart_pick"), tr(user_id, "m_best_obj")],
         [tr(user_id, "m_area"), tr(user_id, "m_building")],
         [tr(user_id, "m_dubai"), tr(user_id, "m_deals")],
         [tr(user_id, "m_ratings"), tr(user_id, "m_compare")],
+        ["🔮 Прогноз рынка"],
     ])
 
 
@@ -4015,6 +4172,14 @@ async def send_full_report(message, scope, name=None, prop=None, period=None, de
     await send_processing(message)
     row, used_prop, used_period, used_deal_type = get_stats_smart(scope, name, prop, period, deal_type)
     if not row or not _int(row.get("deals")):
+        try:
+            if _BT_OK:
+                _bt_log(bot_name="analytics", user_id=user_id,
+                        query_type="full_report",
+                        query_params={"scope": scope, "name": name, "prop": prop,
+                                      "period": period, "deal_type": deal_type},
+                        outcome="empty", result_count=0)
+        except Exception: pass
         await message.answer(no_data_message(title_prefix, scope=scope, name=name, prop=prop, period=period, deal_type=deal_type, user_id=user_id), reply_markup=report_menu(user_id) if scope in ["building", "area"] else main_menu(user_id))
         return
 
@@ -4025,6 +4190,21 @@ async def send_full_report(message, scope, name=None, prop=None, period=None, de
         html += "\n\nℹ️ По точному фильтру выборка была узкой, поэтому показана ближайшая стабильная DLD-выборка."
     set_last_report(user_id, title, html, scope)
     await message.answer(html, reply_markup=_final_actions_menu(user_id, scope))
+    try:
+        if _BT_OK:
+            _iid = _bt_log(bot_name="analytics", user_id=user_id,
+                           query_type="full_report",
+                           query_params={"scope": scope, "name": name, "prop": prop,
+                                         "period": period, "deal_type": deal_type},
+                           result_count=int(_int(row.get("deals")) or 0),
+                           outcome="success",
+                           bot_response_preview=title[:300] if title else None)
+            if _iid and _bt_fb_enabled():
+                _kb = _bt_feedback_kb(_iid, lang="ru")
+                if _kb:
+                    try: await message.answer("Полезен отчёт?", reply_markup=_kb)
+                    except Exception: pass
+    except Exception: pass
 
 
 async def send_period_report(message, scope, name=None, prop=None, period=None, deal_type=None):
@@ -4220,6 +4400,35 @@ async def main_handler(message: Message):
         pass
     state = user_states.get(user_id, {}) or {}
 
+    # Phase BL: log interaction (best-effort)
+    try:
+        if _BT_OK:
+            _mtype = "command" if text.startswith("/") else "text"
+            _qt = "analytics"
+            if text.startswith("/"):
+                _qt = text.split()[0].lstrip("/")[:32] or "command"
+            _bt_log(
+                bot_name="analytics",
+                user_id=user_id,
+                user_message=text[:500],
+                user_message_type=_mtype,
+                query_type=_qt,
+                query_params={"step": state.get("step")} if state else None,
+                language=(message.from_user.language_code or "")[:8],
+            )
+    except Exception:
+        pass
+
+    # Phase BM L9: remember turn (background, fail-open)
+    try:
+        _bm_safe_record_turn(
+            user_id,
+            language=(message.from_user.language_code or "ru")[:8],
+            last_user_text=text[:500] if text else None,
+        )
+    except Exception:
+        pass
+
     try:
         # Служебные команды — не засоряют главное меню.
         if text in ["/language", "/settings", "⚙️ Настройки", "⚙️ Язык", "⚙️ Settings", "⚙️ الإعدادات"]:
@@ -4351,6 +4560,32 @@ async def main_handler(message: Message):
         if _is_menu_btn(text, "m_dubai"):
             st = {"step": "dubai_action", "scope": "dubai", "name": None, "history": []}
             await _ask_action_menu_v72(message, st)
+            return
+        # PHASE BM Layer 13: Market World Model forecast button
+        if text == "🔮 Прогноз рынка":
+            user_states[user_id] = {"step": "mwm_forecast_query", "history": []}
+            await message.answer(
+                "🔮 <b>Прогноз рынка Дубая</b>\n\n"
+                "Напишите вопрос свободным текстом, например:\n"
+                "• <i>Что будет с Marina через 6 месяцев?</i>\n"
+                "• <i>Dubai Marina vs Business Bay</i>\n"
+                "• <i>Прогноз Downtown 12 мес</i>\n"
+                "• <i>Сценарий: Business Bay supply +30%</i>",
+                reply_markup=back_menu(user_id),
+            )
+            return
+        if state.get("step") == "mwm_forecast_query":
+            try:
+                from shared.market_world_model import api as _mwm
+                lang = "ru"
+                ans = _mwm.ask(text, lang=lang)
+                await message.answer(ans, reply_markup=main_menu(user_id))
+            except Exception as e:
+                await message.answer(
+                    f"Не удалось построить прогноз: {e}",
+                    reply_markup=main_menu(user_id),
+                )
+            user_states[user_id] = {"step": None, "history": []}
             return
         if text == "📑 Полный отчёт":
             user_states[user_id] = {"step": "full_report_menu", "history": []}
@@ -8864,6 +9099,33 @@ except Exception as _mw_err:
     print(f"[FSST] stale middleware skip: {_mw_err}")
 
 
+# Phase BM L10 — opt-out callback handler (outer middleware on callback_query)
+try:
+    from aiogram import BaseMiddleware as _BM_BaseMiddleware
+    from aiogram.types import CallbackQuery as _BM_CallbackQuery
+
+    class _BMOptOutMiddleware(_BM_BaseMiddleware):
+        async def __call__(self, handler, event, data):
+            try:
+                if isinstance(event, _BM_CallbackQuery) and \
+                        _bm_is_opt_out_callback(event.data or ""):
+                    uid = event.from_user.id if event.from_user else None
+                    ok, msg = _bm_handle_opt_out(event.data or "", uid)
+                    try:
+                        await event.answer((msg or "OK")[:200], show_alert=False)
+                    except Exception:
+                        pass
+                    return  # short-circuit
+            except Exception as _e:
+                print(f"[phase_bm] opt-out mw err: {_e}")
+            return await handler(event, data)
+
+    dp.callback_query.outer_middleware(_BMOptOutMiddleware())
+    print("[phase_bm] opt-out callback middleware registered")
+except Exception as _bm_mw_err:
+    print(f"[phase_bm] opt-out middleware skip: {_bm_mw_err}")
+
+
 def _analytics_db_ping() -> bool:
     """Lightweight DB liveness check for /health endpoint."""
     if not DATABASE_URL:
@@ -8924,6 +9186,16 @@ async def main():
         print("[contract] boot check scheduled", flush=True)
     except Exception as _cce:
         print(f"[contract] boot check skipped: {_cce!r}", flush=True)
+    # PHASE BM Layer 12: agent_bus install
+    try:
+        from agent_bus.boot_hook import install_agent_bus
+        install_agent_bus(
+            bot_name="analytics",
+            subscribes_to=["listing.priced_low", "market.shift_detected", "user.handoff_requested"],
+        )
+        print("[agent_bus] installed for analytics", flush=True)
+    except Exception as _abe:
+        print(f"[agent_bus] install skipped: {_abe!r}", flush=True)
     print("Dubai DLD Analytics Bot started")
     try:
         await bot.delete_webhook(drop_pending_updates=True)
@@ -8937,6 +9209,17 @@ async def main():
     print("[B051] Startup delay done, polling starts now.", flush=True)
     # v133: background MV refresher (mv_offplan_summary daily)
     asyncio.create_task(_mv_offplan_refresher_loop())
+
+    # PHASE BM Layer 18/20/22: multimodal + tours + background-think
+    try:
+        from phase_bm_bootstrap import wire_phase_bm
+        wire_phase_bm(dp)
+    except Exception as _e:
+        try:
+            logger.warning(f"PHASE BM wire failed: {_e}")
+        except Exception:
+            print(f"[phase_bm] wire failed: {_e!r}", flush=True)
+
     await dp.start_polling(bot)
 
 
@@ -14332,6 +14615,83 @@ try:
     print("[V150] grande 3br diagnostic complete", flush=True)
 except Exception as e:
     print(f"[V150] outer-most ERR: {e!r}", flush=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Layer 17: Causal Inference Engine (DoWhy + EconML)
+# Adds /causal_analysis command + inline button. Pure read-model — pulls
+# pre-fit ATE rows from `causal_studies`; never refits inside hot path.
+# See: shared/causal_inference/  + memory/agents/PHASE_BM_K.md
+# ─────────────────────────────────────────────────────────────────────────
+try:
+    import sys as _ci_sys, os as _ci_os
+    _ci_shared = _ci_os.path.join(_ci_os.path.dirname(__file__), "..", "shared")
+    _ci_shared = _ci_os.path.abspath(_ci_shared)
+    if _ci_shared not in _ci_sys.path:
+        _ci_sys.path.insert(0, _ci_os.path.dirname(_ci_shared))
+    from shared.causal_inference import load_study, format_effect_ru, REGISTRY as _CI_REGISTRY  # noqa: E402
+    _CAUSAL_AVAILABLE = True
+except Exception as _ci_imp_err:
+    print(f"[Layer17] causal_inference unavailable: {_ci_imp_err!r}", flush=True)
+    _CAUSAL_AVAILABLE = False
+    _CI_REGISTRY = {}
+
+
+def _ci_render_all() -> str:
+    """Render a single message with all 5 pre-fit causal studies."""
+    if not _CAUSAL_AVAILABLE:
+        return ("📊 <b>Причинно-следственный анализ</b>\n\n"
+                "Модуль временно недоступен. Попробуйте позже.")
+    lines = ["📊 <b>Причинно-следственный анализ</b>",
+             "Математические causal-эффекты на исторических данных DLD",
+             "(метод: DoWhy backdoor + EconML DoubleML).\n"]
+    found = 0
+    for name, spec in _CI_REGISTRY.items():
+        try:
+            row = load_study(name)
+            if not row:
+                continue
+            found += 1
+            label = spec.get("label_ru", name)
+            baseline = None
+            try:
+                baseline = row["model"]["frame_means"].get(row["outcome_var"])
+            except Exception:
+                baseline = None
+            sentence = format_effect_ru(row, baseline=baseline)
+            nl = row.get("natural_language")
+            block = f"<b>{found}. {label}</b>\n{sentence}"
+            if nl:
+                block += f"\n<i>{nl}</i>"
+            lines.append(block)
+        except Exception as _err:
+            lines.append(f"<b>{name}</b>: ошибка — {_err}")
+    if found == 0:
+        lines.append("Ни одно исследование ещё не посчитано. Запустите cron monthly_refresh.")
+    lines.append("\n— Vadim Realty · RERA BRN 65011")
+    return "\n\n".join(lines)
+
+
+@dp.message(Command("causal_analysis"))
+async def _causal_analysis_cmd(message):
+    try:
+        text = _ci_render_all()
+    except Exception as _err:
+        text = f"📊 Причинно-следственный анализ временно недоступен: {_err}"
+    await message.answer(text[:4000])
+
+
+# Inline button shortcut: "📊 Причинно-следственный анализ"
+@dp.message(lambda m: (m.text or "").strip() in (
+    "📊 Причинно-следственный анализ",
+    "📊 Causal analysis",
+))
+async def _causal_analysis_btn(message):
+    try:
+        text = _ci_render_all()
+    except Exception as _err:
+        text = f"📊 Причинно-следственный анализ временно недоступен: {_err}"
+    await message.answer(text[:4000])
 
 
 if __name__ == "__main__":

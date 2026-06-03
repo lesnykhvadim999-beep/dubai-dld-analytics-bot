@@ -486,6 +486,12 @@ def run_cycle():
 
 def main():
     while True:
+        # Cron heartbeat (best-effort; never blocks cycle)
+        try:
+            from auto_audit._common import record_metric
+            record_metric("cron.tick.intelligence_updater", 1.0, meta={"status": "ok"})
+        except Exception:
+            pass
         try:
             run_cycle()
         except Exception:

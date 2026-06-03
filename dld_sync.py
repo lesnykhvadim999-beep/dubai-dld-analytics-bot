@@ -183,6 +183,12 @@ def mapped_rent(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def main() -> None:
+    # Cron heartbeat (best-effort; never blocks sync)
+    try:
+        from auto_audit._common import record_metric
+        record_metric("cron.tick.dld_sync", 1.0, meta={"status": "ok"})
+    except Exception:
+        pass
     conn = psycopg2.connect(DATABASE_URL)
     cur = conn.cursor()
     ensure_table(cur)

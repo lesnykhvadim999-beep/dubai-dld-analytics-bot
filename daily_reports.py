@@ -576,6 +576,12 @@ def run_daily(max_areas: int = 150, max_buildings: int = 300):
     ensure_schema()
     started = datetime.utcnow()
     log.info(f"=== daily_reports.run_daily started at {started.isoformat()} ===")
+    # Cron heartbeat (best-effort; never blocks reports)
+    try:
+        from auto_audit._common import record_metric
+        record_metric("cron.tick.daily_reports", 1.0, meta={"status": "ok"})
+    except Exception:
+        pass
 
     # 1. Dubai-wide
     try:

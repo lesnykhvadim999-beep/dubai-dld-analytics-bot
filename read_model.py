@@ -335,7 +335,43 @@ def try_building_stats(building_name: str,
         LOG.warning("try_building_stats failed: %s", e)
         return None
 
+    # v144: LIKE fallback for building (Grande, etc.) — EXACT match misses
+    # when DLD canonical key is "grande signature residences" while user
+    # picks UI label "Grande". Fail-soft: only triggers if EXACT returned
+    # zero deals; still cached negatively if LIKE also empty.
     if not row or not row.get("deals"):
+        try:
+            sql_like = """
+                SELECT
+                    MIN(building_name_display)                                          AS building_name,
+                    MIN(area_name)                                                      AS area_name,
+                    SUM(deals_count)::int                                               AS deals,
+                    (SUM(avg_price_aed*deals_count)/NULLIF(SUM(deals_count),0))         AS avg_price,
+                    AVG(median_price_aed)                                               AS median_price,
+                    MAX(top_quartile_price_aed)                                         AS top_quartile_price,
+                    AVG(avg_price_psf)                                                  AS avg_price_psf,
+                    MAX(top_quartile_psf)                                               AS top_quartile_psf,
+                    MAX(last_deal_date)                                                 AS last_deal_date,
+                    MAX(computed_at)                                                    AS computed_at
+                FROM building_stats
+                WHERE building_key LIKE %s
+                  AND rooms = %s
+                  AND deal_type = %s
+                  AND period_month >= %s
+            """
+            with _conn().cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(sql_like, (f"%{bk}%", rm, dl, start))
+                row = cur.fetchone()
+            if row and row.get("deals"):
+                row = dict(row)
+                row["period_months"] = period_months
+                row["source"] = "read_model_like"
+                LOG.info("try_building_stats LIKE fallback hit: %s -> %s deals",
+                         bk, row.get("deals"))
+                return row
+        except Exception as e:
+            LOG.warning("try_building_stats LIKE fallback failed: %s", e)
+
         _neg_set(cache_key)
         return None
 
