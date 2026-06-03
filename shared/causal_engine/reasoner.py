@@ -18,9 +18,14 @@ import psycopg2.extras
 
 logger = logging.getLogger(__name__)
 
-DSN = os.getenv(
-    "INTELLIGENCE_DB_DSN",
-    os.environ.get("LIVE_DATABASE_URL") or os.environ.get("DATABASE_URL") or os.environ.get("INTELLIGENCE_DATABASE_URL") or "",
+# Intelligence DB holds causal_facts/causal_chains. PRIMARY = INTELLIGENCE_DATABASE_URL
+# (resale_bot DATABASE_URL points at a different DB without the causal schema).
+DSN = (
+    os.environ.get("INTELLIGENCE_DB_DSN")
+    or os.environ.get("INTELLIGENCE_DATABASE_URL")
+    or os.environ.get("LIVE_DATABASE_URL")
+    or os.environ.get("DATABASE_URL")
+    or ""
 )
 
 
