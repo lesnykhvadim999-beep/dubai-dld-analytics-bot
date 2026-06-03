@@ -8841,10 +8841,12 @@ def _v75_fetch_rating_from_table(url, table, table_kind, dimension='building', m
             if not cols:
                 return []
 
+            # B071: НЕ включаем project_name в COALESCE — это широкое поле,
+            # которое возвращает International City Phase 1 (район/проект),
+            # а не конкретное здание. Берём только building_name_en/building.
             building = _v75_text_expr(cols, [
                 'building_name_en', 'building_en', 'building_name', 'building',
-                'project_name_en', 'project_en', 'project_name', 'project',
-                'master_project_en', 'master_project'
+                'tower_name_en', 'tower_name',
             ])
             area = _v75_text_expr(cols, ['area_name_en', 'area_en', 'area_name', 'area', 'location_en', 'location', 'district', 'community'])
             price_candidates = ['actual_worth', 'actual_value', 'transaction_value', 'price', 'value', 'amount']
@@ -8896,22 +8898,31 @@ def _v75_fetch_rating_from_table(url, table, table_kind, dimension='building', m
                     """, (limit,))
                     return cur.fetchall()
 
-                # Для активности и ликвидности цену не требуем: иначе DLD-таблицы с неполной ценой дают пустой рейтинг.
+                # B071: добавлен 12mo date filter (раньше считалось ALL-TIME →
+                # International City показывал 324K сделок за всю историю DLD).
+                # Для зданий требуем минимум 20 сделок за период чтобы отсечь
+                # шум (одна квартира продана 1 раз — не рейтинг).
                 price_filter = ""
+                date_filter = f"AND {dt} >= CURRENT_DATE - INTERVAL '365 days'"
                 having = ""
                 order_by = "deals DESC"
+                _min_deals = 20 if dimension == 'building' else 100
+                having_base = f"HAVING COUNT(*) >= {_min_deals}"
                 if metric == 'price':
                     price_filter = f"AND {price} IS NOT NULL"
-                    having = "HAVING COUNT(*) >= 3 AND AVG(price) IS NOT NULL"
+                    having = f"{having_base} AND AVG(price) IS NOT NULL"
                     order_by = "avg_price DESC NULLS LAST, deals DESC"
                 elif metric == 'liquidity':
+                    having = having_base
                     order_by = "deals DESC, avg_price DESC NULLS LAST"
+                else:
+                    having = having_base
 
                 cur.execute(f"""
                     WITH x AS (
-                        SELECT {key_select}, {price} AS price, {meter} AS meter
+                        SELECT {key_select}, {price} AS price, {meter} AS meter, {dt} AS d
                         FROM {table}
-                        WHERE {not_blank} {price_filter}
+                        WHERE {not_blank} {price_filter} {date_filter}
                     )
                     SELECT
                         building_name_en,
@@ -8985,6 +8996,11 @@ def _v75_merge_rating_rows(rows, dimension='building', metric='deals', limit=10)
 def get_rating_rows_v75(dimension='building', metric='deals', limit=10):
     rows = []
     for _source, url, table, table_kind in _v75_source_tables():
+        # B071: для зданий ВСЕГДА sale-only (rent контракты с annual_amount
+        # мешают avg_price). Для районов оставлено как раньше (sale+rent OK
+        # для общей ликвидности).
+        if dimension == 'building' and table_kind != 'sale':
+            continue
         # Цена и рост имеют смысл по sales; активность/ликвидность — sale+rent.
         if metric in ('price', 'growth') and table_kind != 'sale':
             continue
