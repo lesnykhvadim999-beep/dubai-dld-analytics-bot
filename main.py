@@ -15521,6 +15521,7 @@ def _b063_dubai_breakdowns(scope, name):
                 else:
                     _area_filter = ""
                     _rooms_params = ['sale', 'apartment']
+                # B063 FIX: MV использует '1br'/'2br' (без пробела) и '4br+' вместо '5br'.
                 cur.execute(f"""
                     SELECT rooms,
                            SUM(deals)::bigint AS total_deals,
@@ -15528,18 +15529,20 @@ def _b063_dubai_breakdowns(scope, name):
                                 ELSE NULL END AS wavg_price
                     FROM mv_area_12m_summary
                     WHERE deal_type=%s AND property_type=%s
-                      AND rooms IN ('studio', '1 br', '2 br', '3 br', '4 br', '5 br')
+                      AND rooms IN ('studio', '1br', '2br', '3br', '4br', '4br+')
                       {_area_filter}
                     GROUP BY rooms
                     HAVING SUM(deals) > 0
                     ORDER BY CASE rooms
-                        WHEN 'studio' THEN 0 WHEN '1 br' THEN 1 WHEN '2 br' THEN 2
-                        WHEN '3 br' THEN 3 WHEN '4 br' THEN 4 WHEN '5 br' THEN 5
+                        WHEN 'studio' THEN 0 WHEN '1br' THEN 1 WHEN '2br' THEN 2
+                        WHEN '3br' THEN 3 WHEN '4br' THEN 4 WHEN '4br+' THEN 5
                         ELSE 9 END
                 """, _rooms_params)
                 out["rooms"] = [dict(r) for r in cur.fetchall()]
 
-                # 2) Format breakdown (Dubai-wide only, apt/villa/townhouse/penthouse)
+                # 2) Format breakdown (Dubai-wide).
+                # B063 FIX: MV не имеет 'penthouse'. Доступны: apartment/villa/
+                # townhouse/office/retail/other. Берём 5 значимых типов.
                 if scope != 'area':
                     cur.execute("""
                         SELECT property_type,
@@ -15550,7 +15553,7 @@ def _b063_dubai_breakdowns(scope, name):
                                     ELSE NULL END AS wavg_yield
                         FROM mv_area_12m_summary
                         WHERE deal_type='sale'
-                          AND property_type IN ('apartment','villa','townhouse','penthouse')
+                          AND property_type IN ('apartment','villa','townhouse','office','retail')
                           AND rooms='all'
                         GROUP BY property_type
                         HAVING SUM(deals) > 0
@@ -15613,18 +15616,21 @@ def _b063_format_ru(fmt):
         'townhouse': 'Таунхаусы',
         'penthouse': 'Пентхаусы',
         'office': 'Офисы',
-        'shop': 'Коммерция',
+        'retail': 'Коммерция',
+        'shop': 'Магазины',
+        'other': 'Прочее',
     }.get((fmt or '').lower(), fmt)
 
 
 def _b063_rooms_ru(rms):
     return {
         'studio': 'Studio',
-        '1 br': '1 BR',
-        '2 br': '2 BR',
-        '3 br': '3 BR',
-        '4 br': '4 BR',
-        '5 br': '5 BR+',
+        '1br': '1 BR',
+        '2br': '2 BR',
+        '3br': '3 BR',
+        '4br': '4 BR',
+        '4br+': '4 BR+',
+        '5br': '5 BR+',
     }.get((rms or '').lower(), rms)
 
 
