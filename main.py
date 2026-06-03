@@ -15497,10 +15497,212 @@ def _build_360_conclusion_compact(row, scope=None, name=None, report_kind=None):
     return "\n".join(parts)
 
 
+# =========================================================================
+# B063: DUBAI-WIDE EXTENDED OVERVIEW (rooms + format + top-areas breakdowns)
+# =========================================================================
+def _b063_dubai_breakdowns(scope, name):
+    """Return dict with: rooms_breakdown, top_areas_by_deals, top_areas_by_yield, rent_summary.
+    Read from mv_area_12m_summary. Defensive: returns {} on any error.
+    """
+    out = {
+        "rooms": [],
+        "top_deals": [],
+        "top_yield": [],
+        "rent_sum": None,
+        "format_breakdown": [],
+    }
+    try:
+        with db() as conn:
+            with conn.cursor() as cur:
+                # 1) Rooms breakdown — Dubai-wide или per area, apartments only
+                if scope == 'area' and name:
+                    _area_filter = "AND LOWER(area_key) = LOWER(%s)"
+                    _rooms_params = ['sale', 'apartment', name]
+                else:
+                    _area_filter = ""
+                    _rooms_params = ['sale', 'apartment']
+                cur.execute(f"""
+                    SELECT rooms,
+                           SUM(deals)::bigint AS total_deals,
+                           CASE WHEN SUM(deals) > 0 THEN ROUND(SUM(avg_price*deals)/NULLIF(SUM(deals),0))
+                                ELSE NULL END AS wavg_price
+                    FROM mv_area_12m_summary
+                    WHERE deal_type=%s AND property_type=%s
+                      AND rooms IN ('studio', '1 br', '2 br', '3 br', '4 br', '5 br')
+                      {_area_filter}
+                    GROUP BY rooms
+                    HAVING SUM(deals) > 0
+                    ORDER BY CASE rooms
+                        WHEN 'studio' THEN 0 WHEN '1 br' THEN 1 WHEN '2 br' THEN 2
+                        WHEN '3 br' THEN 3 WHEN '4 br' THEN 4 WHEN '5 br' THEN 5
+                        ELSE 9 END
+                """, _rooms_params)
+                out["rooms"] = [dict(r) for r in cur.fetchall()]
+
+                # 2) Format breakdown (Dubai-wide only, apt/villa/townhouse/penthouse)
+                if scope != 'area':
+                    cur.execute("""
+                        SELECT property_type,
+                               SUM(deals)::bigint AS total_deals,
+                               CASE WHEN SUM(deals) > 0 THEN ROUND(SUM(avg_price*deals)/NULLIF(SUM(deals),0))
+                                    ELSE NULL END AS wavg_price,
+                               CASE WHEN SUM(deals) > 0 THEN ROUND(SUM(COALESCE(avg_rental_yield_pct,0)*deals)/NULLIF(SUM(deals),0)::numeric, 2)
+                                    ELSE NULL END AS wavg_yield
+                        FROM mv_area_12m_summary
+                        WHERE deal_type='sale'
+                          AND property_type IN ('apartment','villa','townhouse','penthouse')
+                          AND rooms='all'
+                        GROUP BY property_type
+                        HAVING SUM(deals) > 0
+                        ORDER BY total_deals DESC
+                    """)
+                    out["format_breakdown"] = [dict(r) for r in cur.fetchall()]
+
+                # 3) Top 3 areas by sale deals (Dubai-wide only)
+                if scope != 'area':
+                    cur.execute("""
+                        SELECT area_key, deals, avg_price
+                        FROM mv_area_12m_summary
+                        WHERE deal_type='sale' AND property_type='all' AND rooms='all'
+                          AND area_key NOT IN ('all', 'dubai')
+                        ORDER BY deals DESC
+                        LIMIT 3
+                    """)
+                    out["top_deals"] = [dict(r) for r in cur.fetchall()]
+
+                    # 4) Top 3 areas by apt yield (Dubai-wide)
+                    cur.execute("""
+                        SELECT area_key, avg_rental_yield_pct, avg_price
+                        FROM mv_area_12m_summary
+                        WHERE deal_type='sale' AND property_type='apartment' AND rooms='all'
+                          AND area_key NOT IN ('all', 'dubai')
+                          AND deals >= 200
+                          AND avg_rental_yield_pct BETWEEN 3 AND 12
+                        ORDER BY avg_rental_yield_pct DESC NULLS LAST
+                        LIMIT 3
+                    """)
+                    out["top_yield"] = [dict(r) for r in cur.fetchall()]
+
+                # 5) Rent market summary — total rent contracts + avg annual rent
+                if scope == 'area' and name:
+                    _rent_filter = "AND LOWER(area_key) = LOWER(%s)"
+                    _rent_params = ['rent', 'apartment', name]
+                else:
+                    _rent_filter = ""
+                    _rent_params = ['rent', 'apartment']
+                cur.execute(f"""
+                    SELECT SUM(deals)::bigint AS total_rent,
+                           CASE WHEN SUM(deals) > 0 THEN ROUND(SUM(avg_price*deals)/NULLIF(SUM(deals),0))
+                                ELSE NULL END AS wavg_rent
+                    FROM mv_area_12m_summary
+                    WHERE deal_type=%s AND property_type=%s AND rooms='all'
+                      {_rent_filter}
+                """, _rent_params)
+                _r = cur.fetchone()
+                if _r and _r.get("total_rent"):
+                    out["rent_sum"] = dict(_r)
+    except Exception as _e:
+        print("B063_BREAKDOWNS_ERROR:", repr(_e))
+    return out
+
+
+def _b063_format_ru(fmt):
+    return {
+        'apartment': 'Апартаменты',
+        'villa': 'Виллы',
+        'townhouse': 'Таунхаусы',
+        'penthouse': 'Пентхаусы',
+        'office': 'Офисы',
+        'shop': 'Коммерция',
+    }.get((fmt or '').lower(), fmt)
+
+
+def _b063_rooms_ru(rms):
+    return {
+        'studio': 'Studio',
+        '1 br': '1 BR',
+        '2 br': '2 BR',
+        '3 br': '3 BR',
+        '4 br': '4 BR',
+        '5 br': '5 BR+',
+    }.get((rms or '').lower(), rms)
+
+
 # Override the function used by send_full_report / send_period_report / etc.
 def _build_360_conclusion(row, scope=None, name=None, report_kind=None):  # noqa: F811
     try:
-        return _build_360_conclusion_compact(row, scope, name, report_kind)
+        base = _build_360_conclusion_compact(row, scope, name, report_kind)
+        # B063: добавляем breakdowns для Dubai-wide и area scope
+        try:
+            br = _b063_dubai_breakdowns(scope, name)
+        except Exception:
+            br = {}
+
+        extra = []
+
+        # Format breakdown (Dubai-wide)
+        if br.get("format_breakdown") and scope != 'area':
+            extra.append("\n🏠 <b>По типам недвижимости:</b>")
+            for r in br["format_breakdown"]:
+                _fmt = _b063_format_ru(r.get("property_type"))
+                _d = int(r.get("total_deals") or 0)
+                _p = _b061_money(r.get("wavg_price"))
+                _line = f"   • <b>{_fmt}:</b> {format_int(_d)} сделок"
+                if _p:
+                    _line += f" · avg {_p}"
+                try:
+                    _y = float(r.get("wavg_yield") or 0)
+                    if 3 <= _y <= 12:
+                        _line += f" · yield {_y:.1f}%"
+                except Exception:
+                    pass
+                extra.append(_line)
+
+        # Rooms breakdown
+        if br.get("rooms"):
+            extra.append("\n🛏 <b>По комнатности:</b>")
+            for r in br["rooms"]:
+                _rm = _b063_rooms_ru(r.get("rooms"))
+                _d = int(r.get("total_deals") or 0)
+                _p = _b061_money(r.get("wavg_price"))
+                _line = f"   • <b>{_rm}:</b> {format_int(_d)} сделок"
+                if _p:
+                    _line += f" · avg {_p}"
+                extra.append(_line)
+
+        # Top 3 areas (Dubai-wide)
+        if br.get("top_deals") and scope != 'area':
+            extra.append("\n🏆 <b>Топ районов по объёму:</b>")
+            for i, r in enumerate(br["top_deals"], 1):
+                _n = (r.get("area_key") or "—").title()
+                _d = int(r.get("deals") or 0)
+                extra.append(f"   {i}. {_n} — {format_int(_d)} сделок")
+
+        if br.get("top_yield") and scope != 'area':
+            extra.append("\n💎 <b>Топ районов по доходности:</b>")
+            for i, r in enumerate(br["top_yield"], 1):
+                _n = (r.get("area_key") or "—").title()
+                try:
+                    _y = float(r.get("avg_rental_yield_pct") or 0)
+                    extra.append(f"   {i}. {_n} — {_y:.1f}%")
+                except Exception:
+                    pass
+
+        # Rent market summary
+        if br.get("rent_sum"):
+            _rs = br["rent_sum"]
+            _rt = int(_rs.get("total_rent") or 0)
+            _rp = _b061_money(_rs.get("wavg_rent"))
+            if _rt and _rp:
+                extra.append(f"\n🏘 <b>Рынок аренды:</b> {format_int(_rt)} контрактов · avg <b>{_rp}/год</b>")
+
+        if extra:
+            # Вставляем breakdowns ПЕРЕД футером Vadim Realty
+            base = base.replace(
+                "\n<i>Vadim Realty · RERA BRN 65011</i>",
+                "\n" + "\n".join(extra) + "\n\n<i>Vadim Realty · RERA BRN 65011</i>"
+            )
+        return base
     except Exception as _e:
         print("BUILD_360_COMPACT_ERROR:", repr(_e))
         if _B061_ORIG_BUILD_360:
@@ -15511,7 +15713,7 @@ def _build_360_conclusion(row, scope=None, name=None, report_kind=None):  # noqa
         return ""
 
 
-print("Loaded B061 compact 360-summary override")
+print("Loaded B061+B063 compact 360-summary with breakdowns")
 
 
 if __name__ == "__main__":
