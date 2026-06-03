@@ -15503,6 +15503,8 @@ def _build_360_conclusion_compact(row, scope=None, name=None, report_kind=None):
 def _b063_dubai_breakdowns(scope, name):
     """Return dict with: rooms_breakdown, top_areas_by_deals, top_areas_by_yield, rent_summary.
     Read from mv_area_12m_summary. Defensive: returns {} on any error.
+    B063.2 FIX: db() идёт в LIVE-БД где нет MV. Используем read_model._conn()
+    с RealDictCursor (как делает _v90_one_format_stats).
     """
     out = {
         "rooms": [],
@@ -15512,8 +15514,10 @@ def _b063_dubai_breakdowns(scope, name):
         "format_breakdown": [],
     }
     try:
-        with db() as conn:
-            with conn.cursor() as cur:
+        import read_model as _rm
+        import psycopg2.extras as _pgx
+        conn = _rm._conn()
+        with conn.cursor(cursor_factory=_pgx.RealDictCursor) as cur:
                 # 1) Rooms breakdown — Dubai-wide или per area, apartments only
                 if scope == 'area' and name:
                     _area_filter = "AND LOWER(area_key) = LOWER(%s)"
