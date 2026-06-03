@@ -94,8 +94,9 @@ def _table_exists(dsn: str, table: str) -> bool:
 
 # ── 1. heartbeat freshness ────────────────────────────────────────────────
 EXPECTED_BOTS = [
-    "resale-bot", "analytics-bot", "hub-bot", "lead-bot",
-    "roi-bot", "channel-bot", "currency-bot", "cloud-watchdog",
+    # Heartbeat names как пишут боты в `bot_heartbeats` (короткие, без -bot suffix)
+    "resale", "analytics", "hub", "lead",
+    "roi", "channel", "currency", "cloud-watchdog",
 ]
 
 
