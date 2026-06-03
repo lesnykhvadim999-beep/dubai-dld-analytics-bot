@@ -13785,35 +13785,64 @@ _V109_AREA_REAL_MAP = {
 
 def _v109_area_universe_safe(goal):
     """Безопасная вселенная: только display_area, у которых есть DLD-данные.
-    Sobha Hartland без данных в текущем read-model — заменяем на Sports City."""
+
+    FIX (B055, 2026-06-03): использовать canonical area_keys MV
+    (mv_area_*_summary), а НЕ raw DLD sector area_names. Прошлая версия
+    маппила «JVC» → 3 sector_names (Al Barsha South Fourth, Al Hebiah
+    First, Al Barsha South Fifth) которые в DLD охватывают огромную
+    территорию (JVC + Sports City + Production City + Motor City + JVT),
+    давая 109K «сделок JVC за 12mo» вместо реальных ~20K. Те же
+    sector_names ломали все смежные карточки. Canonical area_keys в MV
+    уже корректно агрегированы парсером по реальному JVC/Palm/Business Bay.
+    """
     g = str(goal or "")
     if "жизн" in g.lower() or "Для жизни" in g:
         return [
-            ("Downtown Dubai", ["Burj Khalifa"]),
-            ("Dubai Marina", ["Marsa Dubai"]),
-            ("JVC", ["Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"]),
-            ("Business Bay", ["Business Bay"]),
-            ("Palm Jumeirah", ["Palm Jumeirah"]),
+            ("Downtown Dubai", ["burj khalifa"]),
+            ("Dubai Marina", ["dubai marina"]),
+            ("JVC", ["jvc"]),
+            ("Business Bay", ["business bay"]),
+            ("Palm Jumeirah", ["palm jumeirah"]),
         ]
     if "Аренд" in g or "аренд" in g.lower():
         return [
-            ("Dubai Marina", ["Marsa Dubai"]),
-            ("JVC", ["Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"]),
-            ("Business Bay", ["Business Bay"]),
-            ("Downtown Dubai", ["Burj Khalifa"]),
-            ("JLT", ["Jumeirah Lakes Towers"]),
+            ("Dubai Marina", ["dubai marina"]),
+            ("JVC", ["jvc"]),
+            ("Business Bay", ["business bay"]),
+            ("Downtown Dubai", ["burj khalifa"]),
+            ("JLT", ["jumeirah lakes towers"]),
         ]
     # Инвестиция / ROI / Перепродажа
     return [
-        ("JVC", ["Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"]),
-        ("Business Bay", ["Business Bay"]),
-        ("Dubai Marina", ["Marsa Dubai"]),
-        ("Downtown Dubai", ["Burj Khalifa"]),
-        ("Dubai Sports City", ["Al Hebiah Fourth"]),
-        ("JLT", ["Jumeirah Lakes Towers"]),
-        ("Dubai Hills", ["Hadaeq Sheikh Mohammed Bin Rashid"]),
-        ("Palm Jumeirah", ["Palm Jumeirah"]),
+        ("JVC", ["jvc"]),
+        ("Business Bay", ["business bay"]),
+        ("Dubai Marina", ["dubai marina"]),
+        ("Downtown Dubai", ["burj khalifa"]),
+        ("Dubai Sports City", ["dubai sports city"]),
+        ("JLT", ["jumeirah lakes towers"]),
+        ("Dubai Hills", ["dubai hills"]),
+        ("Palm Jumeirah", ["palm jumeirah"]),
     ]
+
+
+def _v109_rooms_filter_for_budget(bmax):
+    """B055: вернуть (property_type, rooms_list) для совпадения с prop_label.
+    None → не фильтровать (берём agg-row property_type='all' rooms='all').
+    """
+    try:
+        bmax = float(bmax or 0)
+    except Exception:
+        bmax = 0
+    if bmax <= 0 or bmax > 5_000_000:
+        return (None, None)  # all/all
+    if bmax <= 1_000_000:
+        return ("apartment", ["studio"])
+    if bmax <= 2_000_000:
+        return ("apartment", ["studio", "1br"])
+    if bmax <= 3_000_000:
+        return ("apartment", ["1br", "2br"])
+    # bmax <= 5_000_000
+    return ("apartment", ["2br", "3br"])
 
 
 def _v109_fetch_area_aggregate(real_areas, months=24, deal_type="sale"):
@@ -13857,9 +13886,15 @@ def _v109_fetch_area_aggregate(real_areas, months=24, deal_type="sale"):
 
 
 # v111 BATCH FAST PATH: один SQL по N display_area сразу.
-def _v111_batch_area_aggregates(area_universe, months=24, deal_type="sale"):
+def _v111_batch_area_aggregates(area_universe, months=24, deal_type="sale",
+                                prop_type=None, rooms_filter=None):
     """Один SQL по списку (display_area, [real_areas]) → dict display_area→agg.
     Заменяет цикл из N round-trip на 1 round-trip.
+
+    B055 (2026-06-03): добавлены параметры prop_type и rooms_filter, чтобы
+    avg_price/yield соответствовали prop_label по бюджету. Когда они
+    заданы — берём rows по соответствующим (property_type, rooms IN ...)
+    и weighted-average по deals. Иначе — старое поведение (all/all).
     """
     import time as _t
     if not (_READ_MODEL_OK and _read_model):
@@ -13883,25 +13918,45 @@ def _v111_batch_area_aggregates(area_universe, months=24, deal_type="sale"):
     # Old code hard-coded mv_area_24m_summary and ignored months parameter,
     # causing JVC to show 192K deals "за год" (actually 24mo sum).
     _mv_name = "mv_area_12m_summary" if int(months or 12) <= 12 else "mv_area_24m_summary"
-    sql = f"""
-        SELECT area_key,
-               deals,
-               avg_price,
-               avg_price_psf AS avg_meter,
-               top_quartile_price,
-               top_quartile_psf,
-               yoy_growth_pct,
-               yoy_growth_top_pct,
-               avg_rental_yield_pct,
-               top_rental_yield_pct
-        FROM {_mv_name}
-        WHERE area_key = ANY(%s)
-          AND property_type='all' AND rooms='all' AND deal_type=%s
-    """
+    use_room_filter = bool(prop_type) and bool(rooms_filter)
+    if use_room_filter:
+        sql = f"""
+            SELECT area_key,
+                   deals,
+                   avg_price,
+                   avg_price_psf AS avg_meter,
+                   top_quartile_price,
+                   top_quartile_psf,
+                   yoy_growth_pct,
+                   yoy_growth_top_pct,
+                   avg_rental_yield_pct,
+                   top_rental_yield_pct
+            FROM {_mv_name}
+            WHERE area_key = ANY(%s)
+              AND property_type=%s AND rooms = ANY(%s) AND deal_type=%s
+        """
+        sql_params = (all_keys, prop_type, list(rooms_filter), deal_type)
+    else:
+        sql = f"""
+            SELECT area_key,
+                   deals,
+                   avg_price,
+                   avg_price_psf AS avg_meter,
+                   top_quartile_price,
+                   top_quartile_psf,
+                   yoy_growth_pct,
+                   yoy_growth_top_pct,
+                   avg_rental_yield_pct,
+                   top_rental_yield_pct
+            FROM {_mv_name}
+            WHERE area_key = ANY(%s)
+              AND property_type='all' AND rooms='all' AND deal_type=%s
+        """
+        sql_params = (all_keys, deal_type)
     try:
         import psycopg2.extras as _pe
         with _read_model._conn().cursor(cursor_factory=_pe.RealDictCursor) as cur:
-            cur.execute(sql, (all_keys, deal_type))
+            cur.execute(sql, sql_params)
             rows = cur.fetchall()
     except Exception as _e:
         print("V111_BATCH_AGG_ERROR:", repr(_e))
@@ -13981,7 +14036,13 @@ def smart_pick_candidates(goal, budget_text, risk, timing):  # noqa: F811
     # FIX (SMART_PICK_HUMAN): было months=24 -> ~192K сделок для JVC (нереалистично много).
     # 12 месяцев = honest year. Также batch_agg возвращает avg_meter в AED/sqft
     # (колонка mv.avg_price_psf), нужно конвертировать -> AED/m^2.
-    batch_agg = _v111_batch_area_aggregates(areas, months=12, deal_type=deal_type)
+    # B055: применяем room-filter по бюджету, чтобы avg_price/yield
+    # соответствовали prop_label (например Studio/1BR → apartment+studio+1br).
+    _b055_pt, _b055_rooms = _v109_rooms_filter_for_budget(bmax)
+    batch_agg = _v111_batch_area_aggregates(
+        areas, months=12, deal_type=deal_type,
+        prop_type=_b055_pt, rooms_filter=_b055_rooms,
+    )
     try:
         for _disp, _row in (batch_agg or {}).items():
             if _row and _row.get("avg_meter"):
