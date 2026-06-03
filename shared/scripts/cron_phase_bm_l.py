@@ -48,6 +48,18 @@ def main(argv=None) -> int:
         print({"queue_id": generate_weekly_top_deals()})
         return 0
     if cmd == "monthly_report":
+        # PDF feature manually disabled 2026-06-03 — monthly_report skipped.
+        import os as _os
+        _disabled = (_os.getenv("PDF_DISABLED") or "").strip() in ("1", "true", "True", "yes")
+        if not _disabled:
+            try:
+                from shared.safety_nets.feature_flags import is_feature_enabled
+                _disabled = not is_feature_enabled("pdf_generation")
+            except Exception:
+                pass
+        if _disabled:
+            print({"skipped": "monthly_report disabled (pdf_generation feature off)"})
+            return 0
         from shared.content_pipeline.monthly_report import generate_monthly_report
         print({"queue_id": generate_monthly_report()})
         return 0

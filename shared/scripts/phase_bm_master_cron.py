@@ -161,8 +161,10 @@ JOBS: list[dict] = [
      "argv": [PYTHON, "-m", "shared.scripts.cron_phase_bm_l", "daily_content"]},
     {"name": "agent_l_weekly_top",     "cron": "0 9 * * 1",
      "argv": [PYTHON, "-m", "shared.scripts.cron_phase_bm_l", "weekly_top"]},
-    {"name": "agent_l_monthly_report", "cron": "0 10 1 * *",
-     "argv": [PYTHON, "-m", "shared.scripts.cron_phase_bm_l", "monthly_report"]},
+    # agent_l_monthly_report — DISABLED 2026-06-03 (PDF feature off, Vadim request).
+    # Re-enable by uncommenting + UPDATE feature_flags SET enabled=TRUE WHERE name='pdf_generation';
+    # {"name": "agent_l_monthly_report", "cron": "0 10 1 * *",
+    #  "argv": [PYTHON, "-m", "shared.scripts.cron_phase_bm_l", "monthly_report"]},
     {"name": "agent_l_self_modify",    "cron": "0 2 * * *",
      "argv": [PYTHON, "-m", "shared.scripts.cron_phase_bm_l", "self_modify_scan"]},
     {"name": "agent_l_followups",      "cron": "*/5 * * * *",

@@ -231,6 +231,22 @@ bot = Bot(
 
 dp = Dispatcher()
 
+# ── PDF FEATURE FLAG (manually disabled 2026-06-03 by Vadim) ─────────────────
+# PDF generation is gracefully disabled across all bots. Code is preserved.
+# Re-enable via:
+#   1) UPDATE feature_flags SET enabled=TRUE WHERE name='pdf_generation';  -- in DB
+#   2) OR remove env var PDF_DISABLED=1 on Railway service
+def _pdf_enabled() -> bool:
+    """Single source of truth for PDF feature flag. env var → DB → default True."""
+    if (os.getenv("PDF_DISABLED") or "").strip() in ("1", "true", "True", "yes"):
+        return False
+    try:
+        from shared.safety_nets.feature_flags import is_feature_enabled
+        return is_feature_enabled("pdf_generation")
+    except Exception:
+        # fail-open only if env var not set
+        return True
+
 # v112: централизованный user tracking → bot_users (resale-DB)
 try:
     from aiogram import BaseMiddleware
@@ -1051,18 +1067,25 @@ def format_compare_period_menu(user_id):
     ])
 
 def format_compare_after_menu(user_id):
-    return kb([
+    # PDF row hidden via _pdf_enabled() — 2026-06-03 manual disable.
+    rows = [
         ["🏆 Лучший формат"],
         ["🏙 Лучшие районы", "🏢 Лучшие здания"],
-        ["📄 PDF", "💼 Заявка"],
-        ["🔁 Новый отчёт", tr(user_id, "main")]
-    ])
+    ]
+    if _pdf_enabled():
+        rows.append(["📄 PDF", "💼 Заявка"])
+    else:
+        rows.append(["💼 Заявка"])
+    rows.append(["🔁 Новый отчёт", tr(user_id, "main")])
+    return kb(rows)
 
 
 def result_menu(user_id, scope=None):
     """Адаптивное меню после готового результата: только релевантные действия."""
+    # PDF row hidden when feature off — 2026-06-03 manual disable.
+    pdf_row = ["📄 PDF", "💼 Заявка"] if _pdf_enabled() else ["💼 Заявка"]
     rows = [
-        ["📄 PDF", "💼 Заявка"],
+        pdf_row,
         ["🔁 Изменить", tr(user_id, "main")],
     ]
     if scope == "building":
@@ -1075,10 +1098,12 @@ def result_menu(user_id, scope=None):
 
 def report_menu(user_id):
     # Меню действий внутри выбранного здания/района.
+    # PDF row hidden when feature off — 2026-06-03 manual disable.
+    pdf_row = ["📄 PDF", "💼 Заявка"] if _pdf_enabled() else ["💼 Заявка"]
     return kb([
         ["📊 Аналитика", "💼 Резюме"],
         ["📈 Периоды", "🧾 Сделки"],
-        ["📄 PDF", "💼 Заявка"],
+        pdf_row,
         [tr(user_id, "back"), tr(user_id, "main")],
     ])
 
@@ -3999,8 +4024,10 @@ def ranking_menu(user_id):
 
 
 def post_result_menu(user_id, scope=None):
+    # PDF row hidden when feature off — 2026-06-03 manual disable.
+    pdf_row = ["📄 PDF", "💼 Заявка"] if _pdf_enabled() else ["💼 Заявка"]
     return kb([
-        ["📄 PDF", "💼 Заявка"],
+        pdf_row,
         ["🔁 Новый отчёт", "🔁 Изменить"],
         [tr(user_id, "main")],
     ])
@@ -7396,6 +7423,14 @@ def build_pdf_bytes(title, content):
 async def handle_pdf_request(message):
     user_id = message.from_user.id
     state = user_states.get(user_id, {}) or {}
+
+    # PDF feature manually disabled 2026-06-03 — short-circuit before any work.
+    if not _pdf_enabled():
+        try:
+            await message.answer("📄 PDF-отчёт временно отключён.\n\nVadim Realty · RERA BRN 65011")
+        except Exception:
+            pass
+        return
 
     # Feature flag: FF_PDF_REPORT_ENABLED=0 → degrade with friendly message.
     try:
