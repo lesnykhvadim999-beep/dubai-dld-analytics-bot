@@ -13114,6 +13114,101 @@ def find_buildings(query, limit=10):  # noqa: F811
     return merged[:limit]
 
 
+# ===== B102: speedup find_buildings (fast-path-first + 60s TTL cache) =========
+# Раньше: каждый запрос Grande/Burj бегал по dld_sale_archive (≈5-10s)
+# Теперь: MV trigram-hit мгновенно → отдаём, медленный raw только при пустом MV.
+# + кэш на 60s — повторный поиск популярного имени отдаётся за <1ms.
+import time as _t_b102
+import re as _re_b102
+_b102_cache = {}  # key=(query.lower(), limit) → (ts, rows)
+_B102_TTL = 60.0  # секунд
+_b102_original_find_buildings = find_buildings  # capture v_unified
+
+def find_buildings(query, limit=10):  # noqa: F811
+    """B102: fast-path-first + TTL-cache.
+    1) cache hit → instant
+    2) mv_building_12m_summary trigram → если есть совпадения, отдаём за ~50ms
+    3) fallback на старый медленный путь (raw archive)
+    """
+    q = str(query or "").strip()
+    if not q:
+        return []
+    key = (q.lower(), int(limit))
+    now = _t_b102.perf_counter()
+    cached = _b102_cache.get(key)
+    if cached and now - cached[0] < _B102_TTL:
+        try:
+            print(f"[LAT] find_buildings B102 cache_hit q={q!r}")
+        except Exception:
+            pass
+        return list(cached[1])
+
+    # ── fast path: только MV (без archive scan) ──
+    fast = []
+    if _READ_MODEL_OK and _read_model:
+        try:
+            tokens = [t for t in _re_b102.split(r"\s+", q.lower()) if len(t) >= 3]
+            if tokens:
+                sql = """
+                    SELECT building_name_display AS building_name_en,
+                           area_name AS area_name_en,
+                           deals::bigint AS deals
+                    FROM mv_building_12m_summary
+                    WHERE deal_type='sale' AND rooms='all' AND deals > 0
+                      AND lower(building_name_display) ILIKE ALL(%s)
+                    ORDER BY deals DESC
+                    LIMIT %s
+                """
+                patterns = [f"%{t}%" for t in tokens]
+                _t0 = _t_b102.perf_counter()
+                with _read_model._conn().cursor() as cur:
+                    cur.execute(sql, (patterns, limit))
+                    fast = [
+                        {"building_name_en": r[0], "area_name_en": r[1], "deals": int(r[2] or 0)}
+                        for r in cur.fetchall()
+                    ]
+                dt = (_t_b102.perf_counter() - _t0) * 1000
+                print(f"[LAT] find_buildings B102 fast_mv {dt:.0f}ms hits={len(fast)} q={q!r}")
+        except Exception as _e:
+            print(f"[B102_fast_err] {_e}")
+
+    if fast:
+        # ≥3 совпадения = MV покрывает запрос → не лезем в raw
+        if len(fast) >= 3:
+            _b102_cache[key] = (now, fast)
+            return fast
+        # 1-2 хита: всё-таки добираем через slow для редких алиасов,
+        # но в фоне cache коротко (10s).
+        try:
+            slow = _b102_original_find_buildings(q, limit) or []
+        except Exception:
+            slow = list(fast)
+        # merge unique
+        seen, merged = set(), []
+        for r in list(fast) + list(slow):
+            try:
+                k = (str(r.get("building_name_en") or "").lower().strip(),
+                     str(r.get("area_name_en") or "").lower().strip())
+            except Exception:
+                continue
+            if not k[0] or k in seen:
+                continue
+            seen.add(k)
+            merged.append(r)
+        merged = merged[:limit]
+        _b102_cache[key] = (now, merged)
+        return merged
+
+    # MV пуст → старый путь (slow)
+    try:
+        rows = _b102_original_find_buildings(q, limit) or []
+    except Exception as _e:
+        print(f"[B102_slow_err] {_e}")
+        rows = []
+    _b102_cache[key] = (now, rows)
+    return rows
+
+
 # ---- Bug 1: безопасный fallback для "Аналитика + 6 месяцев" -------------------
 
 try:
