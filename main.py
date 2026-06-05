@@ -4740,9 +4740,17 @@ async def send_deals_report(message, scope, name=None, prop=None, period=None, d
         except Exception as e:
             print("AREA_FALLBACK_ERROR:", repr(e))
     if not rows:
+        # 2026-06-05: даже на no-data показываем что бот делал — bedroom-drop
+        # и area-fallback, иначе юзер думает что мы ничего не пробовали.
+        no_data_warnings = []
+        if dropped_rooms_filter:
+            no_data_warnings.append("DLD-аренда не разделяется по числу комнат — bedroom-фильтр был снят")
+        if area_hint:
+            no_data_warnings.append(f"пробовали и здание и район «{area_hint}» — данных нет нигде")
+        _nd_body = no_data_message("Последние сделки", user_id=user_id, scope=scope, name=name, prop=prop, period=period, deal_type=deal_type)
+        prefix = ("⚠️ <i>" + "; ".join(no_data_warnings) + ".</i>\n\n") if no_data_warnings else ""
         await message.answer(
-            no_data_message("Последние сделки", scope=scope, name=name,
-                             prop=prop, period=period, deal_type=deal_type, user_id=user_id),
+            prefix + _nd_body,
             reply_markup=no_data_menu(user_id) if scope in ["building", "area"] else main_menu(user_id)
         )
         return
