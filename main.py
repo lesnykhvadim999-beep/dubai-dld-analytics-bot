@@ -1197,13 +1197,8 @@ def no_data_menu(user_id):
         [tr(user_id, "back"), tr(user_id, "main")],
     ])
 
-def ranking_menu(user_id):
-    return kb([
-        ["🏢 Здания", "🏙 Районы"],
-        ["💰 По цене", "📊 По сделкам"],
-        ["📈 По росту", "💧 Ликвидность"],
-        [tr(user_id, "back"), tr(user_id, "main")],
-    ])
+# B-A030 (2026-06-05): dead duplicate ranking_menu удалён.
+# Жил тут shadowed копией — реальная версия на L4238 (другой порядок рядов).
 
 def process_menu(user_id):
     return kb([[tr(user_id, "main")]])
