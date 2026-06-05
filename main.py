@@ -4018,15 +4018,18 @@ async def cmd_cancel_global(message: Message):
 @dp.message(CommandStart())
 async def start_handler(message: Message):
     user_id = message.from_user.id
-    user_states[user_id] = {}
-    # v52: parse deep-link payload from other bots
-    # /start bld-NAME → pre-load building report
-    # /start area-NAME → pre-load area report
-    # /start from_XXX → just welcome screen
+    # B-A034 (2026-06-05): clear state ПОСЛЕ deep-link dispatch, не до.
+    # Раньше user_states обнулялся на старте, и если deep-link бросал
+    # exception — юзер получал пустой state без recovery (висел в no-mans-
+    # land). Теперь чистим только если payload не deep-link, и при
+    # успешном deep-link перезаписываем state на нужный step.
     text = (message.text or "").strip()
     payload = ""
     if " " in text:
         payload = text.split(" ", 1)[1].strip()
+    # No deep-link → clear state for clean welcome
+    if not payload or not (payload.startswith(("bld-", "bld_", "area-", "area_"))):
+        user_states[user_id] = {}
     # v55: cross-bot UTM tracking
     try:
         from cross_bot_utm import log_jump_async
@@ -4250,9 +4253,15 @@ def post_result_menu(user_id, scope=None):
 
 
 def _action_title_v72(state, user_id=None):
+    # B-A029 (2026-06-05): state.get("_uid") никем не пишется — раньше при
+    # вызове без user_id передавался None в trf() → "{name}" в шаблоне не
+    # подставлялся правильно или ломалась i18n. Защищены явным дефолтом.
     scope = state.get("scope")
     name = _display_scope_name_v71(state.get("name")) if "_display_scope_name_v71" in globals() else state.get("name")
     uid = user_id if user_id is not None else state.get("_uid")
+    if uid is None:
+        # graceful default — лучше английский фолбэк, чем broken substitution
+        uid = 0  # tr/trf обработают unknown user через дефолтный язык EN
     if scope == "building":
         return trf(uid, "action_building_title", name=name)
     if scope == "area":
@@ -5623,25 +5632,8 @@ def get_latest_deals_smart(scope, name, prop=None, period=None, deal_type=None, 
     return [], prop, period, deal_type
 
 
-def selftest_building_matching():
-    sql, params = building_exact_condition_for_name("Grande")
-    assert "ILIKE" not in sql, sql
-    assert any(str(p).lower() == "grande" for p in params), params
-
-    sql2, params2 = building_exact_condition_for_name("Grande Signature Residences")
-    assert "ILIKE" not in sql2, sql2
-    assert any(str(p).lower() == "grande signature residences" for p in params2), params2
-    return True
-
-
-
-def selftest_deal_type_logic():
-    sale_sql, sale_params = make_deal_type_condition("🏠 Продажа")
-    rent_sql, rent_params = make_deal_type_condition("🔑 Аренда")
-    assert deal_value_expr("🏠 Продажа") == PRICE
-    assert "rent" in rent_sql.lower() or "lease" in rent_sql.lower()
-    assert "actual_worth" in sale_sql
-    return True
+# B-A038 (2026-06-05): dead selftest_building_matching и selftest_deal_type_logic
+# удалены — никем не вызывались. При необходимости перенести в shared/auto_tests/.
 
 
 # =========================
@@ -6312,6 +6304,11 @@ def get_stats_smart(scope='dubai', name=None, prop=None, period=None, deal_type=
         area_fallback = areas[0] if areas else None
     except Exception:
         area_fallback = None
+    # B-A002 (2026-06-05): убраны ('dubai', None, ...) tiers — раньше
+    # при пустой выборке по конкретному зданию cascade silently дропал
+    # scope+name и подсовывал общедубайские агрегаты под видом данных по
+    # выбранному объекту. Лучше показать «нет данных», чем ввести в
+    # заблуждение.
     attempts = [
         (scope, name, prop, period),
         (scope, name, prop, None),
@@ -6319,12 +6316,9 @@ def get_stats_smart(scope='dubai', name=None, prop=None, period=None, deal_type=
         (scope, name, None, None),
         ('area', area_fallback, prop, period),
         ('area', area_fallback, prop, None),
-        ('dubai', None, prop, period),
-        ('dubai', None, prop, None),
-        ('dubai', None, None, None),
     ]
     for sc, nm, p, per in attempts:
-        if sc and (sc == 'dubai' or nm):
+        if sc and nm:
             try:
                 row = get_stats(sc, nm, p, per, deal_type)
                 if row and int(row.get('deals') or 0) > 0 and row.get('avg_price'):
@@ -6345,6 +6339,8 @@ def get_latest_deals_smart(scope, name, prop=None, period=None, deal_type=None, 
         area_fallback = areas[0] if areas else None
     except Exception:
         area_fallback = None
+    # B-A002 (2026-06-05): убраны ('dubai', None, ...) tiers — см. v33
+    # get_stats_smart выше. Тот же silent scope-drop был и здесь.
     attempts = [
         (scope, name, prop, period),
         (scope, name, prop, None),
@@ -6352,9 +6348,6 @@ def get_latest_deals_smart(scope, name, prop=None, period=None, deal_type=None, 
         (scope, name, None, None),
         ('area', area_fallback, prop, period),
         ('area', area_fallback, prop, None),
-        ('dubai', None, prop, period),
-        ('dubai', None, prop, None),
-        ('dubai', None, None, None),
     ]
     for sc, nm, p, per in attempts:
         if sc and (sc == 'dubai' or nm):
@@ -6779,6 +6772,28 @@ def _v44_num_expr(cols, candidates, fallback="NULL::numeric"):
     return f"NULLIF(regexp_replace(COALESCE({_v44_q(col)}::text, ''), '[^0-9.]', '', 'g'), '')::numeric"
 
 
+def _v44_meter_expr(cols, fallback="NULL::numeric"):
+    """B-A003 (2026-06-05): meter_price unit-aware. Если в схеме есть только
+    psf-колонка (price_per_sqft) — умножаем на SQFT_TO_M2 чтобы привести к
+    AED/m². Раньше _v44_num_expr брал первую совпавшую колонку и не делал
+    никакой нормализации — fall-back на price_per_sqft давал бы цены /10."""
+    # Приоритет m²-колонок (raw DLD хранит AED/m²); psf-колонки — последний
+    # fallback с нормализацией.
+    metric_cols = ['meter_sale_price', 'price_per_meter', 'meter_price']
+    psf_cols = ['price_per_sqft', 'meter_psf']
+    col = _v44_first(cols, metric_cols)
+    if col:
+        return f"NULLIF(regexp_replace(COALESCE({_v44_q(col)}::text, ''), '[^0-9.]', '', 'g'), '')::numeric"
+    col = _v44_first(cols, psf_cols)
+    if col:
+        # SQFT_TO_M2 определён в main.py как 10.7639 константа
+        return (
+            f"(NULLIF(regexp_replace(COALESCE({_v44_q(col)}::text, ''), "
+            f"'[^0-9.]', '', 'g'), '')::numeric * 10.7639)"
+        )
+    return fallback
+
+
 def _v44_date_expr(cols):
     col = _v44_first(cols, [
         'transaction_date', 'instance_date', 'registration_date', 'date', 'created_at',
@@ -6819,7 +6834,7 @@ def _v44_sale_meta():
         ]),
         'unit': _v44_text_expr(cols, ['unit_number', 'unit_no', 'unit', 'property_number', 'property_no', 'property_id'], "''"),
         'price': _v44_num_expr(cols, ['actual_worth', 'actual_value', 'transaction_value', 'price', 'value', 'amount']),
-        'meter': _v44_num_expr(cols, ['meter_sale_price', 'price_per_meter', 'meter_price', 'price_per_sqft']),
+        'meter': _v44_meter_expr(cols),  # B-A003 unit-aware
         'size': _v44_num_expr(cols, ['actual_area', 'procedure_area', 'area_size_sqft', 'size_sqft', 'size']),
         'date': _v44_date_expr(cols),
     }
