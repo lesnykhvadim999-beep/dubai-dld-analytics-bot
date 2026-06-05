@@ -358,7 +358,12 @@ _MAX_STATE_USERS = int(os.environ.get("MAX_STATE_USERS", "5000"))
 def _gc_state_dicts():
     """Hourly pruner — evicts oldest 25% if a state dict exceeds the cap.
     Note: user_languages persists in DB via set_lang/get_lang so we may evict
-    from RAM freely; lang is re-read from DB on next message."""
+    from RAM freely; lang is re-read from DB on next message.
+    B-A017 (2026-06-05): pop wrapped в try/except + межпоп-уступка GIL
+    aiogram-loop'у, чтобы dict-mutation-during-iteration / race не убивал
+    GC и не сбрасывал чужую FSM mid-wizard. Полный thread-safe вариант
+    (lock на каждый touch user_states) непомерно инвазивен — оставляем
+    best-effort с мягкой деградацией."""
     import time as _t
     while True:
         try:
@@ -368,9 +373,20 @@ def _gc_state_dicts():
                 if not isinstance(d, dict) or len(d) <= _MAX_STATE_USERS:
                     continue
                 drop_n = len(d) - int(_MAX_STATE_USERS * 0.75)
-                for k in list(d.keys())[:drop_n]:
-                    d.pop(k, None)
-                print(f"[gc] {name}: evicted {drop_n} ({len(d)} left)", flush=True)
+                evicted = 0
+                # snapshot ключей — атомарно через list(); саму pop делаем
+                # по одному с короткой задержкой, чтобы не блокировать GIL.
+                snapshot = list(d.keys())[:drop_n]
+                for k in snapshot:
+                    try:
+                        if d.pop(k, None) is not None:
+                            evicted += 1
+                    except RuntimeError:
+                        # dict changed mid-pop — пропускаем, не падаем
+                        continue
+                    if evicted % 50 == 0:
+                        _t.sleep(0)  # yield GIL
+                print(f"[gc] {name}: evicted {evicted}/{drop_n} ({len(d)} left)", flush=True)
         except Exception as _gc_err:
             print(f"[gc] error: {_gc_err}", flush=True)
 
@@ -9480,7 +9496,7 @@ def build_best_object_report_v95(state, *, user_id=None):
     )
     return html
 
-print("Loaded v95 best object menu addon only")
+# B-A024: removed startup-noise prints ("Loaded vNNN ..."). Логи теперь чище.
 
 
 async def _mv_offplan_refresher_loop():
@@ -10073,7 +10089,6 @@ def _ecosystem_funnel_html(scope=None, name=None):
     )
 
 
-print("Loaded v83 report scenario safe fix only")
 print("Loaded B130 ecosystem funnel — contextual cross-bot links in report tail")
 
 
@@ -10966,7 +10981,6 @@ def show_smart_recommendation(goal, budget, timing, risk, rows):
     )
     return text
 
-print("Loaded v91 deep economics and area output fix only")
 
 
 # =========================
@@ -11090,7 +11104,6 @@ def show_smart_recommendation(goal, budget, timing, risk, rows):
 
     return text
 
-print("Loaded v92 external economic engine integration only")
 
 
 # =========================
@@ -11488,7 +11501,6 @@ def build_best_object_report_v95(state, *, user_id=None):
     )
     return html
 
-print("Loaded v99 intelligence_router bridge / full-flow fixes")
 
 
 # =========================
@@ -13567,7 +13579,6 @@ except Exception as e:
     _v106_log("wizard_recovery_import", e)
 
 
-print("Loaded v106 user-reported bug fixes (analytics period + wizard recovery + address opera search)")
 
 
 # ==================================================================
@@ -13781,7 +13792,6 @@ def v107_marketing_overview(scope="dubai", name=None, months=12, deal_type="sale
         return None
 
 
-print("Loaded v107 read-model fast path wrappers")
 
 
 # ============================================================
@@ -14076,7 +14086,6 @@ def v108_format_top_building(name, area, row):
     return "\n".join(lines) + "\n"
 
 
-print("Loaded v108 marketing rewrite (top-quartile cifry + sales copy)")
 
 
 # ==================================================================
@@ -14492,7 +14501,6 @@ def smart_pick_candidates(goal, budget_text, risk, timing):  # noqa: F811
     return sorted(results, key=lambda x: (x.get("score") or 0, x.get("deals") or 0), reverse=True)[:5]
 
 
-print("Loaded v109 smart-invest read-model fast path (real area_key mapping)")
 
 
 # =========================================================================
@@ -15003,8 +15011,6 @@ def get_latest_deals_smart(scope, name, prop=None, period=None, deal_type=None, 
     return [], prop, period, deal_type
 
 
-print("Loaded v143 Grande honest-combo hint: building+area mismatch shows real DLD coverage")
-print("Loaded v144 area-synonyms fallback: Burj Khalifa <-> Downtown Dubai, JVC subdistricts, etc.")
 
 
 # ============================================================
@@ -15109,7 +15115,6 @@ def get_stats(scope="dubai", name=None, prop=None, period=None, deal_type=None):
     return None
 
 
-print("Loaded v146 raw-layer ||| strip: get_latest_deals + get_stats (Grande Burj Khalifa fix)")
 
 
 # ============================================================
@@ -15410,7 +15415,6 @@ def get_latest_deals(scope="building", name=None, prop=None, period=None, deal_t
     return merged[:limit]
 
 
-print("Loaded v154 ARCHIVE force-merge: direct psycopg2 + dedupe")
 
 
 
