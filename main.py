@@ -10834,8 +10834,57 @@ def _v91_enrich_area_rows(rows):
     return rows
 
 
+def _v91_rent_passthrough(scope, name, prop, period, deal_type, limit, unit_query):
+    """2026-06-05: rent-aware path для v91. Использует rent_base_from_v33
+    над текущей RENT_TABLE (dld_rent_archive / dld_rents_full в зависимости
+    от _ACTIVE_SOURCE). Возвращает строки в том же формате что v91-sale,
+    чтобы downstream merge/display не сломался."""
+    where, params = rent_scope_condition_v33(scope, name, True)
+    prop_sql, prop_args = rent_property_condition_v33(prop, True)
+    unit_sql, unit_args = make_unit_condition(unit_query) if 'make_unit_condition' in globals() else ("", [])
+    params = list(params) + list(prop_args) + list(unit_args) + [limit]
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f'''
+                SELECT
+                    safe_date,
+                    'Rent' AS procedure_name_en,
+                    rooms_en,
+                    property_type_en,
+                    property_sub_type_en,
+                    rent_price AS price,
+                    NULL::numeric AS area_size,
+                    rent_meter_price AS meter_price,
+                    building_name_en,
+                    area_name_en,
+                    unit_number_norm AS unit_number
+                {rent_base_from_v33()}
+                  {where}
+                  {prop_sql}
+                  {unit_sql}
+                  {rent_period_condition(period)}
+                  AND rent_price IS NOT NULL AND rent_price > 0
+                ORDER BY safe_date DESC NULLS LAST
+                LIMIT %s
+            ''', params)
+            return cur.fetchall()
+
+
 def get_latest_deals(scope, name, prop=None, period=None, deal_type=None, limit=5, unit_query=None):
-    """v91 override: same logic, but area is extracted robustly and back-calculated if needed."""
+    """v91 override: same logic, but area is extracted robustly and back-calculated if needed.
+    2026-06-05: v91 не умел rent — base_from() = SALE table, deal_type=rent
+    давал WHERE procedure_name ILIKE '%rent%' ⊂ dld_transactions_full → 0 строк
+    в нормальном случае, или утечка SALE-строк когда фильтр недостаточно
+    строгий. Для rent делегируем во внутреннюю v34-rent функцию.
+    """
+    if is_rent_deal(deal_type):
+        try:
+            # v34 rent SQL — реальный rent_base_from_v33 над RENT_TABLE.
+            # Возвращает rent-rows; пустой list если данных нет.
+            return _v91_rent_passthrough(scope, name, prop, period, deal_type, limit, unit_query)
+        except Exception as e:
+            print("V91_RENT_PASSTHROUGH_ERROR:", repr(e))
+            return []
     prop_sql, prop_args = property_condition(prop)
     deal_sql, deal_args = make_deal_type_condition(deal_type)
     p_sql = period_condition(period)
@@ -13533,14 +13582,13 @@ def get_stats_smart(scope="dubai", name=None, prop=None, period=None, deal_type=
 
     # v106.1: если v83 проглотил exception и вернул пусто — пробуем все периоды
     # через прямой get_stats (минуя v83-обёртку), чтобы исключить тихие сбои.
+    # 2026-06-05: убран silent deal_type drop — раньше cascade мог дать sale-stats
+    # под видом rent (или наоборот). См. также B132 fix для get_latest_deals_smart.
     direct_attempts = []
     if period:
         direct_attempts.append((prop, None, deal_type))     # тот же prop, без периода
     direct_attempts.append((None, period, deal_type))       # без prop, заданный период
     direct_attempts.append((None, None, deal_type))         # без всего, по deal_type
-    if deal_type:
-        direct_attempts.append((prop, period, None))        # снять deal_type фильтр
-        direct_attempts.append((None, None, None))          # полностью без фильтров (последний шанс)
 
     for p_try, per_try, dt_try in direct_attempts:
         try:
