@@ -469,8 +469,20 @@ def run_parser(from_date, to_date):
 
 
 if __name__ == "__main__":
+    # Dynamic rolling window: last DLD_LOOKBACK_DAYS days up to today.
+    # DLD upstream usually lags by 3-7 days, so 30 days catches everything new.
+    from datetime import datetime, timedelta
+
+    lookback = int(os.getenv("DLD_LOOKBACK_DAYS", "30"))
+    today = datetime.utcnow().date()
+    from_date_dt = today - timedelta(days=lookback)
+
+    from_date_str = from_date_dt.strftime("%m/%d/%Y")
+    to_date_str = today.strftime("%m/%d/%Y")
+
+    print(f"DLD WINDOW: {from_date_str} → {to_date_str}", flush=True)
 
     run_parser(
-        from_date="05/01/2026",
-        to_date="05/15/2026"
+        from_date=from_date_str,
+        to_date=to_date_str,
     )
