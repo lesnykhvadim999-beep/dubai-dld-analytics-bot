@@ -348,7 +348,12 @@ TABLE = "public.dld_transactions_full"
 user_languages = {}
 user_states = {}
 # v132: cache welcome logo file_id (avoids 1.5MB re-upload on every /start)
+# B-A018 (2026-06-05): добавлен Lock — раньше первые N /start под нагрузкой
+# могли каждый загружать логотип отдельно из-за race на None-check.
+# В худшем случае не баг, а лишняя нагрузка, но lock дёшев.
+import threading as _logo_th
 _ANALYTICS_LOGO_FILE_ID = None
+_LOGO_LOCK = _logo_th.Lock()
 
 # Memory-leak guard (2026-05-30, audit STEP 9): cap state dicts so they
 # don't grow unbounded over weeks of uptime.
@@ -4434,7 +4439,11 @@ def _skip_to_none_v86(value):
 
 
 def _final_actions_menu(user_id, scope=None):
-    return post_result_menu(user_id, scope) if "post_result_menu" in globals() else result_menu(user_id, scope)
+    # B-A036 (2026-06-05): post_result_menu всегда определён на этой стадии
+    # (def на L4245 предшествует первому вызову). `"...in globals()` всегда
+    # True — убираем mock branching. result_menu остаётся независимой
+    # утилитой (lead-bot integration, см. 7803+).
+    return post_result_menu(user_id, scope)
 
 
 def _selection_context_text(state):
@@ -15300,6 +15309,31 @@ import psycopg2.extras as _v154_extras
 
 _v154_after_get_latest_deals = get_latest_deals
 
+# B-A022 (2026-06-05): _arch_cols больше не лезет в information_schema
+# на каждый Grande-вызов. TTL=1h.
+_V154_ARCH_COLS_CACHE = {}  # table_name -> (timestamp, set[str])
+_V154_ARCH_COLS_TTL = 3600
+
+
+def _v154_arch_cols(table_short):
+    import time as _t
+    now = _t.time()
+    cached = _V154_ARCH_COLS_CACHE.get(table_short)
+    if cached and (now - cached[0]) < _V154_ARCH_COLS_TTL:
+        return cached[1]
+    try:
+        with _v154_psycopg2.connect(ARCHIVE_DATABASE_URL, connect_timeout=10) as _pc:
+            with _pc.cursor() as _pcur:
+                _pcur.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema='public' AND table_name=%s",
+                    (table_short,))
+                cols = set(r[0] for r in _pcur.fetchall())
+        _V154_ARCH_COLS_CACHE[table_short] = (now, cols)
+        return cols
+    except Exception:
+        return set()
+
 
 def _v154_query_archive(scope, name, prop, period, deal_type, limit=7):
     """Direct ARCHIVE query bypassing v91 fastpath."""
@@ -15353,11 +15387,8 @@ def _v154_query_archive(scope, name, prop, period, deal_type, limit=7):
                 building_or.append("LOWER(building_name_en) ILIKE %s")
                 building_params.append(f"%{cl}%")
         building_where = "AND (" + " OR ".join(building_or) + ")"
-        # discover available columns for archive table
-        with _v154_psycopg2.connect(ARCHIVE_DATABASE_URL, connect_timeout=10) as _pc:
-            with _pc.cursor() as _pcur:
-                _pcur.execute("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=%s", (table.split(".")[-1],))
-                _arch_cols = set(r[0] for r in _pcur.fetchall())
+        # discover available columns for archive table — TTL-cached
+        _arch_cols = _v154_arch_cols(table.split(".")[-1])
         def _pick(*opts):
             for o in opts:
                 if o in _arch_cols:
