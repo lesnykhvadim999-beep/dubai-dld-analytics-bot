@@ -468,8 +468,24 @@ def normalize_area(value: Any) -> Optional[str]:
 
 
 def normalize_building(value: Any) -> Optional[str]:
-    val = _alias_lookup(value, BUILDING_ALIASES)
-    return val or (_s(value) if value else None)
+    # B132: strip FSM "Building|||Area" suffix before alias lookup.
+    s = _s(value) if value else ""
+    if "|||" in s:
+        s = s.split("|||", 1)[0].strip()
+    if not s:
+        return None
+    # B132: BUILDING_ALIASES gets STRICT match only (exact key / exact alias).
+    # Aggressive substring fallback ("grande" ⊂ "Sobha Hartland - Crest Grande"
+    # → "grande signature residences") was overwriting user-picked buildings.
+    # Trust the FSM-selected name verbatim if no strict alias hit.
+    t = _norm(s)
+    if t in BUILDING_ALIASES:
+        return t
+    for canonical, aliases in BUILDING_ALIASES.items():
+        for alias in aliases:
+            if t == _norm(alias):
+                return canonical
+    return s
 
 
 def normalize_goal(value: Any) -> Optional[str]:

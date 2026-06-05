@@ -4503,6 +4503,10 @@ async def send_period_report(message, scope, name=None, prop=None, period=None, 
 async def send_deals_report(message, scope, name=None, prop=None, period=None, deal_type=None):
     user_id = message.from_user.id
     await send_processing(message)
+    # B132: чистим '|||area' suffix перед SQL — wrappers v141/v146 это и так
+    # делают, но явное лучше неявного. Title тоже корректно отрендерится.
+    if name and isinstance(name, str) and "|||" in name:
+        name = name.split("|||", 1)[0].strip()
     # v52 FIX: try/except + централизованный error_logger
     try:
         rows, used_prop, used_period, used_deal_type = get_latest_deals_smart(scope, name, prop, period, deal_type)
@@ -4532,6 +4536,18 @@ async def send_deals_report(message, scope, name=None, prop=None, period=None, d
         return
     title = _human_report_title(scope, name, "Последние сделки")
     html = f"🧾 <b>{title}</b>\n"
+    # B132: показываем ⚠ ПЕРВОЙ строкой (раньше было в конце, юзер не видел).
+    # Любое расхождение filter ↔ used_filter — явный warning.
+    warnings = []
+    if deal_type and used_deal_type and deal_type != used_deal_type:
+        fb = "аренду" if used_deal_type == "rent" else "продажу"
+        warnings.append(f"по выбранному типу сделки данных нет — показаны на {fb}")
+    if prop and used_prop and str(prop).lower() != str(used_prop).lower():
+        warnings.append(f"фильтр '{prop}' расширен до '{used_prop}'")
+    if period and used_period and str(period) != str(used_period):
+        warnings.append(f"период '{period_label(period)}' расширен до '{period_label(used_period)}'")
+    if warnings:
+        html += "⚠️ <i>" + "; ".join(warnings) + ".</i>\n"
     ctx = []
     if used_deal_type:
         ctx.append("продажа" if used_deal_type == "sale" else "аренда")
@@ -4553,15 +4569,8 @@ async def send_deals_report(message, scope, name=None, prop=None, period=None, d
             f"💰 {format_money(r.get('price'))}\n"
             f"📐 {format_money(r.get('meter_price'))} за м²\n\n"
         )
-    # v149: removed auto-360° from deals report.
-    # User can press "Резюме" / "Аналитика" to see it explicitly.
-    # Also: warn user about silent sale↔rent fallback so they know filter changed.
-    if deal_type and used_deal_type and deal_type != used_deal_type:
-        try:
-            fallback_label = "аренду" if used_deal_type == "rent" else "продажу"
-            html += f"\n⚠️ <i>По выбранному фильтру не нашлось — показаны данные на {fallback_label}.</i>\n"
-        except Exception:
-            pass
+    # B132: warning ⚠ теперь показан ПЕРВОЙ строкой выше (а не в хвосте).
+    # v149: removed auto-360° from deals report — юзер запросит явно.
     set_last_report(user_id, title, html, scope)
     await message.answer(html, reply_markup=_final_actions_menu(user_id, scope))
 
@@ -11165,21 +11174,33 @@ def _ir_v96_notes_html(payload):
 
 
 def _ir_v96_apply_to_state_for_report(state):
-    """Normalize state before the old report functions call SQL."""
+    """Normalize state before the old report functions call SQL.
+    B132: НЕ позволяем IR переписать `name`, если юзер уже выбрал scope+name
+    через FSM-визард (choose_building / choose_area). IR fuzzy-substring
+    мог подменить "Sobha Hartland - Crest Grande" → "Grande Signature
+    Residences" из-за алиаса "grande" в BUILDING_ALIASES. Trust the
+    explicit wizard pick — IR используем только для нормализации
+    property / deal_type / period.
+    """
     payload = _ir_v96_prepare(state, "report")
     if not payload:
         return state, None
     req = payload.request
     normalized = dict(state)
-    normalized["deal_type"] = _ir_v96_deal_type(payload, state.get("deal_type"))
+    has_explicit_pick = (state.get("scope") in ("building", "area")
+                         and bool(state.get("name")))
+    # B132: respect explicit user choice for deal_type — only fill from IR if missing.
+    if not state.get("deal_type"):
+        normalized["deal_type"] = _ir_v96_deal_type(payload, state.get("deal_type"))
     normalized["property"] = _ir_v96_property(payload, state)
-    if req.scope == "area" and req.area:
-        normalized["scope"] = "area"
-        normalized["name"] = req.area
-    elif req.scope == "building" and req.building:
-        normalized["scope"] = "building"
-        normalized["name"] = req.building
-    if req.period_months:
+    if not has_explicit_pick:
+        if req.scope == "area" and req.area:
+            normalized["scope"] = "area"
+            normalized["name"] = req.area
+        elif req.scope == "building" and req.building:
+            normalized["scope"] = "building"
+            normalized["name"] = req.building
+    if req.period_months and not state.get("period"):
         normalized["period"] = str(req.period_months)
     return normalized, payload
 
@@ -13338,14 +13359,15 @@ def get_latest_deals_smart(scope, name, prop=None, period=None, deal_type=None, 
     if rows:
         return rows, used_prop, used_period, used_deal_type
 
+    # B132: убран silent sale↔rent flip. Раньше при пустой выборке cascade
+    # дропал deal_type → подтягивал rent вместо sale (или наоборот) без
+    # видимого warning'а. Юзер видел "Фильтр: аренда" хотя выбирал Продажу.
+    # Теперь deal_type держим строго; расширяем только prop и period.
     direct_attempts = []
     if period:
         direct_attempts.append((prop, None, deal_type))
     direct_attempts.append((None, period, deal_type))
     direct_attempts.append((None, None, deal_type))
-    if deal_type:
-        direct_attempts.append((prop, period, None))
-        direct_attempts.append((None, None, None))
 
     for p_try, per_try, dt_try in direct_attempts:
         try:
