@@ -1513,7 +1513,21 @@ def property_condition(prop):
         return "AND (COALESCE(property_type_en::text, '') ILIKE %s OR COALESCE(property_sub_type_en::text, '') ILIKE %s)", ["%villa%", "%villa%"]
 
     if p == "townhouse":
-        return "AND (COALESCE(property_type_en::text, '') ILIKE %s OR COALESCE(property_sub_type_en::text, '') ILIKE %s)", ["%town%", "%town%"]
+        # 2026-06-05: проверка покрытия DLD показала, что «Townhouse» как
+        # отдельная категория почти отсутствует (525 «Stacked Townhouses»
+        # на 1.7M sale-сделок = 0.03%). Большая часть «townhouse»-объектов
+        # в Dubai регистрируются как «Stacked Townhouses» или sub_type=
+        # «Complex Villas». Расширяем фильтр чтобы юзер увидел реальный
+        # пул townhouse-like объектов.
+        return (
+            "AND ("
+            "COALESCE(property_type_en::text, '') ILIKE %s "
+            "OR COALESCE(property_sub_type_en::text, '') ILIKE %s "
+            "OR COALESCE(property_sub_type_en::text, '') ILIKE %s "
+            "OR COALESCE(property_sub_type_en::text, '') ILIKE %s"
+            ")",
+            ["%town%", "%town%", "%stacked%", "%complex villa%"]
+        )
 
     if p == "penthouse":
         return "AND (COALESCE(property_type_en::text, '') ILIKE %s OR COALESCE(property_sub_type_en::text, '') ILIKE %s)", ["%penthouse%", "%penthouse%"]
@@ -4489,6 +4503,36 @@ def _human_report_title(scope, name, report_type="Аналитика"):
     return f"🌆 {report_type}: Дубай"
 
 
+def _coverage_note(prop, deal_type):
+    """2026-06-05: возвращает honest-coverage warning для типов где DLD/наша
+    выборка реально ограничена. Прикручиваем в подвал отчётов где
+    применим — пользователь должен понимать, что низкие числа не баг бота,
+    а реальный пробел в источнике данных.
+    Returns: HTML string (empty if no warning).
+    """
+    p = str(prop or "").lower().strip()
+    d = str(deal_type or "").lower().strip()
+    is_rent = "rent" in d or "аренд" in d or "🔑" in d
+    notes = []
+    if "town" in p:
+        # ARCHIVE.dld_sale_archive: только ~525 «Stacked Townhouses» на 1.7M записей.
+        notes.append(
+            "DLD регистрирует townhouse-объекты редко как отдельный тип "
+            "(часто пишутся как Villa или Complex Villas) — выборка может "
+            "быть малой даже для популярных районов."
+        )
+    if is_rent and ("villa" in p or "town" in p or "apart" in p or "flat" in p):
+        # dld_rent_archive (10M строк) НЕ содержит property_type_en / sub_type.
+        notes.append(
+            "Архив аренды в DLD не разделяет типы объекта — "
+            "фильтр по формату работает только на свежей части (~35K "
+            "контрактов) из общего пула ~10M."
+        )
+    if not notes:
+        return ""
+    return "\n\n📌 <i>" + " ".join(notes) + "</i>"
+
+
 def _build_360_conclusion(row, scope=None, name=None, report_kind=None):
     deals = _int(row.get("deals") if row else 0) or 0
     avg_price = row.get("avg_price") if row else None
@@ -4537,6 +4581,7 @@ async def send_full_report(message, scope, name=None, prop=None, period=None, de
     html += _build_360_conclusion(row, scope, name, title_prefix)
     if (used_prop, used_period, used_deal_type) != (prop, period, deal_type):
         html += "\n\nℹ️ По точному фильтру выборка была узкой, поэтому показана ближайшая стабильная DLD-выборка."
+    html += _coverage_note(used_prop or prop, used_deal_type or deal_type)
     set_last_report(user_id, title, html, scope)
     await message.answer(html, reply_markup=_final_actions_menu(user_id, scope))
     try:
@@ -4572,6 +4617,7 @@ async def send_period_report(message, scope, name=None, prop=None, period=None, 
     title = _human_report_title(scope, name, "Сравнение периодов")
     html = show_comparison(f"<b>{title}</b>", current, previous, period, deal_type)
     html += _build_360_conclusion(current, scope, name, "period")
+    html += _coverage_note(prop, deal_type)
     set_last_report(user_id, title, html, scope)
     await message.answer(html, reply_markup=_final_actions_menu(user_id, scope))
 
@@ -4647,6 +4693,7 @@ async def send_deals_report(message, scope, name=None, prop=None, period=None, d
         )
     # B132: warning ⚠ теперь показан ПЕРВОЙ строкой выше (а не в хвосте).
     # v149: removed auto-360° from deals report — юзер запросит явно.
+    html += _coverage_note(used_prop or prop, used_deal_type or deal_type)
     set_last_report(user_id, title, html, scope)
     await message.answer(html, reply_markup=_final_actions_menu(user_id, scope))
 
