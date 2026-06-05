@@ -4024,15 +4024,8 @@ async def start_handler(message: Message):
                 print(f"[deeplink area] {e}")
     # default: show welcome / language picker (with logo if available)
     # v108.1: restored welcome text + logo fallback after Layla UX cut
-    welcome_text = (
-        "🏙 <b>Dubai DLD Analytics</b>\n"
-        "<i>Real-time market intelligence · UAE</i>\n\n"
-        "🇬🇧 <b>200K+ transactions · 52 areas · Price trends · ROI rankings · Building reports · PDF export</b>\n"
-        "Dubai property market analytics powered by official DLD data — find the best ROI, compare areas, track price dynamics, get full building reports.\n\n"
-        "🇷🇺 <b>200K+ сделок · 52 района · Динамика цен · Рейтинги ROI · Отчёты по зданиям · PDF-экспорт</b>\n"
-        "Аналитика рынка недвижимости Дубая на официальных данных DLD — лучший ROI, сравнение районов, динамика цен, полные отчёты по зданиям.\n\n"
-        "🌐 <b>Choose language / Выберите язык / اختر اللغة</b> ⬇️"
-    )
+    # B113: длинный welcome теперь в BotFather description. Здесь только lang selector.
+    welcome_text = "👇 Choose language / Выберите язык / اختر اللغة"
     # v132: file_id cache for instant /start after first upload (avoids 15s sendPhoto timeout)
     global _ANALYTICS_LOGO_FILE_ID
     if _ANALYTICS_LOGO_FILE_ID:
