@@ -6327,13 +6327,36 @@ def rent_meta_v33():
     subtype = text_first_expr_v33(cols, ['property_sub_type_en','property_sub_type','property_subtype','unit_type','property_category'])
     unit = text_first_expr_v33(cols, ['unit_number','unit_no','unit','property_number','property_no','property_id'])
     price = numeric_price_expr_v33(cols)
-    size = numeric_size_expr_v33(cols)
+    # 2026-06-05: size в м² (rent-таблицы actual_area хранят м², а старый
+    # numeric_size_expr_v33 с BETWEEN 100 AND 50000 терял всё что <100 м²).
+    size = _rent_size_expr_m2(cols)
     meter = f"CASE WHEN ({size}) IS NOT NULL AND ({size}) > 0 THEN ({price}) / ({size}) ELSE NULL END"
     return {'search_text': search_text, 'building': building, 'area': area, 'rooms': rooms, 'property_type': ptype, 'property_sub_type': subtype, 'unit': unit, 'price': price, 'meter': meter, 'safe_date': date_expr_v33(cols)}
 
 
+def _rent_size_expr_m2(cols):
+    """2026-06-05: размер для rent-таблиц. Проба показала что actual_area в
+    dld_rents_full хранится в м² (Decimal 42-130). numeric_size_expr_v33
+    отфильтровывал значения <100 → большинство 1BR (~40-80 m²) теряли
+    площадь. Берём первую найденную колонку из rent-кандидатов с диапазоном
+    10..5000 (м²), без sqft-нормализации."""
+    low = {c.lower(): c for c in cols}
+    for cand in ['actual_area', 'unit_area', 'area_size_m2', 'area_sqm',
+                 'property_size', 'built_up_area', 'size', 'size_sqft', 'area_size']:
+        if cand.lower() in low:
+            col = low[cand.lower()]
+            raw = (f"NULLIF(regexp_replace(COALESCE({q33(col)}::text, ''), "
+                   f"'[^0-9.]', '', 'g'), '')::numeric")
+            return f"CASE WHEN ({raw}) BETWEEN 10 AND 5000 THEN ({raw}) ELSE NULL END"
+    return 'NULL::numeric'
+
+
 def rent_base_from_v33():
     m = rent_meta_v33()
+    cols = table_columns_v33(RENT_TABLE)
+    # 2026-06-05: добавлен area_size_m2 alias — раньше площадь только
+    # участвовала в meter_price расчёте, но не была доступна в SELECT
+    # как отдельная колонка. Rent-таблицы хранят actual_area в м².
     return f'''
         FROM (
             SELECT
@@ -6347,7 +6370,8 @@ def rent_base_from_v33():
                 {m['property_sub_type']} AS property_sub_type_en,
                 {m['unit']} AS unit_number_norm,
                 {m['price']} AS rent_price,
-                {m['meter']} AS rent_meter_price
+                {m['meter']} AS rent_meter_price,
+                ({_rent_size_expr_m2(cols)}) AS area_size_m2
             FROM {RENT_TABLE}
         ) t
         WHERE 1=1
@@ -10861,7 +10885,7 @@ def _v91_rent_passthrough(scope, name, prop, period, deal_type, limit, unit_quer
                     property_type_en,
                     property_sub_type_en,
                     rent_price AS price,
-                    NULL::numeric AS area_size,
+                    area_size_m2 AS area_size,
                     rent_meter_price AS meter_price,
                     building_name_en,
                     area_name_en,
