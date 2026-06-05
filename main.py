@@ -13596,9 +13596,16 @@ except Exception as _e:  # noqa: BLE001
 
 
 def _v107_period_to_months(period):
-    """Конвертирует period-токен бота ('6m'/'1y'/'3y'/'all' и пр.) в число месяцев."""
+    """Конвертирует period-токен бота ('6m'/'1y'/'3y'/'all' и пр.) в число месяцев.
+    B-A006 (2026-06-05): дефолт сменён с 36 → 12 чтобы совпадать с
+    period_condition(None)=12mo (line 1505). Раньше read-model fast path
+    отдавал 36mo агрегаты, а raw fallback — 12mo. Один и тот же UI клик
+    давал разные цифры в зависимости от того, какой путь сработал.
+    Также делегируем парсинг неизвестного токена в period_months() (если
+    есть), чтобы расширения /сокращения списка периодов делались в одном
+    месте."""
     if period is None:
-        return 36  # ≈ 3 года истории = весь bootstrap
+        return 12
     s = str(period).lower().strip()
     table = {
         "3m": 3, "3 m": 3, "3 months": 3, "3 месяца": 3,
@@ -13606,10 +13613,18 @@ def _v107_period_to_months(period):
         "1y": 12, "12m": 12, "1 year": 12, "1 год": 12,
         "2y": 24, "24m": 24, "2 years": 24, "2 года": 24,
         "3y": 36, "36m": 36, "3 years": 36, "3 года": 36,
+        "5y": 60, "60m": 60, "5 years": 60, "5 лет": 60,
         "all": 36, "all_time": 36, "all-time": 36, "📅 всё время": 36,
     }
     if s in table:
         return table[s]
+    # Делегируем в period_months() если определена (single source of truth)
+    try:
+        m = period_months(period)
+        if m is not None:
+            return int(m)
+    except Exception:
+        pass
     # Попробуем выдрать число + суффикс
     import re as _re
     m = _re.match(r"(\d+)\s*([myг])", s)
@@ -13617,9 +13632,9 @@ def _v107_period_to_months(period):
         n = int(m.group(1))
         suf = m.group(2)
         if suf in ("m",):
-            return min(36, max(1, n))
+            return min(60, max(1, n))
         if suf in ("y", "г"):
-            return min(36, max(1, n * 12))
+            return min(60, max(1, n * 12))
     return 12
 
 
