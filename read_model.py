@@ -372,6 +372,65 @@ def try_building_stats(building_name: str,
         except Exception as e:
             LOG.warning("try_building_stats LIKE fallback failed: %s", e)
 
+        # B129: rooms='all' fallback — building_stats builder часто НЕ строит
+        # синтетическую 'all'-строку (например для 'grande' есть только 1br/2br/3br/4br).
+        # Когда юзер кликает Обзор 360 (rooms=None → 'all'), точный матч пуст.
+        # Решение: SUM по всем rooms-бакетам когда rm='all'.
+        # Стадия 1: SUM с EXACT match (точное здание, например 'grande' → 319 deals).
+        # Стадия 2: если exact пуст — SUM с LIKE (расширяем до 'grande%').
+        # Не объединяем EXACT и LIKE в одном OR — иначе для популярных имён
+        # (Grande, Marina) подтянутся посторонние здания.
+        if rm == "all":
+            sql_sum_rooms = """
+                SELECT
+                    MIN(building_name_display)                                          AS building_name,
+                    MIN(area_name)                                                      AS area_name,
+                    SUM(deals_count)::int                                               AS deals,
+                    (SUM(avg_price_aed*deals_count)/NULLIF(SUM(deals_count),0))         AS avg_price,
+                    AVG(median_price_aed)                                               AS median_price,
+                    MAX(top_quartile_price_aed)                                         AS top_quartile_price,
+                    AVG(avg_price_psf)                                                  AS avg_price_psf,
+                    MAX(top_quartile_psf)                                               AS top_quartile_psf,
+                    MAX(last_deal_date)                                                 AS last_deal_date,
+                    MAX(computed_at)                                                    AS computed_at
+                FROM building_stats
+                WHERE {bk_filter}
+                  AND rooms <> 'all'
+                  AND deal_type = %s
+                  AND period_month >= %s
+            """
+            # Стадия 1: exact match
+            try:
+                with _conn().cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(sql_sum_rooms.format(bk_filter="building_key = %s"),
+                                (bk, dl, start))
+                    row = cur.fetchone()
+                if row and row.get("deals"):
+                    row = dict(row)
+                    row["period_months"] = period_months
+                    row["source"] = "read_model_sum_rooms_exact"
+                    LOG.info("try_building_stats SUM rooms EXACT hit: %s -> %s deals",
+                             bk, row.get("deals"))
+                    return row
+            except Exception as e:
+                LOG.warning("try_building_stats SUM rooms EXACT failed: %s", e)
+
+            # Стадия 2: LIKE match
+            try:
+                with _conn().cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(sql_sum_rooms.format(bk_filter="building_key LIKE %s"),
+                                (f"%{bk}%", dl, start))
+                    row = cur.fetchone()
+                if row and row.get("deals"):
+                    row = dict(row)
+                    row["period_months"] = period_months
+                    row["source"] = "read_model_sum_rooms_like"
+                    LOG.info("try_building_stats SUM rooms LIKE hit: %s -> %s deals",
+                             bk, row.get("deals"))
+                    return row
+            except Exception as e:
+                LOG.warning("try_building_stats SUM rooms LIKE failed: %s", e)
+
         _neg_set(cache_key)
         return None
 
