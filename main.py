@@ -4039,7 +4039,7 @@ async def start_handler(message: Message):
     if payload.startswith("bld-") or payload.startswith("bld_"):
         bld = payload[4:].replace("_", " ").strip()
         if bld:
-            user_states[user_id] = {"step": "full_report_done", "history": []}
+            user_states[user_id] = {"step": "full_report_done", "history": user_states.get(user_id, {}).get("history", [])}
             try:
                 await send_full_market_report(message, "building", bld)
                 return
@@ -4048,7 +4048,7 @@ async def start_handler(message: Message):
     elif payload.startswith("area-") or payload.startswith("area_"):
         area = payload[5:].replace("_", " ").strip()
         if area:
-            user_states[user_id] = {"step": "full_report_done", "history": []}
+            user_states[user_id] = {"step": "full_report_done", "history": user_states.get(user_id, {}).get("history", [])}
             try:
                 await send_full_market_report(message, "area", area)
                 return
@@ -4771,7 +4771,7 @@ async def main_handler(message: Message):
     try:
         # Служебные команды — не засоряют главное меню.
         if text in ["/language", "/settings", "⚙️ Настройки", "⚙️ Язык", "⚙️ Settings", "⚙️ الإعدادات"]:
-            user_states[user_id] = {"step": "settings", "history": []}
+            user_states[user_id] = {"step": "settings", "history": user_states.get(user_id, {}).get("history", [])}
             await message.answer(tr(user_id, "lang_menu_header"), reply_markup=language_menu())
             return
         if text == "/pdf" or text == "📄 PDF":
@@ -4831,7 +4831,7 @@ async def main_handler(message: Message):
             return
         # PHASE BN N1: open Pro submenu
         if text == "⚡ Pro / 🌟 Супер-фишки":
-            user_states[user_id] = {"step": "pro_menu", "history": []}
+            user_states[user_id] = {"step": "pro_menu", "history": user_states.get(user_id, {}).get("history", [])}
             await message.answer(
                 "⚡ <b>Pro features — продвинутая аналитика и AI-инструменты</b>\n\n"
                 "• 📊 Рейтинги — топ зданий/районов\n"
@@ -4873,49 +4873,49 @@ async def main_handler(message: Message):
 
         # Главное меню: 6 понятных сценариев.
         if _is_menu_btn(text, "m_smart_pick"):
-            user_states[user_id] = {"step": "smart_goal", "history": []}
+            user_states[user_id] = {"step": "smart_goal", "history": user_states.get(user_id, {}).get("history", [])}
             await message.answer(tr(user_id, "smart_pick_intro"), reply_markup=smart_goal_menu(user_id))
             return
         if _is_menu_btn(text, "m_compare") or text == "⚖️ Сравнение форматов":
-            user_states[user_id] = {"step": "format_compare_scope", "history": []}
+            user_states[user_id] = {"step": "format_compare_scope", "history": user_states.get(user_id, {}).get("history", [])}
             await message.answer(
                 tr(user_id, "format_compare_intro"),
                 reply_markup=format_compare_scope_menu(user_id)
             )
             return
         if _is_menu_btn(text, "m_best_obj"):
-            user_states[user_id] = {"step": "best_object_deal_type", "history": []}
+            user_states[user_id] = {"step": "best_object_deal_type", "history": user_states.get(user_id, {}).get("history", [])}
             await message.answer(
                 tr(user_id, "best_object_intro"),
                 reply_markup=best_object_deal_type_menu(user_id)
             )
             return
         if _is_menu_btn(text, "m_building"):
-            user_states[user_id] = {"step": "building_query", "scope": "building", "history": []}
+            user_states[user_id] = {"step": "building_query", "scope": "building", "history": user_states.get(user_id, {}).get("history", [])}
             await message.answer(tr(user_id, "enter_building"), reply_markup=back_menu(user_id))
             return
         if _is_menu_btn(text, "m_area"):
-            user_states[user_id] = {"step": "area_query", "scope": "area", "history": []}
+            user_states[user_id] = {"step": "area_query", "scope": "area", "history": user_states.get(user_id, {}).get("history", [])}
             await message.answer(tr(user_id, "enter_area"), reply_markup=back_menu(user_id))
             return
         if _is_menu_btn(text, "m_deals") and state.get("step") not in ["building_action", "area_action", "dubai_action", "result"]:
-            user_states[user_id] = {"step": "deals_scope", "history": []}
+            user_states[user_id] = {"step": "deals_scope", "history": user_states.get(user_id, {}).get("history", [])}
             await message.answer(tr(user_id, "deals_dld_header"), reply_markup=deals_scope_menu(user_id))
             return
         if _is_menu_btn(text, "m_ratings"):
-            user_states[user_id] = {"step": "ranking_menu", "history": []}
+            user_states[user_id] = {"step": "ranking_menu", "history": user_states.get(user_id, {}).get("history", [])}
             await message.answer(
                 tr(user_id, "rankings_market_pick"),
                 reply_markup=ranking_menu(user_id),
             )
             return
         if _is_menu_btn(text, "m_dubai"):
-            st = {"step": "dubai_action", "scope": "dubai", "name": None, "history": []}
+            st = {"step": "dubai_action", "scope": "dubai", "name": None, "history": user_states.get(user_id, {}).get("history", [])}
             await _ask_action_menu_v72(message, st)
             return
         # PHASE BM Layer 13: Market World Model forecast button
         if text == "🔮 Прогноз рынка":
-            user_states[user_id] = {"step": "mwm_forecast_query", "history": []}
+            user_states[user_id] = {"step": "mwm_forecast_query", "history": user_states.get(user_id, {}).get("history", [])}
             await message.answer(
                 "🔮 <b>Прогноз рынка Дубая</b>\n\n"
                 "Напишите вопрос свободным текстом, например:\n"
@@ -4937,10 +4937,10 @@ async def main_handler(message: Message):
                     f"Не удалось построить прогноз: {e}",
                     reply_markup=main_menu(user_id),
                 )
-            user_states[user_id] = {"step": None, "history": []}
+            user_states[user_id] = {"step": None, "history": user_states.get(user_id, {}).get("history", [])}
             return
         if text == "📑 Полный отчёт":
-            user_states[user_id] = {"step": "full_report_menu", "history": []}
+            user_states[user_id] = {"step": "full_report_menu", "history": user_states.get(user_id, {}).get("history", [])}
             await message.answer(
                 "📑 <b>Полный аналитический отчёт</b>\n\n"
                 "Готовые ежедневные отчёты с медианными ценами по типам квартир, "
@@ -5111,11 +5111,11 @@ async def main_handler(message: Message):
                 await message.answer(tr(user_id, "rankings_header"), reply_markup=ranking_menu(user_id))
                 return
             if text == "🔁 Другое здание":
-                user_states[user_id] = {"step": "building_query", "scope": "building", "history": []}
+                user_states[user_id] = {"step": "building_query", "scope": "building", "history": user_states.get(user_id, {}).get("history", [])}
                 await message.answer(tr(user_id, "enter_building"), reply_markup=back_menu(user_id))
                 return
             if text == "🔁 Другой район":
-                user_states[user_id] = {"step": "area_query", "scope": "area", "history": []}
+                user_states[user_id] = {"step": "area_query", "scope": "area", "history": user_states.get(user_id, {}).get("history", [])}
                 await message.answer(tr(user_id, "enter_area"), reply_markup=back_menu(user_id))
                 return
             await _ask_action_menu_v72(message, state)
@@ -5206,7 +5206,7 @@ async def main_handler(message: Message):
             except Exception as e:
                 print("BEST_OBJECT_REPORT_ERROR:", repr(e))
                 html = no_data_message("Лучший объект", user_id=user_id)
-            user_states[user_id] = {"step": "result", "scope": "dubai", "last_report_title": "Лучший объект", "last_report_html": html, "history": []}
+            user_states[user_id] = {"step": "result", "scope": "dubai", "last_report_title": "Лучший объект", "last_report_html": html, "history": user_states.get(user_id, {}).get("history", [])}
             await message.answer(html, reply_markup=post_result_menu(user_id, "dubai"))
             return
 
@@ -5491,7 +5491,7 @@ async def main_handler(message: Message):
                     f"💰 <b>Ориентир цены:</b> {format_money(best.get('avg_price'))}\n"
                 )
 
-            user_states[user_id] = {"step": "result", "scope": "dubai", "last_report_title": title, "last_report_html": html, "history": []}
+            user_states[user_id] = {"step": "result", "scope": "dubai", "last_report_title": title, "last_report_html": html, "history": user_states.get(user_id, {}).get("history", [])}
             await message.answer(html, reply_markup=post_result_menu(user_id, "dubai"))
             return
 
