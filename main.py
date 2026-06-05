@@ -5005,14 +5005,17 @@ async def main_handler(message: Message):
         # Меню действий по зданию/району/Дубаю.
         if state.get("step") in ["building_action", "area_action", "dubai_action"]:
             if text in ["📊 Обзор 360", "📊 Обзор рынка"]:
-                # B062: Обзор 360 — сразу отчёт с дефолтами (sale + all rooms + 12mo),
-                # без 3-step wizard. Юзер: "оптимизировать чтобы было всё просто".
+                # B062: Обзор 360 — сразу отчёт с дефолтами (sale + all rooms + 12mo).
+                # B118: force_all_types=True → IR не должен подменять property=None на villa/apartment.
+                # JVC раньше показывал "Villa · 657 сделок" вместо общей картины — это IR
+                # подставлял property_format=villa, теряя миллионы apartment-сделок.
                 _quick_state = {
                     **state,
                     "report_kind": "full",
                     "deal_type": state.get("deal_type") or "sale",
-                    "property": state.get("property") or None,  # None = all
+                    "property": None,  # B118: явный all-types
                     "period": state.get("period") or "12",
+                    "force_all_types": True,  # B118
                 }
                 await _execute_selected_report_v72(message, _quick_state)
                 return
@@ -11062,7 +11065,12 @@ def _ir_v96_deal_type(payload, fallback=None):
 
 
 def _ir_v96_property(payload, state):
-    """Prefer canonical format; if apartment + bedrooms selected, use bedrooms for DLD filtering."""
+    """Prefer canonical format; if apartment + bedrooms selected, use bedrooms for DLD filtering.
+    B118: если state['force_all_types']=True (Обзор 360 click), не перезаписываем prop из IR —
+    юзер хочет общую картину по району без фильтра по типу.
+    """
+    if state.get("force_all_types"):
+        return None
     if payload:
         req = payload.request
         if req.bedrooms:
