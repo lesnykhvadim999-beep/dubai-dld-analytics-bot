@@ -1526,21 +1526,27 @@ def period_condition(period):
 
 
 def period_previous_condition(period):
-    if not period:
-        return ""
-
-    p = str(period).strip().lower()
-
+    # B-A005: добавлены 24/60/all + дефолт на 12-mo previous-window.
+    # Раньше period_previous_condition("24") возвращал пустую строку →
+    # previous-window запрос подтягивал ВСЕ исторические сделки → бредовые
+    # YoY %. Юзер видел "+1500%" вместо реалистичного +12%.
+    p = str(period or "").strip().lower()
+    if p in ["all", "all time", "all_time", "всё время", "все время"]:
+        return ""  # explicit all-time has no comparable previous window
     if p in ["3", "3m", "3 мес", "3 месяца", "3 months"]:
         return "AND safe_date < CURRENT_DATE - INTERVAL '3 months' AND safe_date >= CURRENT_DATE - INTERVAL '6 months'"
     if p in ["6", "6m", "6 мес", "6 месяцев", "6 months"]:
         return "AND safe_date < CURRENT_DATE - INTERVAL '6 months' AND safe_date >= CURRENT_DATE - INTERVAL '12 months'"
     if p in ["12", "1", "1y", "1 год", "год", "12 months", "1 year"]:
         return "AND safe_date < CURRENT_DATE - INTERVAL '12 months' AND safe_date >= CURRENT_DATE - INTERVAL '24 months'"
+    if p in ["24", "2y", "2 года", "24 months", "2 years"]:
+        return "AND safe_date < CURRENT_DATE - INTERVAL '24 months' AND safe_date >= CURRENT_DATE - INTERVAL '48 months'"
     if p in ["36", "3y", "3 года", "36 months", "3 years"]:
         return "AND safe_date < CURRENT_DATE - INTERVAL '36 months' AND safe_date >= CURRENT_DATE - INTERVAL '72 months'"
-
-    return ""
+    if p in ["60", "5y", "5 лет", "60 months", "5 years"]:
+        return "AND safe_date < CURRENT_DATE - INTERVAL '60 months' AND safe_date >= CURRENT_DATE - INTERVAL '120 months'"
+    # Unknown token → default to 12mo previous window (matches period_condition default).
+    return "AND safe_date < CURRENT_DATE - INTERVAL '12 months' AND safe_date >= CURRENT_DATE - INTERVAL '24 months'"
 
 
 
@@ -13822,11 +13828,11 @@ def _v108_top_yield(row):
 
 
 def _v108_subscribe_cta(lang="ru"):
-    if lang == "en":
-        return "\n💡 <i>Get daily market insights → /subscribe</i>"
-    if lang == "ar":
-        return "\n💡 <i>احصل على رؤى يومية للسوق → /subscribe</i>"
-    return "\n💡 <i>Хотите получать такие данные ежедневно? → /subscribe</i>"
+    # B-A016 (2026-06-05): /subscribe команда не реализована + нарушает
+    # feedback_no_monetization_yet.md (никаких подписочных CTA до явной
+    # команды Вадима). CTA полностью убран — возвращаем пустую строку,
+    # чтобы 2 call-site не упали.
+    return ""
 
 
 def _v108_smart_pick_cta(lang="ru"):
@@ -15070,35 +15076,36 @@ print("Loaded v146 raw-layer ||| strip: get_latest_deals + get_stats (Grande Bur
 
 
 # ============================================================
-# v147 TRACER — log every call to get_latest_deals + get_stats for Grande.
-# Reveals exact path that returns empty.
+# v147 TRACER — gated за os.environ['DLD_TRACE'] (B-A015).
+# Раньше печатал каждый Grande-вызов get_latest_deals/get_stats
+# безусловно в production stdout. Теперь только при DLD_TRACE=1.
 # ============================================================
 _v146_after_get_latest_deals = get_latest_deals
 _v146_after_get_stats = get_stats
+_DLD_TRACE_ON = bool(os.environ.get("DLD_TRACE"))
 
 
 def get_latest_deals(scope="building", name=None, prop=None, period=None, deal_type=None, limit=7, unit_query=None):  # noqa: F811
     rows = _v146_after_get_latest_deals(scope, name, prop, period, deal_type, limit=limit, unit_query=unit_query)
-    try:
-        if name and "grande" in str(name).lower():
-            print(f"[V147_TRACE] get_latest_deals scope={scope!r} name={name!r} prop={prop!r} period={period!r} dt={deal_type!r} → rows={len(rows) if rows else 0}", flush=True)
-    except Exception:
-        pass
+    if _DLD_TRACE_ON:
+        try:
+            if name and "grande" in str(name).lower():
+                print(f"[V147_TRACE] get_latest_deals scope={scope!r} name={name!r} prop={prop!r} period={period!r} dt={deal_type!r} → rows={len(rows) if rows else 0}", flush=True)
+        except Exception:
+            pass
     return rows
 
 
 def get_stats(scope="dubai", name=None, prop=None, period=None, deal_type=None):  # noqa: F811
     r = _v146_after_get_stats(scope, name, prop, period, deal_type)
-    try:
-        if name and "grande" in str(name).lower():
-            deals = (r or {}).get("deals", 0) if isinstance(r, dict) else "non-dict"
-            print(f"[V147_TRACE] get_stats scope={scope!r} name={name!r} prop={prop!r} period={period!r} dt={deal_type!r} → deals={deals}", flush=True)
-    except Exception:
-        pass
+    if _DLD_TRACE_ON:
+        try:
+            if name and "grande" in str(name).lower():
+                deals = (r or {}).get("deals", 0) if isinstance(r, dict) else "non-dict"
+                print(f"[V147_TRACE] get_stats scope={scope!r} name={name!r} prop={prop!r} period={period!r} dt={deal_type!r} → deals={deals}", flush=True)
+        except Exception:
+            pass
     return r
-
-
-print("Loaded v147 Grande call tracer")
 
 
 # ============================================================
@@ -15152,7 +15159,7 @@ def get_latest_deals(scope="building", name=None, prop=None, period=None, deal_t
         try:
             rows = _v148_orig_get_latest_deals(scope, cand, prop, period, deal_type, limit=limit, unit_query=unit_query)
             if rows:
-                if cand != (name or ""):
+                if _DLD_TRACE_ON and cand != (name or ""):
                     try:
                         print(f"[V148_HIT] get_latest_deals alias={cand!r} (was {name!r}) → rows={len(rows)}", flush=True)
                     except Exception:
@@ -15174,7 +15181,7 @@ def get_stats(scope="dubai", name=None, prop=None, period=None, deal_type=None):
         try:
             r = _v148_orig_get_stats(scope, cand, prop, period, deal_type)
             if r and isinstance(r, dict) and (r.get("deals") or 0) > 0:
-                if cand != (name or ""):
+                if _DLD_TRACE_ON and cand != (name or ""):
                     try:
                         print(f"[V148_HIT] get_stats alias={cand!r} (was {name!r}) → deals={r.get('deals')}", flush=True)
                     except Exception:
@@ -15184,9 +15191,6 @@ def get_stats(scope="dubai", name=None, prop=None, period=None, deal_type=None):
         except Exception:
             continue
     return last
-
-
-print("Loaded v148 BUILDING_ALIASES expansion: grande signature residences -> Grande, etc.")
 
 
 # ============================================================
@@ -15203,24 +15207,20 @@ _V153_COUNTER = [0]
 
 def _run_source_sql_v67(source, table, sql, params):  # noqa: F811
     rows = _v151_orig_run_source(source, table, sql, params) if _v151_orig_run_source else []
-    # v153: UNCONDITIONAL log first 50 calls + grande-specific
-    _V153_COUNTER[0] += 1
-    try:
-        params_str = repr(params)[:300] if params else "[]"
-        is_grande = "grande" in params_str.lower() or "grande" in (sql or "").lower()
-        if _V153_COUNTER[0] <= 50 or is_grande:
-            print(f"[V153_SQL #{_V153_COUNTER[0]}] grande={is_grande} src={source} tbl={table} → rows={len(rows) if rows else 0} params={params_str}", flush=True)
-            if is_grande:
-                print(f"[V153_SQL]   SQL={(sql or '')[:600]}", flush=True)
-    except Exception as e:
+    # B-A015: v153 SQL tracer gated за DLD_TRACE. Раньше первые 50 вызовов
+    # на КАЖДЫЙ request + все Grande-вызовы — высокий шум в проде.
+    if _DLD_TRACE_ON:
+        _V153_COUNTER[0] += 1
         try:
-            print(f"[V153_SQL] trace_error: {e!r}", flush=True)
+            params_str = repr(params)[:300] if params else "[]"
+            is_grande = "grande" in params_str.lower() or "grande" in (sql or "").lower()
+            if _V153_COUNTER[0] <= 50 or is_grande:
+                print(f"[V153_SQL #{_V153_COUNTER[0]}] grande={is_grande} src={source} tbl={table} → rows={len(rows) if rows else 0} params={params_str}", flush=True)
+                if is_grande:
+                    print(f"[V153_SQL]   SQL={(sql or '')[:600]}", flush=True)
         except Exception:
             pass
     return rows
-
-
-print("Loaded v153 unconditional SQL trace")
 
 
 # ============================================================
@@ -15377,68 +15377,10 @@ print("Loaded v154 ARCHIVE force-merge: direct psycopg2 + dedupe")
 
 
 
-# ============================================================
-# v150 BOOT — count Grande+Burj 3BR last 12m in BOTH LIVE and ARCHIVE.
-# Will be REMOVED after data collected.
-# ============================================================
-def _v150_count_grande_3br(label, table, date_col):
-    qs = [
-        ("01_total_grande_burj",
-         f"SELECT COUNT(*) FROM public.{table} WHERE LOWER(building_name_en) LIKE '%grande%' AND LOWER(area_name_en) LIKE '%burj%'"),
-        ("02_3br_grande_burj_all_time",
-         f"SELECT COUNT(*) FROM public.{table} WHERE LOWER(building_name_en) LIKE '%grande%' AND LOWER(area_name_en) LIKE '%burj%' AND (LOWER(rooms_en) LIKE '%3 b/r%' OR LOWER(rooms_en) LIKE '%3 br%')"),
-        ("03_3br_grande_burj_12m_safe",
-         f"""SELECT COUNT(*) FROM public.{table} WHERE LOWER(building_name_en) LIKE '%grande%' AND LOWER(area_name_en) LIKE '%burj%' AND (LOWER(rooms_en) LIKE '%3 b/r%' OR LOWER(rooms_en) LIKE '%3 br%') AND (
-            CASE
-              WHEN {date_col}::text ~ '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}' THEN ({date_col}::text)::date
-              WHEN {date_col}::text ~ '^[0-9]{{2}}-[0-9]{{2}}-[0-9]{{4}}' THEN to_date({date_col}::text, 'DD-MM-YYYY')
-              WHEN {date_col}::text ~ '^[0-9]{{2}}/[0-9]{{2}}/[0-9]{{4}}' THEN to_date({date_col}::text, 'DD/MM/YYYY')
-              ELSE NULL
-            END) >= CURRENT_DATE - INTERVAL '12 months'"""),
-        ("04_3br_grande_burj_24m",
-         f"""SELECT COUNT(*) FROM public.{table} WHERE LOWER(building_name_en) LIKE '%grande%' AND LOWER(area_name_en) LIKE '%burj%' AND (LOWER(rooms_en) LIKE '%3 b/r%' OR LOWER(rooms_en) LIKE '%3 br%') AND (
-            CASE
-              WHEN {date_col}::text ~ '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}' THEN ({date_col}::text)::date
-              WHEN {date_col}::text ~ '^[0-9]{{2}}-[0-9]{{2}}-[0-9]{{4}}' THEN to_date({date_col}::text, 'DD-MM-YYYY')
-              WHEN {date_col}::text ~ '^[0-9]{{2}}/[0-9]{{2}}/[0-9]{{4}}' THEN to_date({date_col}::text, 'DD/MM/YYYY')
-              ELSE NULL
-            END) >= CURRENT_DATE - INTERVAL '24 months'"""),
-        ("05_3br_grande_burj_recent_5",
-         f"""SELECT building_name_en, rooms_en, {date_col}, COALESCE(actual_worth, procedure_value, transaction_value, sale_price, price, amount) AS price FROM public.{table} WHERE LOWER(building_name_en) LIKE '%grande%' AND LOWER(area_name_en) LIKE '%burj%' AND (LOWER(rooms_en) LIKE '%3 b/r%' OR LOWER(rooms_en) LIKE '%3 br%') ORDER BY {date_col} DESC LIMIT 5"""),
-    ]
-    try:
-        with db() as conn:
-            with conn.cursor() as cur:
-                for name, sql in qs:
-                    try:
-                        cur.execute(sql)
-                        rows = cur.fetchall()
-                        print(f"[V150_{label}] {name}: {rows[:5]}", flush=True)
-                    except Exception as e:
-                        print(f"[V150_{label}] {name} ERR: {str(e)[:160]}", flush=True)
-    except Exception as e:
-        print(f"[V150_{label}] outer ERR: {str(e)[:160]}", flush=True)
-
-
-try:
-    _v150_orig = globals().get("_ACTIVE_SOURCE", "live")
-    try:
-        _set_data_source("archive")
-        _v150_count_grande_3br("ARCHIVE_SALE", "dld_sale_archive", "instance_date")
-    except Exception as e:
-        print(f"[V150_ARCHIVE_SALE] setup ERR: {e!r}", flush=True)
-    try:
-        _set_data_source("live")
-        _v150_count_grande_3br("LIVE_SALE", "dld_transactions_full", "transaction_date")
-    except Exception as e:
-        print(f"[V150_LIVE_SALE] setup ERR: {e!r}", flush=True)
-    try:
-        _set_data_source(_v150_orig)
-    except Exception:
-        pass
-    print("[V150] grande 3br diagnostic complete", flush=True)
-except Exception as e:
-    print(f"[V150] outer-most ERR: {e!r}", flush=True)
+# B-A014 (2026-06-05): removed v150 boot diagnostic — это были 5 SQL запросов
+# к LIVE_SALE + ARCHIVE_SALE на КАЖДОМ старте бота, печатавшие данные по
+# "Grande Burj Khalifa 3BR" в stdout. Цель отладки давно достигнута (B132),
+# дальше — чистый шум +2-10s boot time и потенциальный PII leak в логи.
 
 
 # ─────────────────────────────────────────────────────────────────────────

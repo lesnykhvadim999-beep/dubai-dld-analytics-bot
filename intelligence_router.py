@@ -419,23 +419,37 @@ def _contains_any(text: str, words: Sequence[str]) -> bool:
     return any(_norm(w) in n for w in words if _norm(w))
 
 
-def _alias_lookup(value: Any, alias_map: Dict[str, List[str]]) -> Optional[str]:
+def _alias_lookup(value: Any, alias_map: Dict[str, List[str]],
+                  allow_fuzzy: bool = False) -> Optional[str]:
+    """B-A001: STRICT match by default (exact key / exact alias). The previous
+    greedy substring fallback (`a in t or t in a` with len>=2) silently
+    re-routed inputs:
+      - "Palm Jebel Ali" → palm jumeirah (alias "palm")
+      - "Dubai Creek Tower" → dubai creek harbour (alias "creek")
+      - "Sobha Hartland - Crest Grande" → grande signature residences (B132)
+      - "JLT" → emirates living (alias "lakes" via 'jumeirah lakes towers')
+    Substring matching is opt-in via allow_fuzzy=True (used for short-text
+    free-form intent inference, NEVER for area/building canonicalisation).
+    """
     t = _norm(value)
     if not t:
         return None
     if t in alias_map:
         return t
-
     for canonical, aliases in alias_map.items():
         for alias in aliases:
             if t == _norm(alias):
                 return canonical
-
+    if not allow_fuzzy:
+        return None
+    # Opt-in fuzzy path: stricter than before — require alias length >=4
+    # AND the alias to be a WORD boundary in t (not arbitrary substring).
     matches: List[Tuple[int, str]] = []
+    t_tokens = set(t.split())
     for canonical, aliases in alias_map.items():
         for alias in aliases:
             a = _norm(alias)
-            if len(a) >= 2 and (a in t or t in a):
+            if len(a) >= 4 and a in t_tokens:
                 matches.append((len(a), canonical))
     if matches:
         return sorted(matches, reverse=True)[0][1]
@@ -497,7 +511,10 @@ def normalize_risk(value: Any) -> Optional[str]:
 
 
 def infer_intent(text: Any) -> Optional[str]:
-    return _alias_lookup(text, INTENT_ALIASES)
+    # Intent inference is the ONLY caller that legitimately needs fuzzy:
+    # user types free-form like "хочу понять рынок Marina" → intent='analytics'.
+    # Even here we use the safer word-boundary fuzzy (min alias len 4).
+    return _alias_lookup(text, INTENT_ALIASES, allow_fuzzy=True)
 
 
 def parse_budget(value: Any) -> Tuple[Optional[float], Optional[float]]:
