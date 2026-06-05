@@ -589,6 +589,10 @@ TEXTS = {
         "rankings_pick_button": "Выберите рейтинг кнопкой.",
         "full_report_header": "📑 <b>Полный аналитический отчёт</b>\n\nВыберите масштаб:",
         "full_report_pick_scope": "Выберите масштаб отчёта.",
+        "fr_dubai": "🌆 Отчёт Дубай",
+        "fr_area": "🏙 Отчёт район",
+        "fr_areas": "🏘 Несколько районов",
+        "fr_building": "🏢 Отчёт здание",
         "enter_area_example": "Введите название района (например: Dubai Marina):",
         "enter_areas_csv": "Введите названия районов через запятую:",
         "enter_areas_csv_long": "Введите названия районов через запятую (например: Dubai Marina, Business Bay, JVC):",
@@ -703,6 +707,10 @@ TEXTS = {
         "rankings_pick_button": "Please pick a ranking from the buttons.",
         "full_report_header": "📑 <b>Full analytics report</b>\n\nChoose scope:",
         "full_report_pick_scope": "Please choose the report scope.",
+        "fr_dubai": "🌆 Dubai overview",
+        "fr_area": "🏙 Area report",
+        "fr_areas": "🏘 Multiple areas",
+        "fr_building": "🏢 Building report",
         "enter_area_example": "Enter area name (e.g.: Dubai Marina):",
         "enter_areas_csv": "Enter area names separated by commas:",
         "enter_areas_csv_long": "Enter area names separated by commas (e.g.: Dubai Marina, Business Bay, JVC):",
@@ -817,6 +825,10 @@ TEXTS = {
         "rankings_pick_button": "اختر التصنيف من الأزرار.",
         "full_report_header": "📑 <b>تقرير تحليلي كامل</b>\n\nاختر النطاق:",
         "full_report_pick_scope": "اختر نطاق التقرير.",
+        "fr_dubai": "🌆 تقرير دبي",
+        "fr_area": "🏙 تقرير المنطقة",
+        "fr_areas": "🏘 عدة مناطق",
+        "fr_building": "🏢 تقرير المبنى",
         "enter_area_example": "اكتب اسم المنطقة (مثال: Dubai Marina):",
         "enter_areas_csv": "اكتب أسماء المناطق مفصولة بفواصل:",
         "enter_areas_csv_long": "اكتب أسماء المناطق مفصولة بفواصل (مثال: Dubai Marina, Business Bay, JVC):",
@@ -4029,9 +4041,17 @@ async def start_handler(message: Message):
             except Exception as e:
                 print(f"[deeplink area] {e}")
     # default: show welcome / language picker (with logo if available)
-    # v108.1: restored welcome text + logo fallback after Layla UX cut
-    # B113: длинный welcome теперь в BotFather description. Здесь только lang selector.
-    welcome_text = "👇 Choose language / Выберите язык / اختر اللغة"
+    # B-A008 (2026-06-05): restore EN+RU value-prop welcome (требование
+    # feedback_logos_and_welcome.md). B113 over-shaved до одного language
+    # picker — нарушение hard rule «EN+RU welcome, default EN».
+    welcome_text = (
+        "🇬🇧 <b>Dubai DLD Analytics</b>\n"
+        "Real DLD transactions. Buildings, areas, rentals, yields.\n"
+        "Free — by Vadim Realty (RERA BRN 65011).\n\n"
+        "🇷🇺 <b>Аналитика рынка Дубая по данным DLD</b>\n"
+        "Здания, районы, сделки, доходность. Бесплатно.\n\n"
+        "👇 Choose language / Выберите язык / اختر اللغة"
+    )
     # v132: file_id cache for instant /start after first upload (avoids 15s sendPhoto timeout)
     global _ANALYTICS_LOGO_FILE_ID
     if _ANALYTICS_LOGO_FILE_ID:
@@ -4148,12 +4168,23 @@ def pro_menu(user_id):
 
 
 def full_report_menu(user_id):
+    # B-A009: i18n. Раньше RU-only — EN/AR юзеры видели нерасшифровываемые
+    # русские строки, и handlers сверяли == "🌆 Отчёт Дубай" → их кнопки
+    # не работали вообще.
     return kb([
-        ["🌆 Отчёт Дубай"],
-        ["🏙 Отчёт район", "🏘 Несколько районов"],
-        ["🏢 Отчёт здание"],
+        [tr(user_id, "fr_dubai")],
+        [tr(user_id, "fr_area"), tr(user_id, "fr_areas")],
+        [tr(user_id, "fr_building")],
         [tr(user_id, "main")],
     ])
+
+
+def _fr_btn_matches(text, key):
+    """B-A009: matcher по trans-метке во всех 3 языках. Юзер мог
+    залипнуть в EN UI и нажать RU-кнопку из старой клавиатуры — обрабатываем."""
+    return text in {TEXTS["ru"].get(key, "x_ru"),
+                    TEXTS["en"].get(key, "x_en"),
+                    TEXTS["ar"].get(key, "x_ar")}
 
 
 def building_action_menu(user_id):
@@ -4897,23 +4928,24 @@ async def main_handler(message: Message):
                 reply_markup=full_report_menu(user_id),
             )
             return
-        # Меню полного отчёта.
+        # Меню полного отчёта. B-A009: handlers через _fr_btn_matches —
+        # ловят кнопку на любом из 3 языков.
         if state.get("step") == "full_report_menu":
-            if text == "🌆 Отчёт Дубай":
+            if _fr_btn_matches(text, "fr_dubai"):
                 await send_full_market_report(message, "dubai", None)
                 return
-            if text == "🏙 Отчёт район":
+            if _fr_btn_matches(text, "fr_area"):
                 push_state(user_id, {"step": "full_report_area_query"})
                 await message.answer(tr(user_id, "enter_area_example"), reply_markup=back_menu(user_id))
                 return
-            if text == "🏘 Несколько районов":
+            if _fr_btn_matches(text, "fr_areas"):
                 push_state(user_id, {"step": "full_report_multi_areas", "areas": []})
                 await message.answer(
                     tr(user_id, "enter_areas_csv_long"),
                     reply_markup=back_menu(user_id),
                 )
                 return
-            if text == "🏢 Отчёт здание":
+            if _fr_btn_matches(text, "fr_building"):
                 push_state(user_id, {"step": "full_report_building_query"})
                 await message.answer(tr(user_id, "enter_building_short"), reply_markup=back_menu(user_id))
                 return
@@ -9061,12 +9093,17 @@ async def send_ranking_report(message, ranking_type="building_deals"):
         title += '\n<em>Недостаточно истории для точного роста — показана ликвидность по сделкам.</em>'
 
     if not rows:
+        # B-A013: убран user-facing leak Railway env-vars (LIVE_DATABASE_URL,
+        # ARCHIVE_DATABASE_URL). Внутренняя диагностика в log, юзеру
+        # нейтральное сообщение.
+        try:
+            print(f"[ranking] empty result dimension={dimension!r} metric={metric!r} "
+                  f"user_id={user_id}", flush=True)
+        except Exception:
+            pass
         await message.answer(
             "⚠️ <b>Рейтинг</b>\n\n"
-            "Не удалось собрать рейтинг из archive/live.\n\n"
-            "Проверьте, что переменные Railway указывают на правильные базы:\n"
-            "• LIVE_DATABASE_URL\n"
-            "• ARCHIVE_DATABASE_URL",
+            "Данных пока недостаточно. Попробуйте позже.",
             reply_markup=ranking_menu(user_id),
         )
         return
