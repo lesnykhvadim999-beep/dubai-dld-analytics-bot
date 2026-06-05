@@ -14719,11 +14719,21 @@ _V144_AREA_SYNONYMS = {
     "downtown": ["Downtown Dubai", "Burj Khalifa"],
     "marsa dubai": ["Dubai Marina", "Marina"],
     "dubai marina": ["Marsa Dubai", "Marina"],
-    "al barsha south fourth": ["JVC", "Jumeirah Village Circle"],
-    "al barsha south fifth": ["JVC", "Jumeirah Village Circle"],
-    "al hebiah first": ["JVC", "Jumeirah Village Circle"],
-    "jvc": ["Jumeirah Village Circle", "Al Barsha South Fourth"],
-    "jumeirah village circle": ["JVC", "Al Barsha South Fourth"],
+    # B120: JVC реально включает 5 DLD sub-zones, не 2. Раньше показывал ~20K
+    # сделок вместо ~32K реальных. Vill, 4BR и rent тоже сильно занижены
+    # из-за пропущенных Al Barsha South Fifth (23K rows) + Al Yufrah 1 + Al Hebiah First.
+    "al barsha south fourth": ["JVC", "Jumeirah Village Circle",
+                                "Al Barsha South Fifth", "Al Hebiah First", "Al Yufrah 1"],
+    "al barsha south fifth":  ["JVC", "Jumeirah Village Circle",
+                                "Al Barsha South Fourth", "Al Hebiah First", "Al Yufrah 1"],
+    "al hebiah first":        ["JVC", "Jumeirah Village Circle",
+                                "Al Barsha South Fourth", "Al Barsha South Fifth", "Al Yufrah 1"],
+    "al yufrah 1":            ["JVC", "Jumeirah Village Circle",
+                                "Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"],
+    "jvc":                    ["Jumeirah Village Circle", "Al Yufrah 1",
+                                "Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"],
+    "jumeirah village circle": ["JVC", "Al Yufrah 1",
+                                "Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"],
     "jlt": ["Jumeirah Lakes Towers"],
     "jumeirah lakes towers": ["JLT"],
 }
@@ -15913,9 +15923,20 @@ def _b063_dubai_breakdowns(scope, name):
                     out["top_yield"] = [dict(r) for r in cur.fetchall()]
 
                 # 5) Rent market summary — total rent contracts + avg annual rent
+                # B120: MV-row для агрегированных area_key (jvc, marina и т.п.)
+                # содержит занижённые данные из-за неполной канонизации в
+                # mv_builder. Реальные числа сидят под DLD-raw алиасами
+                # (Al Barsha South Fourth = 36K×234K vs jvc row = 30K×82K).
+                # Фикс: при area scope расширяем фильтр на все известные синонимы
+                # и SUM-агрегируем weighted avg правильно.
                 if scope == 'area' and name:
-                    _rent_filter = "AND LOWER(area_key) = LOWER(%s)"
-                    _rent_params = ['rent', 'apartment', name]
+                    _syns = _v144_area_synonyms(name)
+                    _candidates = [name] + list(_syns) if _syns else [name]
+                    # normalize to lower-case keys для матчинга area_key
+                    _candidates = list({s.lower() for s in _candidates if s})
+                    _placeholders = ",".join(["LOWER(%s)"] * len(_candidates))
+                    _rent_filter = f"AND area_key IN ({_placeholders})"
+                    _rent_params = ['rent', 'apartment'] + _candidates
                 else:
                     _rent_filter = ""
                     _rent_params = ['rent', 'apartment']
