@@ -1290,6 +1290,13 @@ def _rooms_label_from_prop(prop):
 
 
 def clean_query(query):
+    """B-A028: нормализация query — strip + collapse внутренних whitespace.
+    Сохраняет регистр и любые non-whitespace символы (тире, дефисы,
+    диакритику, апострофы) — потому что DLD building_name_en содержит
+    "Sobha Hartland - Crest Grande", "Al Ja'foor", "Marsa al-Arab".
+    Если нужна более агрессивная очистка (для поиска по ключевым словам),
+    используй normalize_search_text() который дополнительно lower+
+    выкидывает не-alphanumeric."""
     return re.sub(r"\s+", " ", (query or "").strip())
 
 
@@ -4415,6 +4422,18 @@ def _normalize_property_from_text(user_id, text):
     return text
 
 
+# B-A042 (2026-06-05): _SKIP_VALUES вынесен в module-level frozenset.
+# Раньше set создавался на каждый вызов (горячий путь — все filter
+# checks). Frozenset — immutable, gc-friendly, дешевле hash-lookup.
+_SKIP_VALUES = frozenset({
+    "skip", "any", "all", "none", "null",
+    "⏭ пропустить", "пропустить", "все", "всё", "любой", "любая",
+    "📅 всё время", "всё время", "все время",
+    "⏭ skip", "all time",
+    "تخطي", "الكل",
+})
+
+
 def _skip_to_none_v86(value):
     """Treat Skip/All/empty values as no filter.
     Targeted fix: prevents report flows from crashing when user presses ⏭ Пропустить
@@ -4425,15 +4444,7 @@ def _skip_to_none_v86(value):
     s = str(value).strip()
     if not s:
         return None
-    low = s.lower()
-    skip_values = {
-        "skip", "any", "all", "none", "null",
-        "⏭ пропустить", "пропустить", "все", "всё", "любой", "любая",
-        "📅 всё время", "всё время", "все время",
-        "⏭ skip", "skip", "all time",
-        "تخطي", "الكل"
-    }
-    if low in skip_values:
+    if s.lower() in _SKIP_VALUES:
         return None
     return value
 
