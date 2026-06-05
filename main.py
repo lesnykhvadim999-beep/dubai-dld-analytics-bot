@@ -14719,21 +14719,11 @@ _V144_AREA_SYNONYMS = {
     "downtown": ["Downtown Dubai", "Burj Khalifa"],
     "marsa dubai": ["Dubai Marina", "Marina"],
     "dubai marina": ["Marsa Dubai", "Marina"],
-    # B120: JVC реально включает 5 DLD sub-zones, не 2. Раньше показывал ~20K
-    # сделок вместо ~32K реальных. Vill, 4BR и rent тоже сильно занижены
-    # из-за пропущенных Al Barsha South Fifth (23K rows) + Al Yufrah 1 + Al Hebiah First.
-    "al barsha south fourth": ["JVC", "Jumeirah Village Circle",
-                                "Al Barsha South Fifth", "Al Hebiah First", "Al Yufrah 1"],
-    "al barsha south fifth":  ["JVC", "Jumeirah Village Circle",
-                                "Al Barsha South Fourth", "Al Hebiah First", "Al Yufrah 1"],
-    "al hebiah first":        ["JVC", "Jumeirah Village Circle",
-                                "Al Barsha South Fourth", "Al Barsha South Fifth", "Al Yufrah 1"],
-    "al yufrah 1":            ["JVC", "Jumeirah Village Circle",
-                                "Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"],
-    "jvc":                    ["Jumeirah Village Circle", "Al Yufrah 1",
-                                "Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"],
-    "jumeirah village circle": ["JVC", "Al Yufrah 1",
-                                "Al Barsha South Fourth", "Al Barsha South Fifth", "Al Hebiah First"],
+    "al barsha south fourth": ["JVC", "Jumeirah Village Circle"],
+    "al barsha south fifth": ["JVC", "Jumeirah Village Circle"],
+    "al hebiah first": ["JVC", "Jumeirah Village Circle"],
+    "jvc": ["Jumeirah Village Circle", "Al Barsha South Fourth"],
+    "jumeirah village circle": ["JVC", "Al Barsha South Fourth"],
     "jlt": ["Jumeirah Lakes Towers"],
     "jumeirah lakes towers": ["JLT"],
 }
@@ -14744,72 +14734,6 @@ def _v144_area_synonyms(area):
         return []
     key = area.strip().lower()
     return _V144_AREA_SYNONYMS.get(key, [])
-
-
-# B121: DLD-leaf-name таблица для multi-DLD районов.
-# MV (mv_area_12m_summary) содержит СТЕЙЛ агрегатные строки area_key='jvc',
-# где данные собраны неполно (jvc.deals=20639, но реально 5 sub-zones = 32K).
-# Решение: при запросе по multi-DLD району запрашивать ТОЛЬКО leaf-имена
-# (без стейл-агрегата) и SUM их. Эта таблица сопоставляет любой синоним
-# (включая stale agg name и официальное DLD-имя) с полным списком DLD-leaves.
-_V144_DLD_LEAVES = {
-    # JVC: 5 sub-zones (Al Barsha South Fourth = main, Al Hebiah First = villas).
-    'jvc':                       ['Jumeirah Village Circle', 'Al Yufrah 1',
-                                  'Al Barsha South Fourth', 'Al Barsha South Fifth',
-                                  'Al Hebiah First'],
-    'jumeirah village circle':   ['Jumeirah Village Circle', 'Al Yufrah 1',
-                                  'Al Barsha South Fourth', 'Al Barsha South Fifth',
-                                  'Al Hebiah First'],
-    'al barsha south fourth':    ['Jumeirah Village Circle', 'Al Yufrah 1',
-                                  'Al Barsha South Fourth', 'Al Barsha South Fifth',
-                                  'Al Hebiah First'],
-    'al barsha south fifth':     ['Jumeirah Village Circle', 'Al Yufrah 1',
-                                  'Al Barsha South Fourth', 'Al Barsha South Fifth',
-                                  'Al Hebiah First'],
-    'al hebiah first':           ['Jumeirah Village Circle', 'Al Yufrah 1',
-                                  'Al Barsha South Fourth', 'Al Barsha South Fifth',
-                                  'Al Hebiah First'],
-    'al yufrah 1':               ['Jumeirah Village Circle', 'Al Yufrah 1',
-                                  'Al Barsha South Fourth', 'Al Barsha South Fifth',
-                                  'Al Hebiah First'],
-    # Marina: 'Marsa Dubai' — официальное DLD-имя (25K), 'Dubai Marina' — alias (5K).
-    'marina':                    ['Dubai Marina', 'Marsa Dubai'],
-    'dubai marina':              ['Dubai Marina', 'Marsa Dubai'],
-    'marsa dubai':               ['Dubai Marina', 'Marsa Dubai'],
-    # Downtown: 'Burj Khalifa' = главный DLD-район (20K), 'Downtown Dubai' = alias (5K).
-    'downtown':                  ['Downtown Dubai', 'Burj Khalifa'],
-    'downtown dubai':            ['Downtown Dubai', 'Burj Khalifa'],
-    'burj khalifa':              ['Downtown Dubai', 'Burj Khalifa'],
-    # JLT — пока только одно DLD-имя (488 deals), но keep mapping для синонимов.
-    'jlt':                       ['Jumeirah Lakes Towers'],
-    'jumeirah lakes towers':     ['Jumeirah Lakes Towers'],
-}
-
-
-def _v144_dld_leaves(name):
-    """Return list of real DLD-leaf area names for any synonym input.
-    Empty list means name has no multi-DLD mapping — caller should match name as-is.
-    """
-    if not name:
-        return []
-    return _V144_DLD_LEAVES.get(name.strip().lower(), [])
-
-
-def _v144_area_filter_sql(name, alias='area_key'):
-    """Build (sql_fragment, params_list) for filtering by area name + all DLD leaves.
-
-    Если у района есть multi-DLD mapping → запрашиваем ТОЛЬКО leaf-имена
-    (без стейл-агрегата 'jvc'/'marina'/etc), даже если name = canonical alias.
-    Без mapping → fallback к точному матчу по area_key.
-    """
-    if not name:
-        return "", []
-    leaves = _v144_dld_leaves(name)
-    if not leaves:
-        return f"AND LOWER({alias}) = LOWER(%s)", [name]
-    candidates = [s.lower() for s in leaves]
-    placeholders = ",".join(["LOWER(%s)"] * len(candidates))
-    return f"AND {alias} IN ({placeholders})", candidates
 
 
 try:
@@ -15913,10 +15837,6 @@ def _b063_dubai_breakdowns(scope, name):
         conn = _rm._conn()
         with conn.cursor(cursor_factory=_pgx.RealDictCursor) as cur:
                 # 1) Rooms breakdown — Dubai-wide или per area, apartments only
-                # B121 ROLLBACK: SUM по leaves даёт overcount 4× (каждый DLD-район
-                # Al Barsha South Fourth включает не только JVC, но и Sports City
-                # etc). Канонический MV row 'jvc' = undercount но КОНСИСТЕНТЕН.
-                # Реальный фикс — в mv_builder (intelligence_updater).
                 if scope == 'area' and name:
                     _area_filter = "AND LOWER(area_key) = LOWER(%s)"
                     _rooms_params = ['sale', 'apartment', name]
@@ -15993,7 +15913,6 @@ def _b063_dubai_breakdowns(scope, name):
                     out["top_yield"] = [dict(r) for r in cur.fetchall()]
 
                 # 5) Rent market summary — total rent contracts + avg annual rent
-                # B121 ROLLBACK: см. rooms breakdown — leaves SUM overcount.
                 if scope == 'area' and name:
                     _rent_filter = "AND LOWER(area_key) = LOWER(%s)"
                     _rent_params = ['rent', 'apartment', name]
