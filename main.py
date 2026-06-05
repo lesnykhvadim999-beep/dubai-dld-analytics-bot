@@ -4498,6 +4498,20 @@ def _human_report_title(scope, name, report_type="Аналитика"):
     return f"🌆 {report_type}: Дубай"
 
 
+def _is_rent_dealtype(dt):
+    """2026-06-05: единая проверка rent."""
+    d = str(dt or "").lower()
+    return "rent" in d or "аренд" in d or "🔑" in d or "إيجار" in d
+
+
+def _is_bedroom_filter(prop):
+    """2026-06-05: bedroom-style filter ('1 BR', '2 BR', ..., 'Studio')."""
+    if not prop:
+        return False
+    p = str(prop).lower().strip()
+    return p in ("studio", "1 br", "2 br", "3 br", "4 br", "5 br+", "5+ br")
+
+
 def _coverage_note(prop, deal_type):
     """2026-06-05: возвращает honest-coverage warning для типов где DLD/наша
     выборка реально ограничена. Прикручиваем в подвал отчётов где
@@ -4565,6 +4579,11 @@ async def send_full_report(message, scope, name=None, prop=None, period=None, de
         parts = name.split("|||", 1)
         name = parts[0].strip()
         area_hint = parts[1].strip() if len(parts) > 1 else None
+    # 2026-06-05: dld_rents_full без rooms_en — bedroom filter режет всё в 0.
+    dropped_rooms_filter = False
+    if _is_rent_dealtype(deal_type) and _is_bedroom_filter(prop):
+        dropped_rooms_filter = True
+        prop = None
     row, used_prop, used_period, used_deal_type = get_stats_smart(scope, name, prop, period, deal_type)
     fallback_to_area = False
     if (not row or not _int(row.get("deals"))) and scope == "building" and area_hint:
@@ -4589,9 +4608,13 @@ async def send_full_report(message, scope, name=None, prop=None, period=None, de
 
     title = _human_report_title(scope, name, title_prefix)
     html = show_stats(f"<b>{title}</b>", row, used_prop, used_period, used_deal_type)
+    prefix_notes = []
+    if dropped_rooms_filter:
+        prefix_notes.append("DLD-аренда не разделяется по числу комнат — фильтр снят")
     if fallback_to_area and area_hint:
-        html = (f"⚠️ <i>По зданию «{name}» данных не нашлось — показана "
-                f"выборка по району «{area_hint}».</i>\n\n") + html
+        prefix_notes.append(f"по зданию «{name}» данных не нашлось — показана выборка по району «{area_hint}»")
+    if prefix_notes:
+        html = "⚠️ <i>" + "; ".join(prefix_notes) + ".</i>\n\n" + html
     html += _build_360_conclusion(row, scope, name, title_prefix)
     if (used_prop, used_period, used_deal_type) != (prop, period, deal_type):
         html += "\n\nℹ️ По точному фильтру выборка была узкой, поэтому показана ближайшая стабильная DLD-выборка."
@@ -4625,6 +4648,11 @@ async def send_period_report(message, scope, name=None, prop=None, period=None, 
         parts = name.split("|||", 1)
         name = parts[0].strip()
         area_hint = parts[1].strip() if len(parts) > 1 else None
+    # 2026-06-05: dld_rents_full без rooms_en.
+    dropped_rooms_filter = False
+    if _is_rent_dealtype(deal_type) and _is_bedroom_filter(prop):
+        dropped_rooms_filter = True
+        prop = None
     comparison = get_comparison(scope, name, prop, period, deal_type)
     fallback_to_area = False
     if (not comparison) and scope == "building" and area_hint:
@@ -4645,9 +4673,13 @@ async def send_period_report(message, scope, name=None, prop=None, period=None, 
     current, previous = comparison
     title = _human_report_title(scope, name, "Сравнение периодов")
     html = show_comparison(f"<b>{title}</b>", current, previous, period, deal_type)
+    prefix_notes = []
+    if dropped_rooms_filter:
+        prefix_notes.append("DLD-аренда не разделяется по числу комнат — фильтр снят")
     if fallback_to_area and area_hint:
-        html = (f"⚠️ <i>По зданию «{name}» данных не нашлось — показана "
-                f"выборка по району «{area_hint}».</i>\n\n") + html
+        prefix_notes.append(f"по зданию «{name}» данных не нашлось — показана выборка по району «{area_hint}»")
+    if prefix_notes:
+        html = "⚠️ <i>" + "; ".join(prefix_notes) + ".</i>\n\n" + html
     html += _build_360_conclusion(current, scope, name, "period")
     html += _coverage_note(prop, deal_type)
     set_last_report(user_id, title, html, scope)
@@ -4666,6 +4698,14 @@ async def send_deals_report(message, scope, name=None, prop=None, period=None, d
         parts = name.split("|||", 1)
         name = parts[0].strip()
         area_hint = parts[1].strip() if len(parts) > 1 else None
+    # 2026-06-05: dld_rents_full НЕ содержит rooms_en — bedroom-фильтры
+    # ('1 BR'..'5 BR+', Studio) режут ВСЁ в 0 для аренды. Дропаем bedroom
+    # filter при rent и показываем явный warning. Type-фильтры (villa,
+    # townhouse, apartment) остаются — у rent есть prop_sub_type_en.
+    dropped_rooms_filter = False
+    if _is_rent_dealtype(deal_type) and _is_bedroom_filter(prop):
+        dropped_rooms_filter = True
+        prop = None
     # v52 FIX: try/except + централизованный error_logger
     try:
         rows, used_prop, used_period, used_deal_type = get_latest_deals_smart(scope, name, prop, period, deal_type)
@@ -4711,6 +4751,10 @@ async def send_deals_report(message, scope, name=None, prop=None, period=None, d
     # B132: показываем ⚠ ПЕРВОЙ строкой (раньше было в конце, юзер не видел).
     # Любое расхождение filter ↔ used_filter — явный warning.
     warnings = []
+    if dropped_rooms_filter:
+        warnings.append(
+            "DLD-аренда не разделяется по числу комнат — показана аренда без bedroom-фильтра"
+        )
     if fallback_to_area and area_hint:
         warnings.append(
             f"по зданию «{name}» данных не нашлось — показана выборка по району «{area_hint}»"
