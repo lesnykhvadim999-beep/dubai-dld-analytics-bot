@@ -4084,13 +4084,8 @@ async def start_handler(message: Message):
     # B-A008 (2026-06-05): restore EN+RU value-prop welcome (требование
     # feedback_logos_and_welcome.md). B113 over-shaved до одного language
     # picker — нарушение hard rule «EN+RU welcome, default EN».
-    welcome_text = (
-        "🇬🇧 <b>Dubai DLD Analytics</b>\n"
-        "Real DLD transactions. Buildings, areas, rentals, yields. Free.\n\n"
-        "🇷🇺 <b>Аналитика рынка Дубая по данным DLD</b>\n"
-        "Здания, районы, сделки, доходность. Бесплатно.\n\n"
-        "👇 Choose language / Выберите язык / اختر اللغة"
-    )
+    # 2026-06-05: убран EN+RU value-prop под лого по запросу. Только picker.
+    welcome_text = "👇 Choose language / Выберите язык / اختر اللغة"
     # v132: file_id cache for instant /start after first upload (avoids 15s sendPhoto timeout)
     global _ANALYTICS_LOGO_FILE_ID
     if _ANALYTICS_LOGO_FILE_ID:
@@ -4563,7 +4558,23 @@ def _build_360_conclusion(row, scope=None, name=None, report_kind=None):
 async def send_full_report(message, scope, name=None, prop=None, period=None, deal_type=None, title_prefix="Полная аналитика"):
     user_id = message.from_user.id
     await send_processing(message)
+    # 2026-06-05: парсим '|||area' suffix для visible-area-fallback (rent
+    # часто пуст по новому зданию, но не по району).
+    area_hint = None
+    if name and isinstance(name, str) and "|||" in name:
+        parts = name.split("|||", 1)
+        name = parts[0].strip()
+        area_hint = parts[1].strip() if len(parts) > 1 else None
     row, used_prop, used_period, used_deal_type = get_stats_smart(scope, name, prop, period, deal_type)
+    fallback_to_area = False
+    if (not row or not _int(row.get("deals"))) and scope == "building" and area_hint:
+        try:
+            row2, up2, upe2, udt2 = get_stats_smart("area", area_hint, prop, period, deal_type)
+            if row2 and _int(row2.get("deals")):
+                row, used_prop, used_period, used_deal_type = row2, up2, upe2, udt2
+                fallback_to_area = True
+        except Exception as e:
+            print("FULL_AREA_FALLBACK_ERROR:", repr(e))
     if not row or not _int(row.get("deals")):
         try:
             if _BT_OK:
@@ -4578,6 +4589,9 @@ async def send_full_report(message, scope, name=None, prop=None, period=None, de
 
     title = _human_report_title(scope, name, title_prefix)
     html = show_stats(f"<b>{title}</b>", row, used_prop, used_period, used_deal_type)
+    if fallback_to_area and area_hint:
+        html = (f"⚠️ <i>По зданию «{name}» данных не нашлось — показана "
+                f"выборка по району «{area_hint}».</i>\n\n") + html
     html += _build_360_conclusion(row, scope, name, title_prefix)
     if (used_prop, used_period, used_deal_type) != (prop, period, deal_type):
         html += "\n\nℹ️ По точному фильтру выборка была узкой, поэтому показана ближайшая стабильная DLD-выборка."
@@ -4605,7 +4619,22 @@ async def send_period_report(message, scope, name=None, prop=None, period=None, 
     user_id = message.from_user.id
     await send_processing(message)
     period = period or "12"
+    # 2026-06-05: парсим '|||area' для visible-fallback.
+    area_hint = None
+    if name and isinstance(name, str) and "|||" in name:
+        parts = name.split("|||", 1)
+        name = parts[0].strip()
+        area_hint = parts[1].strip() if len(parts) > 1 else None
     comparison = get_comparison(scope, name, prop, period, deal_type)
+    fallback_to_area = False
+    if (not comparison) and scope == "building" and area_hint:
+        try:
+            comp2 = get_comparison("area", area_hint, prop, period, deal_type)
+            if comp2:
+                comparison = comp2
+                fallback_to_area = True
+        except Exception as e:
+            print("PERIOD_AREA_FALLBACK_ERROR:", repr(e))
     if not comparison:
         await message.answer(
             no_data_message("Сравнение периодов", scope=scope, name=name,
@@ -4616,6 +4645,9 @@ async def send_period_report(message, scope, name=None, prop=None, period=None, 
     current, previous = comparison
     title = _human_report_title(scope, name, "Сравнение периодов")
     html = show_comparison(f"<b>{title}</b>", current, previous, period, deal_type)
+    if fallback_to_area and area_hint:
+        html = (f"⚠️ <i>По зданию «{name}» данных не нашлось — показана "
+                f"выборка по району «{area_hint}».</i>\n\n") + html
     html += _build_360_conclusion(current, scope, name, "period")
     html += _coverage_note(prop, deal_type)
     set_last_report(user_id, title, html, scope)
@@ -4625,10 +4657,15 @@ async def send_period_report(message, scope, name=None, prop=None, period=None, 
 async def send_deals_report(message, scope, name=None, prop=None, period=None, deal_type=None):
     user_id = message.from_user.id
     await send_processing(message)
-    # B132: чистим '|||area' suffix перед SQL — wrappers v141/v146 это и так
-    # делают, но явное лучше неявного. Title тоже корректно отрендерится.
+    # B132: парсим '|||area' suffix — area context нужен для visible-fallback
+    # на район, когда по конкретному зданию аренды нет (rent_archive не
+    # содержит зданий + новые проекты без сделок). Clean name → в первый
+    # запрос; area_hint → во второй (с warning'ом).
+    area_hint = None
     if name and isinstance(name, str) and "|||" in name:
-        name = name.split("|||", 1)[0].strip()
+        parts = name.split("|||", 1)
+        name = parts[0].strip()
+        area_hint = parts[1].strip() if len(parts) > 1 else None
     # v52 FIX: try/except + централизованный error_logger
     try:
         rows, used_prop, used_period, used_deal_type = get_latest_deals_smart(scope, name, prop, period, deal_type)
@@ -4649,6 +4686,19 @@ async def send_deals_report(message, scope, name=None, prop=None, period=None, d
             reply_markup=no_data_menu(user_id) if scope in ["building", "area"] else main_menu(user_id)
         )
         return
+    # 2026-06-05: visible area-fallback для building+rent — частая ситуация
+    # «новое здание, аренды ещё нет, но в районе аренда есть». Trigger ТОЛЬКО
+    # если scope=building, есть area_hint и rows пуст. Прозрачно показываем
+    # юзеру что переключились на район.
+    fallback_to_area = False
+    if (not rows) and scope == "building" and area_hint:
+        try:
+            rows2, up2, upe2, udt2 = get_latest_deals_smart("area", area_hint, prop, period, deal_type)
+            if rows2:
+                rows, used_prop, used_period, used_deal_type = rows2, up2, upe2, udt2
+                fallback_to_area = True
+        except Exception as e:
+            print("AREA_FALLBACK_ERROR:", repr(e))
     if not rows:
         await message.answer(
             no_data_message("Последние сделки", scope=scope, name=name,
@@ -4661,6 +4711,10 @@ async def send_deals_report(message, scope, name=None, prop=None, period=None, d
     # B132: показываем ⚠ ПЕРВОЙ строкой (раньше было в конце, юзер не видел).
     # Любое расхождение filter ↔ used_filter — явный warning.
     warnings = []
+    if fallback_to_area and area_hint:
+        warnings.append(
+            f"по зданию «{name}» данных не нашлось — показана выборка по району «{area_hint}»"
+        )
     if deal_type and used_deal_type and deal_type != used_deal_type:
         fb = "аренду" if used_deal_type == "rent" else "продажу"
         warnings.append(f"по выбранному типу сделки данных нет — показаны на {fb}")
