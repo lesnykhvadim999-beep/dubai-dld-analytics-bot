@@ -15,8 +15,16 @@ if not _cron_target:
         _cron_target = "sales_scraper"
     elif _svc == "dld-rent-updater":
         _cron_target = "dld_sync"
+    # B112: extend dispatch — intelligence_updater + roi_builder services share
+    # this repo but should NOT launch as a Telegram bot. Without this they
+    # crash-loop on `BOT_TOKEN is not set`.
+    elif _svc == "dld-intelligence-updater":
+        _cron_target = "intelligence_updater"
+    elif _svc == "roi":
+        _cron_target = "roi_builder"
 
-if _cron_target in ("sales_scraper", "dld_sync"):
+if _cron_target in ("sales_scraper", "dld_sync",
+                    "intelligence_updater", "roi_builder"):
     import runpy
     print(f"[cron-dispatch] running {_cron_target}.py via main.py shim "
           f"(RAILWAY_SERVICE_NAME={os.getenv('RAILWAY_SERVICE_NAME')!r})",
