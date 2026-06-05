@@ -9981,13 +9981,48 @@ async def send_full_report(message, scope, name=None, prop=None, period=None, de
             )
         if (used_prop, used_period, used_deal_type) != (prop, period, deal_type):
             html += "\n\nℹ️ По точному фильтру выборка была узкой, поэтому показана ближайшая стабильная DLD-выборка."
+        # B130: скрытая воронка — контекстный «следующий шаг» в HTML-ссылках.
+        # Юзер видит цифры → сразу видит куда идти за результатом: купить /
+        # брошюру / ROI / связаться. UTM фиксирует переход в cross_bot_jumps.
+        try:
+            html += _ecosystem_funnel_html(scope, name)
+        except Exception as _e:
+            print("ECOSYSTEM_FUNNEL_ERR:", repr(_e))
         set_last_report(user_id, title, html, scope)
-        await message.answer(html, reply_markup=_final_actions_menu(user_id, scope))
+        await message.answer(html, reply_markup=_final_actions_menu(user_id, scope), disable_web_page_preview=True)
     except Exception as e:
         print("SEND_FULL_REPORT_V83_ERROR:", repr(e), "scope=", scope, "name=", name, "prop=", prop, "period=", period, "deal_type=", deal_type)
         await message.answer(no_data_message(title_prefix, scope=scope, name=name, prop=prop, period=period, deal_type=deal_type, user_id=user_id), reply_markup=no_data_menu(user_id) if scope in ["building", "area"] else main_menu(user_id))
 
+def _ecosystem_funnel_html(scope=None, name=None):
+    """B130: контекстный funnel в конце отчёта analytics-bot.
+
+    Не реклама в лоб — мягкие «следующие шаги», вшитые в HTML-ссылки.
+    После Обзор 360 / Сравнения / Сделок юзер видит:
+      «Готовы к действию? Найти объект · Брошюра · ROI · Агент»
+
+    UTM payload идёт в cross_bot_jumps через /start от downstream-бота.
+    """
+    safe = (name or "").strip()[:60].replace(" ", "_") or "report"
+    # Все боты из экосистемы Vadim Realty — те же что в hub-router B100/B128/B130.
+    resale     = f"https://t.me/dubai_resale_fpr_bot?start=from_analytics_utm_funnel_{safe}"
+    brochures  = f"https://t.me/Dubai_Brochures_Bot?start=from_analytics_utm_funnel_{safe}"
+    roi        = f"https://t.me/dubai_roi_fpr_bot?start=from_analytics_utm_funnel_{safe}"
+    lead       = f"https://t.me/dubai_fpr_lead_bot?start=from_analytics_utm_funnel_{safe}"
+    estatehub  = f"https://t.me/EstateHub_UAEBot?start=from_analytics_utm_funnel_{safe}"
+    return (
+        "\n\n━━━━━━━━━━━━━━━━━━━━\n"
+        "<i>📌 Следующий шаг по этому отчёту:</i>\n\n"
+        f"🏠 <a href=\"{resale}\">Найти готовый объект</a> в этом районе/здании\n"
+        f"⭐ <a href=\"{estatehub}\">Каталог EstateHub UAE</a> — проверенные предложения\n"
+        f"📄 <a href=\"{brochures}\">Скачать брошюру</a> проекта/района\n"
+        f"📈 <a href=\"{roi}\">Калькулятор ROI</a> — точный расчёт доходности\n"
+        f"💼 <a href=\"{lead}\">Связаться с агентом</a> — личная консультация"
+    )
+
+
 print("Loaded v83 report scenario safe fix only")
+print("Loaded B130 ecosystem funnel — contextual cross-bot links in report tail")
 
 
 # =========================
