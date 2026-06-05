@@ -15498,10 +15498,15 @@ def _v154_query_archive(scope, name, prop, period, deal_type, limit=7):
             return []
         is_sale = is_sale_deal(deal_type) if 'is_sale_deal' in globals() else True
         is_rent = is_rent_deal(deal_type) if 'is_rent_deal' in globals() else False
+        # 2026-06-05: v154 — sale-only path. rent_archive имеет другую
+        # схему (нет building_name_en/rooms_en/instance_date), её обходит
+        # отдельный v32/v33 rent layer.
+        if is_rent:
+            return []
         if not is_sale and not is_rent:
             is_sale = True
-        table = "public.dld_sale_archive" if is_sale else "public.dld_rent_archive"
-        price_col = "actual_worth" if is_sale else "annual_amount"
+        table = "public.dld_sale_archive"
+        price_col = "actual_worth"
         # rooms filter
         import re as _re
         prop_low = (str(prop or "")).lower().strip()
