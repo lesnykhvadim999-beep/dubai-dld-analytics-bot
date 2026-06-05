@@ -43,10 +43,12 @@ from typing import Any, Dict, List, Optional, Tuple
 log = logging.getLogger("vadim_pdf")
 
 # ── Brand identity ──
-BRAND_NAME = "Vadim Realty"
-BRAND_SUBTITLE = "Premium Dubai Real Estate"
-BRAND_RERA = "RERA BRN 65011"
-BRAND_BRN = "65011"
+# 2026-06-05: имя и RERA BRN убраны из user-facing branding по запросу.
+# При флипе PDF feature flag — добавь брендирование тут (не везде по коду).
+BRAND_NAME = "Dubai DLD Analytics"
+BRAND_SUBTITLE = "DLD market intelligence"
+BRAND_RERA = ""
+BRAND_BRN = ""
 
 # ── reportlab (lazy load – may not be installed in dev) ──
 try:

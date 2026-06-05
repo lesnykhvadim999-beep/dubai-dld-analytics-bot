@@ -4072,8 +4072,7 @@ async def start_handler(message: Message):
     # picker — нарушение hard rule «EN+RU welcome, default EN».
     welcome_text = (
         "🇬🇧 <b>Dubai DLD Analytics</b>\n"
-        "Real DLD transactions. Buildings, areas, rentals, yields.\n"
-        "Free — by Vadim Realty (RERA BRN 65011).\n\n"
+        "Real DLD transactions. Buildings, areas, rentals, yields. Free.\n\n"
         "🇷🇺 <b>Аналитика рынка Дубая по данным DLD</b>\n"
         "Здания, районы, сделки, доходность. Бесплатно.\n\n"
         "👇 Choose language / Выберите язык / اختر اللغة"
@@ -4857,8 +4856,7 @@ async def main_handler(message: Message):
                 "• 📊 Рейтинги — топ зданий/районов\n"
                 "• ⚖️ Сравнение форматов — apt vs villa и т.п.\n"
                 "• 🔮 Прогноз рынка — Market World Model\n"
-                "• 📊 Causal analysis — причинно-следственный анализ\n\n"
-                "<i>Vadim Realty (RERA BRN 65011)</i>",
+                "• 📊 Causal analysis — причинно-следственный анализ",
                 reply_markup=pro_menu(user_id),
             )
             return
@@ -7736,7 +7734,7 @@ async def handle_pdf_request(message):
     # PDF feature manually disabled 2026-06-03 — short-circuit before any work.
     if not _pdf_enabled():
         try:
-            await message.answer("📄 PDF-отчёт временно отключён.\n\nVadim Realty · RERA BRN 65011")
+            await message.answer("📄 PDF-отчёт временно отключён.")
         except Exception:
             pass
         return
@@ -12058,7 +12056,7 @@ def show_smart_recommendation(goal, budget, timing, risk, rows):
     text += f"\n📡 <i>Источник: DLD-аналитика (последние 12 мес)</i>"
     if _today:
         text += f" <i>· обновлено {_today}</i>"
-    text += "\n<i>Vadim Realty · RERA BRN 65011</i>"
+    text += ""
 
     return text
 
@@ -15542,7 +15540,6 @@ def _ci_render_all() -> str:
             lines.append(f"<b>{name}</b>: ошибка — {_err}")
     if found == 0:
         lines.append("Ни одно исследование ещё не посчитано. Запустите cron monthly_refresh.")
-    lines.append("\n— Vadim Realty · RERA BRN 65011")
     return "\n\n".join(lines)
 
 
@@ -15726,7 +15723,7 @@ def _build_360_conclusion_compact(row, scope=None, name=None, report_kind=None):
     except Exception:
         pass
 
-    parts.append("\n<i>Vadim Realty · RERA BRN 65011</i>")
+    parts.append("")
     return "\n".join(parts)
 
 
@@ -15921,7 +15918,7 @@ def _build_dynamics_report(scope, name):
                 parts.append(f"   {i}. <b>{_brand}</b> — {_details}")
 
     parts.append("\n💡 <i>Хочешь детальный отчёт по конкретному району — выбери район в меню.</i>")
-    parts.append("\n<i>Vadim Realty · RERA BRN 65011</i>")
+    parts.append("")
     return "\n".join(parts)
 
 
@@ -16212,11 +16209,8 @@ def _build_360_conclusion(row, scope=None, name=None, report_kind=None):  # noqa
                 extra.append(f"\n🏘 <b>Рынок аренды:</b> {format_int(_rt)} контрактов · в среднем <b>{_rp}/год</b>")
 
         if extra:
-            # Вставляем breakdowns ПЕРЕД футером Vadim Realty
-            base = base.replace(
-                "\n<i>Vadim Realty · RERA BRN 65011</i>",
-                "\n" + "\n".join(extra) + "\n\n<i>Vadim Realty · RERA BRN 65011</i>"
-            )
+            # Footer был раньше, теперь без него — просто аппендим breakdowns.
+            base = base + "\n" + "\n".join(extra) + "\n"
         return base
     except Exception as _e:
         print("BUILD_360_COMPACT_ERROR:", repr(_e))
@@ -16391,7 +16385,7 @@ def build_best_object_report_v95(state, *, user_id=None):  # noqa: F811
             "   • Service charge: 16-20 AED/sqft (выше = плохо)\n"
             "   • Последние 5 сделок в твоём здании на DLD\n"
             "   • Ready unit или handover в текущем году\n\n"
-            "<i>Vadim Realty · RERA BRN 65011</i>"
+            ""
         )
 
         # Notes от _v104 (адаптивная логика) — компактно в конце если есть
@@ -16399,8 +16393,8 @@ def build_best_object_report_v95(state, *, user_id=None):  # noqa: F811
             _short_notes = " · ".join([str(n)[:80] for n in notes[:2]])
             if _short_notes:
                 html = html.replace(
-                    "<i>Vadim Realty · RERA BRN 65011</i>",
-                    f"<i>📌 {_short_notes}</i>\n<i>Vadim Realty · RERA BRN 65011</i>"
+                    "",
+                    f"<i>📌 {_short_notes}</i>"
                 )
 
         return html
