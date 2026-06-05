@@ -38,18 +38,18 @@ class ContractViolation(Exception):
 # Source of truth: ECOSYSTEM_CONTRACTS.md §1 и db_contracts.py.
 BOT_TABLE_ROLES: dict[str, dict[str, list[str]]] = {
     "analytics": {
-        "writer": ["public.dld_transactions_full", "public.dld_transactions_archive"],
-        "reader": ["public.dld_transactions_full", "public.dld_transactions_archive",
-                   "public.bot_users", "public.audit_log"],
+        "writer": ["public.dld_transactions_full"],
+        "reader": ["public.dld_transactions_full",
+                   "public.bot_users"],
     },
     "resale": {
         "writer": ["public.listings_v2"],
         "reader": ["public.listings_v2", "public.dld_transactions_full",
-                   "public.bot_users", "public.audit_log", "public.pdf_reports"],
+                   "public.bot_users", "public.pdf_reports"],
     },
     "roi": {
         "writer": [],
-        "reader": ["public.dld_transactions_full", "public.dld_transactions_archive",
+        "reader": ["public.dld_transactions_full",
                    "public.bot_users", "public.pdf_reports"],
     },
     "hub": {
@@ -75,8 +75,8 @@ BOT_TABLE_ROLES: dict[str, dict[str, list[str]]] = {
         "reader": ["public.dld_transactions_full", "public.listings_v2"],
     },
     "health-reporter": {
-        "writer": ["public.audit_log"],
-        "reader": ["public.bot_users", "public.audit_log",
+        "writer": [],
+        "reader": ["public.bot_users",
                    "public.dld_transactions_full"],
     },
 }
@@ -95,10 +95,8 @@ EXPECTED_DEEPLINK_PATTERN: dict[str, str] = {
 # ── DSN lookup per table ──────────────────────────────────────────────────
 TABLE_DSN_ENV: dict[str, str] = {
     "public.dld_transactions_full":    "LIVE_DATABASE_URL",
-    "public.dld_transactions_archive": "LIVE_DATABASE_URL",
     "public.pdf_reports":              "LIVE_DATABASE_URL",
-    "public.audit_log":                "LIVE_DATABASE_URL",
-    "public.bot_users":                "LIVE_DATABASE_URL",
+    "public.bot_users":                "DATABASE_URL",  # B131: реально живёт в main DB, а не LIVE
     "public.listings_v2":              "RESALE_DATABASE_URL",
     "public.leads":                    "RESALE_DATABASE_URL",
     "public.fx_rates":                 "LIVE_DATABASE_URL",
@@ -111,7 +109,6 @@ WRITER_STALE_HOURS: dict[str, int] = {
     "public.listings_v2":              24,
     "public.fx_rates":                 24,
     "public.leads":                    9999, # event-driven, не stale-checkable
-    "public.audit_log":                9999,
 }
 
 
