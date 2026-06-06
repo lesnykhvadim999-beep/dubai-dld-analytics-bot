@@ -6268,8 +6268,14 @@ def text_first_expr_v33(cols, candidates, default="''"):
 
 
 def numeric_candidate_expr_v33(col):
+    """Rent annual amount filter.
+    2026-06-05 audit F3-3: верхний bound поднят с 5M до 15M AED. Раньше
+    Burj Khalifa luxury penthouse 8-15M/yr terabytes резались в NULL и
+    max в районе показывался 5M ровно (placeholder cap). Min оставлен
+    1K (студия в Дубае от ~20K/yr, но даём запас для commercial). 175M+
+    outliers LIVE rent (Marsa Dubai bizarre row) теперь чисто отрезаются."""
     raw = f"NULLIF(regexp_replace(COALESCE({q33(col)}::text, ''), '[^0-9.]', '', 'g'), '')::numeric"
-    return f"CASE WHEN ({raw}) BETWEEN 1000 AND 5000000 THEN ({raw}) ELSE NULL END"
+    return f"CASE WHEN ({raw}) BETWEEN 1000 AND 15000000 THEN ({raw}) ELSE NULL END"
 
 
 def numeric_price_expr_v33(cols):
