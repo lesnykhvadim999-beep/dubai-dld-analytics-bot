@@ -66,6 +66,12 @@ CREATE TABLE IF NOT EXISTS dld_rents_full (
     created_at TIMESTAMP DEFAULT NOW()
 );
 """)
+# 2026-06-06: ROOMS column добавлен idempotently — старая схема создавала
+# таблицу без него (см. audit F3 — bot не мог фильтровать аренду по
+# числу комнат). DLD API возвращает ROOMS = '1 B/R' / '2 B/R' / 'Studio'
+# для residential контрактов; для commercial Flat NULL.
+cur.execute("ALTER TABLE dld_rents_full ADD COLUMN IF NOT EXISTS rooms_en TEXT;")
+cur.execute("CREATE INDEX IF NOT EXISTS idx_dld_rents_full_rooms ON dld_rents_full (LOWER(rooms_en));")
 
 conn.commit()
 print("TABLE READY", flush=True)
@@ -159,6 +165,7 @@ def save_rows(rows):
             item.get("NEAREST_MALL_EN"),
             item.get("NEAREST_LANDMARK_EN"),
             Json(item),
+            item.get("ROOMS"),  # 2026-06-06: новая колонка rooms_en
         ))
 
     print(f"SAVING {len(values)} ROWS", flush=True)
@@ -191,7 +198,8 @@ def save_rows(rows):
             nearest_metro_en,
             nearest_mall_en,
             nearest_landmark_en,
-            raw_json
+            raw_json,
+            rooms_en
         )
         VALUES %s
         ON CONFLICT (rent_id) DO NOTHING

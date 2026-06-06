@@ -14,7 +14,11 @@ if not _cron_target:
     if _svc == "dld-sale-updater":
         _cron_target = "sales_scraper"
     elif _svc == "dld-rent-updater":
-        _cron_target = "dld_sync"
+        # 2026-06-06: dld_sync.py ходил на api.dubaipulse.gov.ae — endpoint
+        # вернул HTTP 401 (нужен API-key). rent_scraper.py использует тот же
+        # gateway что sales_scraper (gateway.dubailand.gov.ae/open-data/rents)
+        # без auth — стабильно работает. Переключено.
+        _cron_target = "rent_scraper"
     # B112: extend dispatch — intelligence_updater + roi_builder services share
     # this repo but should NOT launch as a Telegram bot. Without this they
     # crash-loop on `BOT_TOKEN is not set`.
@@ -23,7 +27,7 @@ if not _cron_target:
     elif _svc == "roi":
         _cron_target = "roi_builder"
 
-if _cron_target in ("sales_scraper", "dld_sync",
+if _cron_target in ("sales_scraper", "dld_sync", "rent_scraper",
                     "intelligence_updater", "roi_builder"):
     import runpy
     print(f"[cron-dispatch] running {_cron_target}.py via main.py shim "
@@ -9948,6 +9952,37 @@ async def main():
             logger.warning(f"PHASE BM wire failed: {_e}")
         except Exception:
             print(f"[phase_bm] wire failed: {_e!r}", flush=True)
+
+    # UX: typing middleware (юзер видит "печатает..." сразу).
+    # Аналитика тяжёлая (DLD queries 2-5с), без индикатора чувствуется как зависание.
+    try:
+        from aiogram import BaseMiddleware as _BM
+        from aiogram.types import Message as _Msg, CallbackQuery as _CQ
+        from aiogram.utils.chat_action import ChatActionSender as _CAS
+
+        class _AnTypingMW(_BM):
+            async def __call__(self, handler, event, data):
+                bot_obj = data.get("bot")
+                chat_id = None
+                if isinstance(event, _Msg) and event.chat:
+                    chat_id = event.chat.id
+                elif isinstance(event, _CQ) and event.message and event.message.chat:
+                    chat_id = event.message.chat.id
+                if bot_obj is None or chat_id is None:
+                    return await handler(event, data)
+                try:
+                    async with _CAS(bot=bot_obj, chat_id=chat_id, action="typing",
+                                     interval=4.5):
+                        return await handler(event, data)
+                except Exception:
+                    return await handler(event, data)
+
+        _amw = _AnTypingMW()
+        dp.message.middleware(_amw)
+        dp.callback_query.middleware(_amw)
+        print("[analytics-bot] typing middleware applied", flush=True)
+    except Exception as _typing_e:
+        print(f"[analytics-bot] typing skipped: {_typing_e}", flush=True)
 
     await dp.start_polling(bot)
 
