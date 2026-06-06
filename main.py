@@ -4531,7 +4531,26 @@ def _is_bedroom_filter(prop):
     return p in ("studio", "1 br", "2 br", "3 br", "4 br", "5 br+", "5+ br")
 
 
-def _coverage_note(prop, deal_type):
+# 2026-06-05 audit F2-3: районы где DLD не разделяет на здания (100% NULL
+# building_name_en) — фильтр по конкретному билдингу всегда пустой,
+# показываем юзеру upfront.
+_AREAS_WITHOUT_BUILDINGS = frozenset({
+    "wadi al safa 6",
+    "al yufrah 1",
+    "al yelayiss 1",
+    "madinat hind 4",
+    "mirdif",
+    "dubai investment park first",
+})
+
+
+def _area_has_no_buildings(area_name):
+    if not area_name:
+        return False
+    return str(area_name).strip().lower() in _AREAS_WITHOUT_BUILDINGS
+
+
+def _coverage_note(prop, deal_type, area_name=None):
     """2026-06-05: возвращает honest-coverage warning для типов где DLD/наша
     выборка реально ограничена. Прикручиваем в подвал отчётов где
     применим — пользователь должен понимать, что низкие числа не баг бота,
@@ -4542,6 +4561,11 @@ def _coverage_note(prop, deal_type):
     d = str(deal_type or "").lower().strip()
     is_rent = "rent" in d or "аренд" in d or "🔑" in d
     notes = []
+    if area_name and _area_has_no_buildings(area_name):
+        notes.append(
+            f"в районе «{area_name}» DLD не разделяет сделки на конкретные здания — "
+            f"доступны только агрегаты по району."
+        )
     if "town" in p:
         # ARCHIVE.dld_sale_archive: только ~525 «Stacked Townhouses» на 1.7M записей.
         notes.append(
@@ -4637,7 +4661,7 @@ async def send_full_report(message, scope, name=None, prop=None, period=None, de
     html += _build_360_conclusion(row, scope, name, title_prefix)
     if (used_prop, used_period, used_deal_type) != (prop, period, deal_type):
         html += "\n\nℹ️ По точному фильтру выборка была узкой, поэтому показана ближайшая стабильная DLD-выборка."
-    html += _coverage_note(used_prop or prop, used_deal_type or deal_type)
+    html += _coverage_note(used_prop or prop, used_deal_type or deal_type, area_name=(area_hint or (name if scope == "area" else None)))
     set_last_report(user_id, title, html, scope)
     await message.answer(html, reply_markup=_final_actions_menu(user_id, scope))
     try:
@@ -4700,7 +4724,7 @@ async def send_period_report(message, scope, name=None, prop=None, period=None, 
     if prefix_notes:
         html = "⚠️ <i>" + "; ".join(prefix_notes) + ".</i>\n\n" + html
     html += _build_360_conclusion(current, scope, name, "period")
-    html += _coverage_note(prop, deal_type)
+    html += _coverage_note(prop, deal_type, area_name=(area_hint or (name if scope == "area" else None)))
     set_last_report(user_id, title, html, scope)
     await message.answer(html, reply_markup=_final_actions_menu(user_id, scope))
 
@@ -4818,7 +4842,7 @@ async def send_deals_report(message, scope, name=None, prop=None, period=None, d
         )
     # B132: warning ⚠ теперь показан ПЕРВОЙ строкой выше (а не в хвосте).
     # v149: removed auto-360° from deals report — юзер запросит явно.
-    html += _coverage_note(used_prop or prop, used_deal_type or deal_type)
+    html += _coverage_note(used_prop or prop, used_deal_type or deal_type, area_name=(area_hint or (name if scope == "area" else None)))
     set_last_report(user_id, title, html, scope)
     await message.answer(html, reply_markup=_final_actions_menu(user_id, scope))
 
