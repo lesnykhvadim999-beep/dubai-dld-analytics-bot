@@ -534,6 +534,24 @@ def rent_identity_condition_sql():
 
 
 def sale_identity_condition_sql():
+    """Sale-strictification (2026-06-05 audit F6-2).
+    Раньше: пропускали любую процедуру не содержащую 'rent/lease/...' →
+    в sales попадали Mortgage Registration (230K записей), Modify Mortgage
+    (22K, avg 29.7M), Delayed Mortgage (18K), Portfolio Mortgage
+    (placeholder 13.7B!), Grant (56K) — это завышало средние цены
+    районов в 1.5-2x.
+
+    Whitelist по `procedure_name_en`:
+      ✅ 'Sell', 'Sell - Pre registration', 'Delayed Sell',
+         'Sell Development', 'Sale On Payment Plan',
+         'Grant on Delayed Sell', 'Sell Pre registration on Delayed Sell'
+
+    Blacklist (если whitelist не сработал но процедура содержит):
+      ❌ 'mortgage' (любые залоговые регистрации/модификации/передачи)
+      ❌ 'portfolio' (агрегатные portfolio mortgages с placeholder ценой)
+      ❌ '^grant$' (standalone Grant = дарственная, не продажа)
+      ❌ '^lease (finance|to own)' (лизинг, не продажа)
+    """
     proc_text = text_col_expr(
         "procedure_name_en", "procedure_name_ar", "procedure_name", "transaction_type_en",
         "transaction_type", "transaction_group_en", "transaction_sub_type_en", "procedure_group_en"
@@ -546,6 +564,7 @@ def sale_identity_condition_sql():
             OR ({proc_text}) !~* '(rent|rental|lease|leasing|tenancy|ejari)'
             OR ({proc_text}) ~* '(sale|sales|sell|sold|resale|transfer)'
         )
+        AND ({proc_text}) !~* '(mortgage|portfolio)'
     """
 
 
