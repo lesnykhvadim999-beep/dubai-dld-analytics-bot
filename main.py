@@ -6278,7 +6278,47 @@ def numeric_candidate_expr_v33(col):
     return f"CASE WHEN ({raw}) BETWEEN 1000 AND 15000000 THEN ({raw}) ELSE NULL END"
 
 
+def _rent_annualize_expr_v33(cols):
+    """2026-06-05 audit F3-1: для multi-year контрактов (5.5% = 378K строк)
+    annual_amount часто NULL — bot брал contract_amount как годовую.
+    Если есть start+end даты — возвращаем `contract_amount / years`,
+    иначе fallback на raw contract.
+    Возвращает SQL-выражение или None если не получилось."""
+    low = {c.lower(): c for c in cols}
+    ann_col = next((low[c] for c in
+                    ['annual_amount', 'annual_rent', 'annual_rent_amount', 'rent_value']
+                    if c in low), None)
+    ct_col = next((low[c] for c in
+                   ['contract_amount', 'contract_value', 'ejari_contract_amount',
+                    'rent_amount', 'amount']
+                   if c in low), None)
+    st_col = next((low[c] for c in
+                   ['contract_start_date', 'start_date', 'from_date']
+                   if c in low), None)
+    en_col = next((low[c] for c in
+                   ['contract_end_date', 'end_date', 'to_date']
+                   if c in low), None)
+    if not (ann_col and ct_col and st_col and en_col):
+        return None
+    def _num(c):
+        return (f"NULLIF(regexp_replace(COALESCE({q33(c)}::text, ''), "
+                f"'[^0-9.]', '', 'g'), '')::numeric")
+    years_expr = (
+        f"GREATEST(1.0, EXTRACT(EPOCH FROM ("
+        f"NULLIF({q33(en_col)}::text, '')::timestamp - "
+        f"NULLIF({q33(st_col)}::text, '')::timestamp"
+        f"))/31557600.0)"
+    )
+    return f"COALESCE({_num(ann_col)}, {_num(ct_col)} / {years_expr})"
+
+
 def numeric_price_expr_v33(cols):
+    # 2026-06-05 audit F3-1: для multi-year contracts (5.5% rent rows)
+    # возвращаем annualized через _rent_annualize_expr_v33 если есть даты.
+    annualized = _rent_annualize_expr_v33(cols)
+    if annualized:
+        return (f"CASE WHEN ({annualized}) BETWEEN 1000 AND 15000000 "
+                f"THEN ({annualized}) ELSE NULL END")
     preferred = [
         'rent_value', 'rent', 'rent_amount', 'rental_value', 'rental_amount',
         'annual_rent', 'annual_rent_value', 'annual_rental_value', 'annual_amount', 'annual_rent_amount',
