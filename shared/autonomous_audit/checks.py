@@ -127,7 +127,12 @@ def check_heartbeat_freshness(dsn: str | None = None) -> list[Finding]:
     for r in rows:
         m = (r.get("metric") or "").lower()
         # extract bot name (last token)
+        # 2026-06-09: нормализуем '-bot' суффикс. Часть ботов пишет heartbeat как
+        # 'bot.heartbeat.roi-bot'/'channel-bot', а EXPECTED_BOTS = короткие 'roi'/'channel'
+        # → ложные 'no heartbeat for roi/channel'. Срезаем '-bot' чтобы совпадало.
         bot = m.rsplit(".", 1)[-1]
+        if bot.endswith("-bot"):
+            bot = bot[:-4]
         ts = r.get("last_ts")
         if ts is None:
             continue
