@@ -6004,7 +6004,7 @@ def rent_meta_v32():
     ])
     meter = f"CASE WHEN ({size}) IS NOT NULL AND ({size}) > 0 THEN ({rent_price}) / ({size}) ELSE NULL END"
     safe_date = _date_expr(cols, [
-        "contract_start_date", "start_date", "instance_date", "registration_date", "date", "contract_date"
+        "registration_date", "contract_start_date", "instance_date", "date", "contract_date", "start_date"
     ])
     return {
         "building": building,
@@ -6050,13 +6050,13 @@ def sales_areas_for_building_v32(name):
                 cur.execute(f"""
                     SELECT DISTINCT COALESCE(area_name_en::text, '') AS area
                     FROM {TABLE}
+                    -- 2026-06-09: было `OR building ILIKE '%name%'` → substring-ловушка
+                    -- ('Grande' матчил 'Grandeur Residences' в Palm Jumeirah → весь район).
+                    -- Только ТОЧНОЕ имя здания, чтобы не раздувать scope на чужие районы.
                     WHERE COALESCE(area_name_en::text, '') <> ''
-                      AND (
-                          LOWER(COALESCE(building_name_en::text, '')) = LOWER(%s)
-                          OR COALESCE(building_name_en::text, '') ILIKE %s
-                      )
+                      AND LOWER(COALESCE(building_name_en::text, '')) = LOWER(%s)
                     LIMIT 25
-                """, [n, f"%{n}%"])
+                """, [n])
                 return [r["area"] for r in cur.fetchall() if r.get("area")]
     except Exception as e:
         print("RENT_AREA_FALLBACK_ERROR:", repr(e))
@@ -6428,7 +6428,7 @@ def numeric_size_expr_v33(cols):
 
 
 def date_expr_v33(cols):
-    preferred = ['contract_start_date', 'start_date', 'instance_date', 'registration_date', 'date', 'contract_date']
+    preferred = ['registration_date', 'contract_start_date', 'instance_date', 'date', 'contract_date', 'start_date']
     low = {c.lower(): c for c in cols}
     for c in preferred:
         if c.lower() in low:
@@ -6803,7 +6803,7 @@ def size34(cols):
 
 def date34(cols):
     low = {c.lower(): c for c in cols}
-    names = ['contract_start_date','start_date','instance_date','registration_date','date','contract_date']
+    names = ['registration_date','contract_start_date','instance_date','date','contract_date','start_date']
     c = None
     for n in names:
         if n.lower() in low:
