@@ -4833,6 +4833,20 @@ async def send_deals_report(message, scope, name=None, prop=None, period=None, d
     if ctx:
         html += "Фильтр: " + " / ".join(ctx) + "\n"
     html += "\n"
+    # FAN-OUT FIX (2026-06-09): DLD rent API отдаёт один контракт строкой на КАЖДЫЙ
+    # суб-проект района (Creek Beach → 12 строк; Burj Khalifa → Opera Grand / M Burj /
+    # THE MANSION / Grande …) — все с идентичными финансами, меняется лишь project_en.
+    # Из-за этого «последние сделки» показывали один и тот же контракт под разными
+    # зданиями. Для аренды схлопываем по (дата, район, цена, цена/м²).
+    if is_rent_deal(used_deal_type or deal_type):
+        _seen, _dedup = set(), []
+        for _r in rows:
+            _k = (_r.get('safe_date'), _r.get('area_name_en'), _r.get('price'), _r.get('meter_price'))
+            if _k in _seen:
+                continue
+            _seen.add(_k)
+            _dedup.append(_r)
+        rows = _dedup
     for r in rows[:10]:
         rooms_label = r.get('rooms_en') or _rooms_label_from_prop(prop) or _rooms_label_from_prop(used_prop) or '-'
         html += (
