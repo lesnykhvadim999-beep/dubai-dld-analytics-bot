@@ -4864,16 +4864,32 @@ async def send_deals_report(message, scope, name=None, prop=None, period=None, d
             _dedup.append(_r)
         rows = _dedup
     for r in rows[:10]:
-        rooms_label = r.get('rooms_en') or _rooms_label_from_prop(prop) or _rooms_label_from_prop(used_prop) or '-'
-        html += (
-            f"🗓 <b>{r.get('safe_date') or '-'}</b>\n"
-            f"🏢 {r.get('building_name_en') or '-'}\n"
-            f"📍 {r.get('area_name_en') or '-'}\n"
-            f"🏠 {rooms_label} / {r.get('property_sub_type_en') or r.get('property_type_en') or '-'}\n"
-            f"📏 Площадь: {format_area_dual(r.get('area_size'))}\n"
-            f"💰 {format_money(r.get('price'))}\n"
-            f"📐 {format_money(r.get('meter_price'))} за м²\n\n"
-        )
+        # 2026-06-09 чистый рендер: DLD-аренда часто без project_en (73%) и rooms_en →
+        # не показываем «🏢 -», «🏠 - / -», «Площадь: нет данных». Пустые строки опускаем,
+        # при отсутствии здания заголовком становится район.
+        rooms_label = r.get('rooms_en') or _rooms_label_from_prop(prop) or _rooms_label_from_prop(used_prop)
+        bld = str(r.get('building_name_en') or '').strip()
+        area = str(r.get('area_name_en') or '').strip()
+        ptype = str(r.get('property_sub_type_en') or r.get('property_type_en') or '').strip()
+        ptype = '' if ptype.lower() in ('-', 'none') else ptype
+        card = f"🗓 <b>{r.get('safe_date') or '-'}</b>\n"
+        if bld and bld != '-':
+            card += f"🏢 {bld}\n"
+            if area:
+                card += f"📍 {area}\n"
+        elif area:
+            card += f"📍 {area}\n"
+        type_parts = [x for x in [rooms_label, ptype] if x]
+        if type_parts:
+            card += f"🏠 {' / '.join(type_parts)}\n"
+        _sz = format_area_dual(r.get('area_size'))
+        if _sz and _sz != 'нет данных':
+            card += f"📏 Площадь: {_sz}\n"
+        card += f"💰 {format_money(r.get('price'))}\n"
+        _mp = r.get('meter_price')
+        if _mp:
+            card += f"📐 {format_money(_mp)} за м²\n"
+        html += card + "\n"
     # B132: warning ⚠ теперь показан ПЕРВОЙ строкой выше (а не в хвосте).
     # v149: removed auto-360° from deals report — юзер запросит явно.
     html += _coverage_note(used_prop or prop, used_deal_type or deal_type, area_name=(area_hint or (name if scope == "area" else None)))
