@@ -2947,6 +2947,22 @@ def rent_meta():
     }
 
 
+def _rent_rooms_alias(m):
+    """AmbiguousColumn fix (2026-06-09): rent-таблица dld_rents_full получила
+    физическую колонку rooms_en (rent_scraper, 06-06). `SELECT *, {rooms} AS rooms_en`
+    создаёт ДВЕ rooms_en → любая ссылка во внешнем SELECT падает с AmbiguousColumn
+    → источник возвращает пусто → бот «нет данных». Если физическая rooms_en уже
+    есть (live), не дублируем алиас (берём из *). Для archive (нет rooms_en) — алиас нужен.
+    """
+    try:
+        cols = table_columns_v32(RENT_TABLE) or []
+        if any(str(c).lower() == 'rooms_en' for c in cols):
+            return ""
+    except Exception:
+        pass
+    return f"{m['rooms']} AS rooms_en,"
+
+
 def rent_base_from():
     m = rent_meta()
     return f"""
@@ -2956,7 +2972,7 @@ def rent_base_from():
                 {m['safe_date']} AS safe_date,
                 {m['building']} AS building_name_en,
                 {m['area']} AS area_name_en,
-                {m['rooms']} AS rooms_en,
+                {_rent_rooms_alias(m)}
                 {m['property_type']} AS property_type_en,
                 {m['property_sub_type']} AS property_sub_type_en,
                 {m['unit']} AS unit_number_norm,
@@ -6012,7 +6028,7 @@ def rent_base_from_v32():
                 {m['safe_date']} AS safe_date,
                 {m['building']} AS building_name_en,
                 {m['area']} AS area_name_en,
-                {m['rooms']} AS rooms_en,
+                {_rent_rooms_alias(m)}
                 {m['property_type']} AS property_type_en,
                 {m['property_sub_type']} AS property_sub_type_en,
                 {m['unit']} AS unit_number_norm,
@@ -6472,7 +6488,7 @@ def rent_base_from_v33():
                 {m['search_text']} AS search_text,
                 {m['building']} AS building_name_en,
                 {m['area']} AS area_name_en,
-                {m['rooms']} AS rooms_en,
+                {_rent_rooms_alias(m)}
                 {m['property_type']} AS property_type_en,
                 {m['property_sub_type']} AS property_sub_type_en,
                 {m['unit']} AS unit_number_norm,
@@ -6840,7 +6856,7 @@ def rent_base_from_v34():
                 {m['search_text']} AS search_text,
                 {m['building']} AS building_name_en,
                 {m['area']} AS area_name_en,
-                {m['rooms']} AS rooms_en,
+                {_rent_rooms_alias(m)}
                 {m['ptype']} AS property_type_en,
                 {m['subtype']} AS property_sub_type_en,
                 {m['unit']} AS unit_number_norm,
