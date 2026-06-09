@@ -6084,13 +6084,10 @@ def rent_scope_condition_v32(scope, name, allow_scope=True):
         return "", []
     n = clean_query(name)
     if scope == "building":
-        params = [f"%{n}%"]
-        parts = ["COALESCE(building_name_en::text, '') ILIKE %s"]
-        areas = sales_areas_for_building_v32(n)
-        for a in areas:
-            parts.append("COALESCE(area_name_en::text, '') ILIKE %s")
-            params.append(f"%{a}%")
-        return "AND (" + " OR ".join(parts) + ")", params
+        # 2026-06-09: было ILIKE '%n%' → 'Grande' ловил 'Sobha Hartland Grande',
+        # 'Grandeur Residences' и др. чужие здания. Теперь ТОЧНОЕ имя здания.
+        # Если по зданию аренды нет — send_deals_report делает fallback на район.
+        return "AND LOWER(TRIM(COALESCE(building_name_en::text,''))) = LOWER(TRIM(%s))", [n]
     if scope == "area":
         values = area_alias_values(n)
         parts, params = [], []
@@ -6524,13 +6521,8 @@ def rent_scope_condition_v33(scope, name, allow_scope=True):
     if not n:
         return '', []
     if scope == 'building':
-        params = [f'%{n.lower()}%', f'%{n.lower()}%']
-        parts = ["LOWER(COALESCE(building_name_en::text, '')) ILIKE %s", 'search_text ILIKE %s']
-        for a in sales_areas_for_building_v32(n):
-            if a:
-                parts.append("LOWER(COALESCE(area_name_en::text, '')) ILIKE %s")
-                params.append(f'%{str(a).lower()}%')
-        return 'AND (' + ' OR '.join(parts) + ')', params
+        # 2026-06-09: ТОЧНОЕ имя здания (было substring → ловило чужие *Grande*).
+        return "AND LOWER(TRIM(COALESCE(building_name_en::text,''))) = LOWER(TRIM(%s))", [n]
     if scope == 'area':
         values = area_alias_values(n)
         parts, params = [], []
