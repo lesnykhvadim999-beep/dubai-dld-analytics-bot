@@ -9981,6 +9981,37 @@ async def main():
     # v133: background MV refresher (mv_offplan_summary daily)
     asyncio.create_task(_mv_offplan_refresher_loop())
 
+    # 2026-06-09: самодостаточный heartbeat в audit_history (дашборд показывал
+    # analytics 'crit' — shared-механизм heartbeat встал после серии передеплоев).
+    # Пишем оба имени bot.heartbeat.analytics(+-bot) каждые 60с.
+    async def _analytics_heartbeat_loop():
+        _hb_url = (os.environ.get("RESALE_DATABASE_URL")
+                   or os.environ.get("RESALE_DATABASE_URL_PUBLIC")
+                   or os.environ.get("DATABASE_URL"))
+        if not _hb_url:
+            print("[heartbeat] analytics: no DSN — disabled", flush=True)
+            return
+        try:
+            import psycopg2 as _hpg
+        except Exception:
+            return
+        print("[heartbeat] analytics: loop started interval=60s", flush=True)
+        while True:
+            try:
+                _hc = _hpg.connect(_hb_url, connect_timeout=5)
+                _hc.autocommit = True
+                with _hc.cursor() as _hcur:
+                    _hcur.execute(
+                        "INSERT INTO audit_history(metric,value,meta) VALUES "
+                        "('bot.heartbeat.analytics',1,'{}'::jsonb),"
+                        "('bot.heartbeat.analytics-bot',1,'{}'::jsonb)"
+                    )
+                _hc.close()
+            except Exception as _he:
+                print(f"[heartbeat] analytics record failed: {_he}", flush=True)
+            await asyncio.sleep(60)
+    asyncio.create_task(_analytics_heartbeat_loop())
+
     # PHASE BM Layer 18/20/22: multimodal + tours + background-think
     try:
         from phase_bm_bootstrap import wire_phase_bm
