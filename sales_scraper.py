@@ -144,6 +144,17 @@ def save_transactions(rows):
     if not rows:
         return
 
+    # 2026-06-09 ДИАГНОСТИКА: печатаем реальные ключи первой строки API один раз,
+    # чтобы найти новое имя поля цены (actual_worth NULL с 06-06).
+    try:
+        if rows:
+            _k = sorted(rows[0].keys())
+            print(f"SALES_API_KEYS: {_k}", flush=True)
+            _price_like = {k: rows[0].get(k) for k in rows[0] if any(x in str(k).upper() for x in ('WORTH','AMOUNT','VALUE','PRICE','METER'))}
+            print(f"SALES_API_PRICE_FIELDS: {_price_like}", flush=True)
+    except Exception as _de:
+        print(f"SALES_DEBUG_ERR: {_de}", flush=True)
+
     values = []
 
     seen_ids = set()
@@ -247,7 +258,17 @@ def save_transactions(rows):
                     "AMOUNT",
                     "amount",
                     "VALUE",
-                    "value"
+                    "value",
+                    # 2026-06-09: с 06-06 actual_worth=NULL у 100% новых строк —
+                    # API ДЛД сменил имя поля цены. Доп.кандидаты:
+                    "TRANS_VALUE",
+                    "trans_value",
+                    "WORTH",
+                    "worth",
+                    "PROCEDURE_VALUE",
+                    "procedure_value",
+                    "TRANS_VALUE_AED",
+                    "ACTUAL_WORTH_AED",
                 )
             ),
 
