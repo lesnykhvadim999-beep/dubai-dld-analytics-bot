@@ -5989,7 +5989,7 @@ def _date_expr(cols, candidates):
 def rent_meta_v32():
     cols = table_columns_v32(RENT_TABLE)
     building = _text_expr(cols, [
-        "building_name_en", "building_name", "building", "property_name_en", "property_name",
+        "building_name_en", "building_name", "building", "project_en", "property_name_en", "property_name",
         "project_name_en", "project_name", "project", "master_project_en", "master_project",
         "property", "location_name", "nearest_landmark"
     ])
@@ -6454,7 +6454,10 @@ def rent_meta_v33():
     cols = table_columns_v33(RENT_TABLE)
     search_text = text_blob_expr_v33(cols)
     building = text_first_expr_v33(cols, [
-        'building_name_en','building_name','building','project_name_en','project_name','project',
+        # 2026-06-09: добавлен 'project_en' — реальная колонка имени здания в
+        # dld_rents_full. Без него building резолвился в '' → 'здание -' в карточках
+        # и поиск по зданию (точный) давал 0.
+        'building_name_en','building_name','building','project_en','project_name_en','project_name','project',
         'property_name_en','property_name','master_project_en','master_project','property','location_name','nearest_landmark'
     ])
     area = text_first_expr_v33(cols, ['area_name_en','area_name','area','area_en','location','location_en','district','community'])
