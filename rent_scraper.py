@@ -168,6 +168,24 @@ def save_rows(rows):
             item.get("ROOMS"),  # 2026-06-06: новая колонка rooms_en
         ))
 
+    # FAN-OUT FIX (2026-06-09): DLD rent API отдаёт один контракт строкой на КАЖДЫЙ
+    # суб-проект района (Creek Beach → 12 строк; Burj Khalifa → Opera Grand/M Burj/…),
+    # все с идентичными финансами, меняется лишь PROJECT_EN. Это раздувало dld_rents_full
+    # и портило аналитику (счётчики/средние × число суб-проектов). Схлопываем в памяти по
+    # содержанию контракта (дата+район+суммы+площадь+срок), оставляя первую строку.
+    _seen, _dedup = set(), []
+    for _v in values:
+        # индексы кортежа: 4=REG_DATE 5=START 6=END 7=CONTRACT_AMOUNT 8=ANNUAL_AMOUNT
+        # 9=ACTUAL_AREA 11=AREA_EN, а 13=PROJECT_EN намеренно НЕ входит в ключ.
+        _k = (_v[4], _v[5], _v[6], _v[7], _v[8], _v[9], _v[11])  # контракт без project_en
+        if _k in _seen:
+            continue
+        _seen.add(_k)
+        _dedup.append(_v)
+    if len(_dedup) != len(values):
+        print(f"FANOUT DEDUP: {len(values)} -> {len(_dedup)} rows", flush=True)
+    values = _dedup
+
     print(f"SAVING {len(values)} ROWS", flush=True)
 
     execute_values(
@@ -202,7 +220,7 @@ def save_rows(rows):
             rooms_en
         )
         VALUES %s
-        ON CONFLICT (rent_id) DO NOTHING
+        ON CONFLICT DO NOTHING
         """,
         values,
     )
