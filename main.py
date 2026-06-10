@@ -12229,13 +12229,13 @@ def _smart_fetch_area_rent_12m(area_display):
                 """
                 SELECT
                   SUM(CASE WHEN deal_type='rent' AND property_type='apartment' AND rooms='all'
-                           THEN avg_price * deals ELSE 0 END)::numeric
-                    / NULLIF(SUM(CASE WHEN deal_type='rent' AND property_type='apartment' AND rooms='all' THEN deals ELSE 0 END), 0) AS avg_rent_apt,
-                  SUM(CASE WHEN deal_type='rent' AND property_type='apartment' AND rooms='all' THEN deals ELSE 0 END) AS deals_rent_apt,
+                           THEN avg_price_aed * deals_count ELSE 0 END)::numeric
+                    / NULLIF(SUM(CASE WHEN deal_type='rent' AND property_type='apartment' AND rooms='all' THEN deals_count ELSE 0 END), 0) AS avg_rent_apt,
+                  SUM(CASE WHEN deal_type='rent' AND property_type='apartment' AND rooms='all' THEN deals_count ELSE 0 END) AS deals_rent_apt,
                   SUM(CASE WHEN deal_type='sale' AND property_type='apartment' AND rooms='all'
-                           THEN avg_price * deals ELSE 0 END)::numeric
-                    / NULLIF(SUM(CASE WHEN deal_type='sale' AND property_type='apartment' AND rooms='all' THEN deals ELSE 0 END), 0) AS sale_avg_price_apt,
-                  SUM(CASE WHEN deal_type='sale' AND property_type='apartment' AND rooms='all' THEN deals ELSE 0 END) AS deals_sale_apt
+                           THEN avg_price_aed * deals_count ELSE 0 END)::numeric
+                    / NULLIF(SUM(CASE WHEN deal_type='sale' AND property_type='apartment' AND rooms='all' THEN deals_count ELSE 0 END), 0) AS sale_avg_price_apt,
+                  SUM(CASE WHEN deal_type='sale' AND property_type='apartment' AND rooms='all' THEN deals_count ELSE 0 END) AS deals_sale_apt
                 FROM mv_area_12m_summary
                 WHERE area_key = ANY(%s)
                 """,
@@ -13534,11 +13534,11 @@ def _v106_token_fallback_find(query, limit=10):
             sql = """
                 SELECT building_name_display AS building_name_en,
                        area_name AS area_name_en,
-                       deals::bigint AS deals
+                       deals_count::bigint AS deals
                 FROM mv_building_12m_summary
-                WHERE deal_type='sale' AND rooms='all' AND deals > 0
+                WHERE deal_type='sale' AND rooms='all' AND deals_count > 0
                   AND lower(building_name_display) ILIKE ALL(%s)
-                ORDER BY deals DESC
+                ORDER BY deals_count DESC
                 LIMIT %s
             """
             patterns = [f"%{t}%" for t in tokens]
@@ -13722,11 +13722,11 @@ def find_buildings(query, limit=10):  # noqa: F811
                 sql = """
                     SELECT building_name_display AS building_name_en,
                            area_name AS area_name_en,
-                           deals::bigint AS deals
+                           deals_count::bigint AS deals
                     FROM mv_building_12m_summary
-                    WHERE deal_type='sale' AND rooms='all' AND deals > 0
+                    WHERE deal_type='sale' AND rooms='all' AND deals_count > 0
                       AND lower(building_name_display) ILIKE ALL(%s)
-                    ORDER BY deals DESC
+                    ORDER BY deals_count DESC
                     LIMIT %s
                 """
                 patterns = [f"%{t}%" for t in tokens]
@@ -14728,10 +14728,10 @@ def _v111_batch_area_aggregates(area_universe, months=24, deal_type="sale",
     if use_room_filter:
         sql = f"""
             SELECT area_key,
-                   deals,
-                   avg_price,
+                   deals_count AS deals,
+                   avg_price_aed AS avg_price,
                    avg_price_psf AS avg_meter,
-                   top_quartile_price,
+                   top_quartile_price_aed AS top_quartile_price,
                    top_quartile_psf,
                    yoy_growth_pct,
                    yoy_growth_top_pct,
@@ -14745,10 +14745,10 @@ def _v111_batch_area_aggregates(area_universe, months=24, deal_type="sale",
     else:
         sql = f"""
             SELECT area_key,
-                   deals,
-                   avg_price,
+                   deals_count AS deals,
+                   avg_price_aed AS avg_price,
                    avg_price_psf AS avg_meter,
-                   top_quartile_price,
+                   top_quartile_price_aed AS top_quartile_price,
                    top_quartile_psf,
                    yoy_growth_pct,
                    yoy_growth_top_pct,
@@ -16175,24 +16175,24 @@ def _b066_dynamics_breakdowns(scope, name):
         with conn.cursor(cursor_factory=_pgx.RealDictCursor) as cur:
             # 1) Top-5 районов по росту цен sale (apt, 12mo vs prev 12mo)
             cur.execute("""
-                SELECT area_key, yoy_growth_pct, avg_price, deals
+                SELECT area_key, yoy_growth_pct, avg_price_aed AS avg_price, deals_count AS deals
                 FROM mv_area_12m_summary
                 WHERE deal_type='sale' AND property_type='apartment' AND rooms='all'
                   AND area_key NOT IN ('all', 'dubai')
-                  AND deals >= 500
+                  AND deals_count >= 500
                   AND yoy_growth_pct BETWEEN -50 AND 100
-                ORDER BY yoy_growth_pct DESC NULLS LAST, deals DESC
+                ORDER BY yoy_growth_pct DESC NULLS LAST, deals_count DESC
                 LIMIT 15
             """)
             out["top_price_growth"] = [dict(r) for r in cur.fetchall()]
 
             # 2) Top-5 районов с коррекцией цен (apt, отрицательный yoy)
             cur.execute("""
-                SELECT area_key, yoy_growth_pct, avg_price, deals
+                SELECT area_key, yoy_growth_pct, avg_price_aed AS avg_price, deals_count AS deals
                 FROM mv_area_12m_summary
                 WHERE deal_type='sale' AND property_type='apartment' AND rooms='all'
                   AND area_key NOT IN ('all', 'dubai')
-                  AND deals >= 500
+                  AND deals_count >= 500
                   AND yoy_growth_pct < 0 AND yoy_growth_pct >= -50
                 ORDER BY yoy_growth_pct ASC NULLS LAST
                 LIMIT 10
@@ -16201,13 +16201,13 @@ def _b066_dynamics_breakdowns(scope, name):
 
             # 3) Top-5 районов по росту аренды
             cur.execute("""
-                SELECT area_key, yoy_growth_pct, avg_price, deals
+                SELECT area_key, yoy_growth_pct, avg_price_aed AS avg_price, deals_count AS deals
                 FROM mv_area_12m_summary
                 WHERE deal_type='rent' AND property_type='apartment' AND rooms='all'
                   AND area_key NOT IN ('all', 'dubai')
-                  AND deals >= 500
+                  AND deals_count >= 500
                   AND yoy_growth_pct BETWEEN -50 AND 100
-                ORDER BY yoy_growth_pct DESC NULLS LAST, deals DESC
+                ORDER BY yoy_growth_pct DESC NULLS LAST, deals_count DESC
                 LIMIT 15
             """)
             out["top_rent_growth"] = [dict(r) for r in cur.fetchall()]
@@ -16215,10 +16215,10 @@ def _b066_dynamics_breakdowns(scope, name):
             # 4) Сводка Dubai-wide 12m: средние, объём, динамика
             cur.execute("""
                 SELECT
-                  SUM(deals)::bigint AS sale_deals,
-                  CASE WHEN SUM(deals) > 0 THEN ROUND(SUM(avg_price*deals)/NULLIF(SUM(deals),0))
+                  SUM(deals_count)::bigint AS sale_deals,
+                  CASE WHEN SUM(deals_count) > 0 THEN ROUND(SUM(avg_price_aed*deals_count)/NULLIF(SUM(deals_count),0))
                        ELSE NULL END AS wavg_sale,
-                  CASE WHEN SUM(deals) > 0 THEN ROUND(SUM(COALESCE(yoy_growth_pct,0)*deals)/NULLIF(SUM(deals),0)::numeric, 1)
+                  CASE WHEN SUM(deals_count) > 0 THEN ROUND(SUM(COALESCE(yoy_growth_pct,0)*deals_count)/NULLIF(SUM(deals_count),0)::numeric, 1)
                        ELSE NULL END AS wavg_yoy
                 FROM mv_area_12m_summary
                 WHERE deal_type='sale' AND property_type='all' AND rooms='all'
@@ -16231,10 +16231,10 @@ def _b066_dynamics_breakdowns(scope, name):
             # 5) Rent summary
             cur.execute("""
                 SELECT
-                  SUM(deals)::bigint AS rent_deals,
-                  CASE WHEN SUM(deals) > 0 THEN ROUND(SUM(avg_price*deals)/NULLIF(SUM(deals),0))
+                  SUM(deals_count)::bigint AS rent_deals,
+                  CASE WHEN SUM(deals_count) > 0 THEN ROUND(SUM(avg_price_aed*deals_count)/NULLIF(SUM(deals_count),0))
                        ELSE NULL END AS wavg_rent,
-                  CASE WHEN SUM(deals) > 0 THEN ROUND(SUM(COALESCE(yoy_growth_pct,0)*deals)/NULLIF(SUM(deals),0)::numeric, 1)
+                  CASE WHEN SUM(deals_count) > 0 THEN ROUND(SUM(COALESCE(yoy_growth_pct,0)*deals_count)/NULLIF(SUM(deals_count),0)::numeric, 1)
                        ELSE NULL END AS wavg_rent_yoy
                 FROM mv_area_12m_summary
                 WHERE deal_type='rent' AND property_type='apartment' AND rooms='all'
@@ -16376,15 +16376,15 @@ def _b063_dubai_breakdowns(scope, name):
                 # B063 FIX: MV использует '1br'/'2br' (без пробела) и '4br+' вместо '5br'.
                 cur.execute(f"""
                     SELECT rooms,
-                           SUM(deals)::bigint AS total_deals,
-                           CASE WHEN SUM(deals) > 0 THEN ROUND(SUM(avg_price*deals)/NULLIF(SUM(deals),0))
+                           SUM(deals_count)::bigint AS total_deals,
+                           CASE WHEN SUM(deals_count) > 0 THEN ROUND(SUM(avg_price_aed*deals_count)/NULLIF(SUM(deals_count),0))
                                 ELSE NULL END AS wavg_price
                     FROM mv_area_12m_summary
                     WHERE deal_type=%s AND property_type=%s
                       AND rooms IN ('studio', '1br', '2br', '3br', '4br', '4br+')
                       {_area_filter}
                     GROUP BY rooms
-                    HAVING SUM(deals) > 0
+                    HAVING SUM(deals_count) > 0
                     ORDER BY CASE rooms
                         WHEN 'studio' THEN 0 WHEN '1br' THEN 1 WHEN '2br' THEN 2
                         WHEN '3br' THEN 3 WHEN '4br' THEN 4 WHEN '4br+' THEN 5
@@ -16398,17 +16398,17 @@ def _b063_dubai_breakdowns(scope, name):
                 if scope != 'area':
                     cur.execute("""
                         SELECT property_type,
-                               SUM(deals)::bigint AS total_deals,
-                               CASE WHEN SUM(deals) > 0 THEN ROUND(SUM(avg_price*deals)/NULLIF(SUM(deals),0))
+                               SUM(deals_count)::bigint AS total_deals,
+                               CASE WHEN SUM(deals_count) > 0 THEN ROUND(SUM(avg_price_aed*deals_count)/NULLIF(SUM(deals_count),0))
                                     ELSE NULL END AS wavg_price,
-                               CASE WHEN SUM(deals) > 0 THEN ROUND(SUM(COALESCE(avg_rental_yield_pct,0)*deals)/NULLIF(SUM(deals),0)::numeric, 2)
+                               CASE WHEN SUM(deals_count) > 0 THEN ROUND(SUM(COALESCE(avg_rental_yield_pct,0)*deals_count)/NULLIF(SUM(deals_count),0)::numeric, 2)
                                     ELSE NULL END AS wavg_yield
                         FROM mv_area_12m_summary
                         WHERE deal_type='sale'
                           AND property_type IN ('apartment','villa','townhouse','office','retail')
                           AND rooms='all'
                         GROUP BY property_type
-                        HAVING SUM(deals) > 0
+                        HAVING SUM(deals_count) > 0
                         ORDER BY total_deals DESC
                     """)
                     out["format_breakdown"] = [dict(r) for r in cur.fetchall()]
@@ -16417,12 +16417,12 @@ def _b063_dubai_breakdowns(scope, name):
                 # после брендирования и dedup можно было взять 3 уникальных.
                 if scope != 'area':
                     cur.execute("""
-                        SELECT area_key, deals, avg_price
+                        SELECT area_key, deals_count AS deals, avg_price_aed AS avg_price
                         FROM mv_area_12m_summary
                         WHERE deal_type='sale' AND property_type='all' AND rooms='all'
                           AND area_key NOT IN ('all', 'dubai')
-                          AND deals >= 100
-                        ORDER BY deals DESC
+                          AND deals_count >= 100
+                        ORDER BY deals_count DESC
                         LIMIT 10
                     """)
                     out["top_deals"] = [dict(r) for r in cur.fetchall()]
@@ -16431,13 +16431,13 @@ def _b063_dubai_breakdowns(scope, name):
                     # чтобы фильтровать малые выборки где yield нестабилен.
                     # 10 рядов чтобы было из чего выбирать после дедупа.
                     cur.execute("""
-                        SELECT area_key, avg_rental_yield_pct, avg_price, deals
+                        SELECT area_key, avg_rental_yield_pct, avg_price_aed AS avg_price, deals_count AS deals
                         FROM mv_area_12m_summary
                         WHERE deal_type='sale' AND property_type='apartment' AND rooms='all'
                           AND area_key NOT IN ('all', 'dubai')
-                          AND deals >= 1000
+                          AND deals_count >= 1000
                           AND avg_rental_yield_pct BETWEEN 3 AND 11
-                        ORDER BY avg_rental_yield_pct DESC NULLS LAST, deals DESC
+                        ORDER BY avg_rental_yield_pct DESC NULLS LAST, deals_count DESC
                         LIMIT 10
                     """)
                     out["top_yield"] = [dict(r) for r in cur.fetchall()]
@@ -16450,8 +16450,8 @@ def _b063_dubai_breakdowns(scope, name):
                     _rent_filter = ""
                     _rent_params = ['rent', 'apartment']
                 cur.execute(f"""
-                    SELECT SUM(deals)::bigint AS total_rent,
-                           CASE WHEN SUM(deals) > 0 THEN ROUND(SUM(avg_price*deals)/NULLIF(SUM(deals),0))
+                    SELECT SUM(deals_count)::bigint AS total_rent,
+                           CASE WHEN SUM(deals_count) > 0 THEN ROUND(SUM(avg_price_aed*deals_count)/NULLIF(SUM(deals_count),0))
                                 ELSE NULL END AS wavg_rent
                     FROM mv_area_12m_summary
                     WHERE deal_type=%s AND property_type=%s AND rooms='all'
