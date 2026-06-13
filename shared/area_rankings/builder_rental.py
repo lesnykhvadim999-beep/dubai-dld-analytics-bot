@@ -23,14 +23,18 @@ from ._common import (
 log = logging.getLogger("area_rankings.rental")
 
 SQL_RENT = """
+-- 2026-06-13: dld_rent_archive deprecated (0 rows post DLD→Supabase consolidation).
+-- Repointed to live dld_rents_full (Pulse schema: area_en/start_date, numeric cols).
 WITH r AS (
-  SELECT NULLIF(annual_amount,'')::numeric AS rent,
-         NULLIF(actual_area,'')::numeric   AS sqft,
-         TO_DATE(NULLIF(contract_start_date,''),'YYYY-MM-DD') AS d
-  FROM public.dld_rent_archive
-  WHERE area_name_en = ANY(%s)
-    AND NULLIF(annual_amount,'') IS NOT NULL
-    AND NULLIF(contract_start_date,'') IS NOT NULL
+  SELECT annual_amount::numeric AS rent,
+         actual_area::numeric    AS sqft,
+         start_date::date         AS d
+  FROM public.dld_rents_full
+  WHERE area_en = ANY(%s)
+    AND annual_amount BETWEEN 10000 AND 20000000
+    AND actual_area > 20
+    AND start_date::date >= CURRENT_DATE - INTERVAL '24 months'
+    AND start_date::date <= CURRENT_DATE
 )
 SELECT
   AVG(rent) FILTER (WHERE d >= CURRENT_DATE - INTERVAL '12 months')                                    AS rent_now,
@@ -42,12 +46,16 @@ WHERE rent > 0
 """
 
 SQL_PRICE = """
+-- 2026-06-13: dld_sales_unified absent on RESALE_DATABASE_URL; use dld_sale_archive
+-- (1.7M rows, text cols guarded by numeric-regex).
 SELECT AVG(NULLIF(actual_worth,'')::numeric) AS avg_price,
        AVG(NULLIF(meter_sale_price,'')::numeric) AS avg_psqft
-FROM public.dld_sales_unified
+FROM public.dld_sale_archive
 WHERE area_name_en = ANY(%s)
+  AND actual_worth ~ '^[0-9]+\\.?[0-9]*$'
+  AND meter_sale_price ~ '^[0-9]+\\.?[0-9]*$'
   AND COALESCE(procedure_name_en,'') NOT ILIKE '%%mortgage%%'
-  AND TO_DATE(NULLIF(instance_date,''),'YYYY-MM-DD') >= (CURRENT_DATE - INTERVAL '12 months')
+  AND instance_date::date >= (CURRENT_DATE - INTERVAL '12 months')
 """
 
 

@@ -363,7 +363,9 @@ CONTRACTS = [
     DLD_TRANSACTIONS_FULL,
     DLD_SALE_ARCHIVE,
     DLD_RENTS_FULL,
-    DLD_RENT_ARCHIVE,
+    # DLD_RENT_ARCHIVE retired 2026-06-13: table deprecated/empty (0 rows) after
+    # DLD→Supabase consolidation; rent history lives in dld_rents_full. builder_rental
+    # repointed; main/intelligence/daily_reports already use adaptive column detection.
     LISTINGS_V2,
     LEADS,
     USERS,
